@@ -8,9 +8,10 @@ import (
 )
 
 type Conf struct {
-	Server ConfServer
-	DB     ConfDB
-	TMDB   ConfTMDB
+	Server   ConfServer
+	DB       ConfDB
+	TMDB     ConfTMDB
+	Supabase ConfSupabase
 }
 
 type ConfServer struct {
@@ -35,6 +36,14 @@ type ConfTMDB struct {
 	APIKey string `env:"TMDB_API_KEY,required"`
 }
 
+// ConfSupabase holds the verification-side knobs for Supabase JWTs. Issuer
+// and Audience are optional; when unset, those claim checks are skipped.
+type ConfSupabase struct {
+	JWKSURL  string `env:"SUPABASE_JWKS_URL,required"`
+	Issuer   string `env:"SUPABASE_JWT_ISSUER"`
+	Audience string `env:"SUPABASE_JWT_AUDIENCE"`
+}
+
 func New() *Conf {
 	var c Conf
 	if err := envdecode.StrictDecode(&c); err != nil {
@@ -55,6 +64,14 @@ func NewDB() *ConfDB {
 
 func NewTMDB() *ConfTMDB {
 	var c ConfTMDB
+	if err := envdecode.StrictDecode(&c); err != nil {
+		log.Fatalf("Failed to decode: %s", err)
+	}
+	return &c
+}
+
+func NewSupabase() *ConfSupabase {
+	var c ConfSupabase
 	if err := envdecode.StrictDecode(&c); err != nil {
 		log.Fatalf("Failed to decode: %s", err)
 	}
