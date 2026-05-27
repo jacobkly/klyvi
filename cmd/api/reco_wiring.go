@@ -27,7 +27,18 @@ func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) (
 	if err != nil {
 		return nil, err
 	}
+	return rowsToCandidates(rows), nil
+}
 
+func (a *catalogAdapter) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) ([]reco.Candidate, error) {
+	rows, err := a.repo.CandidatesByMediaIDs(ctx, mediaIDs)
+	if err != nil {
+		return nil, err
+	}
+	return rowsToCandidates(rows), nil
+}
+
+func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 	cands := make([]reco.Candidate, 0, len(rows))
 	for _, row := range rows {
 		feat := &reco.MediaFeatures{
@@ -45,7 +56,7 @@ func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) (
 			Features:  feat,
 		})
 	}
-	return cands, nil
+	return cands
 }
 
 // signalAdapter wraps the DB directly. Building it on the interactions

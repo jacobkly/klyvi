@@ -16,6 +16,10 @@ type CatalogRepository interface {
 	// suitable for ranking. Tier 0 just pages over this; Tier 1 narrows by
 	// pre-filter.
 	SampleMovieCandidates(ctx context.Context, limit int) ([]Candidate, error)
+
+	// CandidatesByMediaIDs returns Candidates for a specific set of media_ids,
+	// used to load features for items in the user's interaction history.
+	CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) ([]Candidate, error)
 }
 
 // SignalRepository pulls the user's interaction history for the signal
@@ -76,9 +80,7 @@ func (o *Orchestrator) WithTier2(s Scorer) *Orchestrator { o.tier2 = s; return o
 //   - 1..N interactions → Tier 1 (content-based).
 //   - >= N interactions AND Tier 2 ready → Tier 2 (taste profile).
 //
-// Filtering (already-seen) and diversification (MMR) wrap whichever tier
-// runs. Slices 6/7/8/9 fill in the bodies; this scaffolding short-circuits
-// to empty when a tier scorer is nil.
+// Filtering (already-seen) and diversification wrap whichever tier runs.
 func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID) ([]Scored, error) {
 	interactions, err := o.signal.ListByUser(ctx, userID, 0)
 	if err != nil {
@@ -86,7 +88,17 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID) ([]Scored, er
 	}
 	signalVolume := len(interactions)
 
+	scorer := o.pickScorer(signalVolume)
+	if scorer == nil {
+		return []Scored{}, nil
+	}
+
 	seen, err := o.seen.SeenMediaIDs(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := o.buildUserContext(ctx, userID, interactions, seen)
 	if err != nil {
 		return nil, err
 	}
@@ -101,13 +113,6 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID) ([]Scored, er
 		if !seen[c.MediaID] {
 			filtered = append(filtered, c)
 		}
-	}
-
-	user := buildUserContext(userID, interactions, seen, cands)
-
-	scorer := o.pickScorer(signalVolume)
-	if scorer == nil {
-		return []Scored{}, nil
 	}
 
 	scored, err := scorer.Score(ctx, user, filtered)
@@ -134,11 +139,48 @@ func (o *Orchestrator) pickScorer(signalVolume int) Scorer {
 	return o.tier0
 }
 
-// buildUserContext is a placeholder until the signal pipeline (slice 4-5)
-// computes weights from interactions and features come from the catalog.
-func buildUserContext(userID uuid.UUID, _ []InteractionRow, seen map[int]bool, _ []Candidate) *UserContext {
+// buildUserContext turns raw interactions into the SignalItem slices a
+// Scorer consumes. Looks up MediaFeatures from the catalog for every
+// interacted media id — the cost is bounded by the user's interaction
+// count (typically <100).
+func (o *Orchestrator) buildUserContext(ctx context.Context, userID uuid.UUID, interactions []InteractionRow, seen map[int]bool) (*UserContext, error) {
+	signal := AggregateSignal(o.cfg, interactions)
+	liked, disliked := SplitLikedDisliked(signal)
+
+	ids := make([]int, 0, len(liked)+len(disliked))
+	for id := range liked {
+		ids = append(ids, id)
+	}
+	for id := range disliked {
+		ids = append(ids, id)
+	}
+
+	featByID := map[int]*MediaFeatures{}
+	if len(ids) > 0 {
+		cands, err := o.catalog.CandidatesByMediaIDs(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range cands {
+			if c.Features != nil {
+				featByID[c.MediaID] = c.Features
+			}
+		}
+	}
+
+	likedItems := make([]SignalItem, 0, len(liked))
+	for id, w := range liked {
+		likedItems = append(likedItems, SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
+	}
+	dislikedItems := make([]SignalItem, 0, len(disliked))
+	for id, w := range disliked {
+		dislikedItems = append(dislikedItems, SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
+	}
+
 	return &UserContext{
 		UserID:       userID,
+		Liked:        likedItems,
+		Disliked:     dislikedItems,
 		SeenMediaIDs: seen,
-	}
+	}, nil
 }

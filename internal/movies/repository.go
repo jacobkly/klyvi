@@ -135,6 +135,24 @@ type RecoCandidateRow struct {
 	VoteCount   int              `db:"vote_count"`
 }
 
+// CandidatesByMediaIDs returns the feed projection for a specific set of
+// media_index media_ids — used to load features for items in a user's
+// interaction history.
+func (r *Repository) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) ([]RecoCandidateRow, error) {
+	if len(mediaIDs) == 0 {
+		return nil, nil
+	}
+	var rows []RecoCandidateRow
+	err := r.db.SelectContext(ctx, &rows, `
+		select m.movie_id, mi.media_id, m.genres, m.keywords, m.release_date,
+		       m.vote_average, m.vote_count
+		from movies m
+		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
+		where mi.media_id = any($1)
+	`, mediaIDs)
+	return rows, err
+}
+
 // ListCandidatesForReco returns up to `limit` movies suitable as feed
 // candidates, joined with their media_index id. Cheap query — feed
 // generation is sub-second.
