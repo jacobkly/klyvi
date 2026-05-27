@@ -43,9 +43,10 @@ func main() {
 	tmdbClient := tmdb.NewClient(cfg.TMDB.APIKey)
 
 	movieRepo := movies.NewRepository(dbConn)
+	tvRepo := tv.NewRepository(dbConn)
 
 	movieService := movies.NewService(tmdbClient, movieRepo)
-	tvService := tv.NewService(tmdbClient)
+	tvService := tv.NewService(tmdbClient, tvRepo)
 	searchService := search.NewService(tmdbClient, movieRepo)
 
 	r := router.New(router.Services{
