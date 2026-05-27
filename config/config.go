@@ -20,6 +20,11 @@ type ConfServer struct {
 	TimeoutWrite time.Duration `env:"SERVER_TIMEOUT_WRITE,required"`
 	TimeoutIdle  time.Duration `env:"SERVER_TIMEOUT_IDLE,required"`
 	Debug        bool          `env:"SERVER_DEBUG,required"`
+
+	// AllowedOrigins is a comma-separated list of CORS origins (e.g.
+	// "http://localhost:3000,https://klyvi.app"). Optional — defaults
+	// to localhost dev origins when unset.
+	AllowedOrigins string `env:"ALLOWED_ORIGINS"`
 }
 
 type ConfDB struct {

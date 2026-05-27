@@ -82,14 +82,15 @@ func main() {
 	}
 
 	r := router.New(router.Services{
-		Movies:       movieService,
-		TV:           tvService,
-		Search:       searchService,
-		Users:        userService,
-		Tracking:     trackingService,
-		Interactions: interactionsService,
-		Reco:         recoOrchestrator,
-		AuthMW:       authMW,
+		Movies:         movieService,
+		TV:             tvService,
+		Search:         searchService,
+		Users:          userService,
+		Tracking:       trackingService,
+		Interactions:   interactionsService,
+		Reco:           recoOrchestrator,
+		AuthMW:         authMW,
+		AllowedOrigins: cfg.Server.AllowedOrigins,
 	})
 
 	srv := &http.Server{

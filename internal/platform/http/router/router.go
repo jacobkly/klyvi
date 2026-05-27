@@ -2,9 +2,11 @@ package router
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 
 	"klyvi-api/internal/health"
 	"klyvi-api/internal/interactions"
@@ -29,12 +31,24 @@ type Services struct {
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
 	AuthMW func(http.Handler) http.Handler
+
+	// AllowedOrigins is the comma-separated CORS origin list from config.
+	// Empty string falls back to localhost dev defaults.
+	AllowedOrigins string
 }
 
 func New(services Services) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(chimiddleware.RequestID)
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   parseOrigins(services.AllowedOrigins),
+		AllowedMethods:   []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Request-Id"},
+		ExposedHeaders:   []string{"X-Request-Id"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
 	r.Use(middleware.LoggerMiddleware)
 	r.Use(middleware.StatsMiddleware)
 
@@ -87,4 +101,26 @@ func New(services Services) *chi.Mux {
 	})
 
 	return r
+}
+
+// parseOrigins turns the comma-separated env var into a slice. Empty input
+// falls back to common localhost dev origins so a fresh setup works
+// without configuration.
+func parseOrigins(raw string) []string {
+	if raw == "" {
+		return []string{
+			"http://localhost:3000",
+			"http://localhost:5173",
+			"http://127.0.0.1:3000",
+			"http://127.0.0.1:5173",
+		}
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
