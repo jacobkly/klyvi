@@ -13,10 +13,12 @@ import (
 	"klyvi-api/config"
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/db"
+	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/platform/http/router"
 	"klyvi-api/internal/platform/tmdb"
 	"klyvi-api/internal/search"
 	"klyvi-api/internal/tv"
+	"klyvi-api/internal/users"
 )
 
 //  @title          Klyvi API
@@ -44,15 +46,28 @@ func main() {
 
 	movieRepo := movies.NewRepository(dbConn)
 	tvRepo := tv.NewRepository(dbConn)
+	userRepo := users.NewRepository(dbConn)
 
 	movieService := movies.NewService(tmdbClient, movieRepo)
 	tvService := tv.NewService(tmdbClient, tvRepo)
 	searchService := search.NewService(tmdbClient, movieRepo)
+	userService := users.NewService(userRepo)
+
+	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
+		JWKSURL:  cfg.Supabase.JWKSURL,
+		Issuer:   cfg.Supabase.Issuer,
+		Audience: cfg.Supabase.Audience,
+	})
+	if err != nil {
+		log.Fatalf("auth middleware: %v", err)
+	}
 
 	r := router.New(router.Services{
 		Movies: movieService,
 		TV:     tvService,
 		Search: searchService,
+		Users:  userService,
+		AuthMW: authMW,
 	})
 
 	srv := &http.Server{

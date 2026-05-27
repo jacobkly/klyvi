@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 
@@ -9,12 +11,18 @@ import (
 	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/search"
 	"klyvi-api/internal/tv"
+	"klyvi-api/internal/users"
 )
 
 type Services struct {
 	Movies *movies.Service
 	TV     *tv.Service
 	Search *search.Service
+	Users  *users.Service
+
+	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
+	// Mounted on all protected route groups.
+	AuthMW func(http.Handler) http.Handler
 }
 
 func New(services Services) *chi.Mux {
@@ -27,6 +35,7 @@ func New(services Services) *chi.Mux {
 	r.Get("/health", health.Get)
 
 	r.Route("/v1", func(r chi.Router) {
+		// --- Public catalog routes: catalog/search work without auth.
 		movieAPI := movies.NewAPI(services.Movies)
 		r.Route("/movies", func(r chi.Router) {
 			r.Get("/{id}", movieAPI.GetMovieById)
@@ -45,6 +54,16 @@ func New(services Services) *chi.Mux {
 
 		searchAPI := search.NewAPI(services.Search)
 		r.Get("/search", searchAPI.GetSearchResult)
+
+		// --- Protected routes: auth required, user row auto-upserted on
+		// first successful authentication.
+		r.Group(func(r chi.Router) {
+			r.Use(services.AuthMW)
+			r.Use(services.Users.EnsureUserMiddleware())
+
+			usersAPI := users.NewAPI(services.Users)
+			r.Get("/users/me", usersAPI.GetMe)
+		})
 	})
 
 	return r
