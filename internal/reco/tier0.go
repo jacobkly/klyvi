@@ -5,11 +5,11 @@ import (
 	"sort"
 )
 
-// Tier0 is the cold-start scorer (ARCHITECTURE §5.3). It ignores user
-// signal entirely and ranks the catalog by Bayesian-weighted quality (so
-// items with few votes are pulled toward the global mean instead of
-// rocketing to the top on a single 10/10 vote) plus a genre cap that
-// prevents the feed from being five action movies.
+// Tier0 is the cold-start scorer. It ignores user signal entirely and
+// ranks the catalog by Bayesian-weighted quality (so items with few votes
+// are pulled toward the global mean instead of rocketing to the top on a
+// single 10/10 vote) plus a genre cap that prevents the feed from being
+// five action movies.
 type Tier0 struct {
 	minVotes    int // m in the Bayesian formula
 	maxPerGenre int // diversification cap on the primary genre

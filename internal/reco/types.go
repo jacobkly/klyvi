@@ -5,9 +5,9 @@ import (
 )
 
 // MediaFeatures is the feature view of a media item the recommender uses
-// at scoring time. Built from the `movies` cache (no precomputed table
-// yet — see ARCHITECTURE §3.3 future direction). All TV-side fields are
-// stubbed because Phase 4 is movies-only.
+// at scoring time. Built from the `movies` cache (no precomputed feature
+// table yet — future work). All TV-side fields are stubbed because the
+// movies recommender is built first; TV reco is later work.
 type MediaFeatures struct {
 	MediaID     int
 	MediaType   string
@@ -52,8 +52,8 @@ type UserContext struct {
 	SeenMediaIDs map[int]bool
 }
 
-// Config holds the tunable constants from §5.2. All defaults can be
-// overridden by the orchestrator's caller.
+// Config holds the tunable constants used by the signal pipeline and
+// scorers. All defaults can be overridden by the orchestrator's caller.
 type Config struct {
 	// Base weights per interaction kind (signed; multiplied by rating_adjust + recency_decay).
 	BaseLogged     float64

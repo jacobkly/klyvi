@@ -5,13 +5,13 @@ import (
 	"sort"
 )
 
-// Tier2 scores candidates against a persisted TasteProfile. The architecture
-// argument (§5.3) for Tier 2 over Tier 1: feed requests become a fast
-// scored lookup against pre-aggregated weights rather than re-deriving them
-// each call. In this implementation the profile is rebuilt from the
-// orchestrator's already-loaded user signal on every request and persisted
-// as a side effect — the speed win lands once the read path is optimized
-// to skip feature-lookup when the profile is fresh.
+// Tier2 scores candidates against a persisted TasteProfile. The argument
+// for Tier 2 over Tier 1: feed requests become a fast scored lookup
+// against pre-aggregated weights rather than re-deriving them each call.
+// In this implementation the profile is rebuilt from the orchestrator's
+// already-loaded user signal on every request and persisted as a side
+// effect — the speed win lands once the read path is optimized to skip
+// feature-lookup when the profile is fresh.
 type Tier2 struct {
 	cfg  Config
 	repo ProfileRepository

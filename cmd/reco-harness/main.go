@@ -1,8 +1,8 @@
 // reco-harness runs the leave-one-out evaluation harness against the
-// recommender (ARCHITECTURE §5.7). For each user with sufficient signal it
-// hides one liked item at a time, runs the cascade against the rest, and
-// records whether the hidden item is recovered in the top-K (recall@K)
-// and at what rank (MRR — mean reciprocal rank).
+// recommender. For each user with sufficient signal it hides one liked
+// item at a time, runs the cascade against the rest, and records whether
+// the hidden item is recovered in the top-K (recall@K) and at what rank
+// (MRR — mean reciprocal rank).
 //
 // Two modes:
 //
@@ -117,8 +117,8 @@ func main() {
 		totalMRR/float64(totalTrials))
 
 	// Sample feed for the first user — gives the human something to eyeball
-	// alongside the numbers (per BUILD_NOTES.md Phase 4 caveat: numbers AND
-	// sample outputs are the gate).
+	// alongside the numbers. Recommender quality is a judgment call, not a
+	// pass/fail on recall@K alone: numbers AND sample outputs are the gate.
 	if len(users) > 0 {
 		fmt.Println("---")
 		fmt.Println("Sample top-10 feed for user", users[0].String()[:8])

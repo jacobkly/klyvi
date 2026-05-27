@@ -32,8 +32,8 @@ const (
 )
 
 // Interaction is a single signal event from a user — a row in the
-// `interactions` table. The `weight` derived value (per ARCHITECTURE §5.2)
-// is computed at read time in the reco signal pipeline, not stored.
+// `interactions` table. The `weight` derived value is computed at read
+// time in the reco signal pipeline, not stored.
 type Interaction struct {
 	ID        int       `db:"id" json:"id"`
 	UserID    uuid.UUID `db:"user_id" json:"user_id"`

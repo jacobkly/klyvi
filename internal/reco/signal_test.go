@@ -7,9 +7,10 @@ import (
 
 func ptrInt(n int) *int { return &n }
 
-// Verifies the high-stakes claim from ARCHITECTURE §5.2: a low rating is
-// negative signal, not just weak positive. This is THE bug the doc calls
-// out by name, and the bug an agent is most likely to silently introduce.
+// Verifies the high-stakes design rule: a low rating is negative signal,
+// not just weak positive. This is the easy-to-miss bug — treating every
+// rating as positive turns a 1/5 into faint praise instead of a strong
+// "no" — and the test exists to guard against silent regressions into it.
 func TestWeight_LowRatingIsNegative(t *testing.T) {
 	cfg := DefaultConfig()
 
@@ -20,7 +21,7 @@ func TestWeight_LowRatingIsNegative(t *testing.T) {
 
 	negWeight := Weight(cfg, "rated", ptrInt(0), 0)
 	if negWeight >= 0 {
-		t.Errorf("rated=0 should be NEGATIVE, got %f (this is the bug §5.2 warns about)", negWeight)
+		t.Errorf("rated=0 should be NEGATIVE, got %f (low ratings must produce negative signal)", negWeight)
 	}
 
 	neutralWeight := Weight(cfg, "rated", ptrInt(50), 0)

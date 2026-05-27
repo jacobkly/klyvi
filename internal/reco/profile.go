@@ -7,10 +7,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// TasteProfile is the denormalized per-user feature weight bundle (§3.4).
-// It is rebuilt from interactions and persisted so future feed requests
-// avoid recomputing aggregates and so the frontend can read/display the
-// profile for explainability and user-facing tuning.
+// TasteProfile is the denormalized per-user feature weight bundle. It is
+// rebuilt from interactions and persisted so future feed requests avoid
+// recomputing aggregates and so the frontend can read/display the profile
+// for explainability and user-facing tuning.
 type TasteProfile struct {
 	UserID             uuid.UUID
 	GenreWeights       map[int]float64

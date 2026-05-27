@@ -123,9 +123,9 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID) ([]Scored, er
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
 
 	// MMR rerank trades a little relevance for a noticeably more varied
-	// feed — see ARCHITECTURE §5.6. Tier 0 candidates have nil Features in
-	// the synthetic test path, in which case candidateSimilarity returns 0
-	// and MMRReorder degenerates to plain score order.
+	// feed. Tier 0 candidates have nil Features in the synthetic test
+	// path, in which case candidateSimilarity returns 0 and MMRReorder
+	// degenerates to plain score order.
 	return MMRReorder(scored, o.cfg.FeedSize, o.cfg.MMRLambda), nil
 }
 

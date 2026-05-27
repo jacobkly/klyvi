@@ -5,12 +5,11 @@ import (
 	"sort"
 )
 
-// Tier1 is the content-based scorer (ARCHITECTURE §5.3). For each
-// candidate it computes a positive-set similarity minus α-weighted
-// negative-set similarity over genre + keyword + era features. Keyword
-// overlap dominates by design — that is the central differentiator the
-// architecture calls out by name; genre-only matching is what incumbents
-// already do.
+// Tier1 is the content-based scorer. For each candidate it computes a
+// positive-set similarity minus α-weighted negative-set similarity over
+// genre + keyword + era features. Keyword overlap dominates by design —
+// that is the central differentiator; genre-only matching is what
+// incumbents already do.
 type Tier1 struct {
 	cfg Config
 }
