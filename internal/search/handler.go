@@ -24,7 +24,7 @@ func (a *API) GetSearchResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	searchResult, err := a.service.GetSearchResult(searchType, query)
+	searchResult, err := a.service.GetSearchResult(r.Context(), searchType, query)
 	if err != nil {
 		response.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

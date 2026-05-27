@@ -46,7 +46,7 @@ func main() {
 
 	movieService := movies.NewService(tmdbClient, movieRepo)
 	tvService := tv.NewService(tmdbClient)
-	searchService := search.NewService(tmdbClient)
+	searchService := search.NewService(tmdbClient, movieRepo)
 
 	r := router.New(router.Services{
 		Movies: movieService,

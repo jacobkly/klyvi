@@ -66,6 +66,7 @@ func (r *Repository) InsertMovie(ctx context.Context, movie *Movie) error {
 			:tagline, :title, :video, :vote_average, :vote_count,
 			:keywords, :credits
 		)
+		on conflict (movie_id) do nothing
 	`, movie)
 
 	return err
