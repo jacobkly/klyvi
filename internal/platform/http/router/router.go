@@ -93,7 +93,10 @@ func New(services Services) *chi.Mux {
 			})
 
 			interactionsAPI := interactions.NewAPI(services.Interactions)
-			r.Post("/interactions", interactionsAPI.Record)
+			r.Route("/interactions", func(r chi.Router) {
+				r.Post("/", interactionsAPI.Record)
+				r.Get("/", interactionsAPI.List)
+			})
 
 			recoAPI := reco.NewAPI(services.Reco)
 			r.Get("/reco/feed", recoAPI.Feed)
