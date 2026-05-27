@@ -3,6 +3,7 @@ package movies
 import (
 	"context"
 	"fmt"
+	"log"
 )
 
 // TMDBClient is the external data boundary for the movies service.
@@ -89,7 +90,9 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 		return nil, err
 	}
 
-	_ = s.repo.EnsureMediaIndex(ctx, movieID)
+	if err := s.repo.EnsureMediaIndex(ctx, movieID); err != nil {
+		log.Printf("best-effort EnsureMediaIndex failed for movie %d: %v", movieID, err)
+	}
 
 	return normalized, nil
 }
@@ -144,7 +147,9 @@ func (s *Service) GetMovieCollection(
 
 	collection := NormalizeTMDBMovieCollection(rawCollection, collectionID)
 
-	_ = s.repo.InsertMovieCollectionBatch(ctx, collection)
+	if err := s.repo.InsertMovieCollectionBatch(ctx, collection); err != nil {
+		log.Printf("best-effort InsertMovieCollectionBatch failed for collection %d: %v", collectionID, err)
+	}
 
 	return collection, nil
 }
