@@ -2,6 +2,7 @@ package movies_test
 
 import (
 	"context"
+	"encoding/json"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"klyvi-api/config"
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/db"
+	"klyvi-api/internal/platform/tmdb"
 
 	"github.com/joho/godotenv"
 )
@@ -100,5 +102,98 @@ func TestEnsureMediaIndex_ConcurrentInsertProducesOneRow(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected 1 row after concurrent EnsureMediaIndex, got %d", count)
+	}
+}
+
+// Verifies the slice-4 wiring end to end: the TMDB detail call uses
+// append_to_response=keywords,credits, normalize unwraps the keywords
+// envelope, and the row persisted to the movies table has both columns
+// populated with the right shape (keywords is the inner array, not the
+// outer wrapper).
+func TestService_GetMovieById_PopulatesKeywordsAndCredits(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping TMDB+DB integration test in short mode")
+	}
+
+	root := findRepoRoot(t)
+	if err := godotenv.Load(filepath.Join(root, ".env.dev")); err != nil {
+		t.Skipf("could not load .env.dev: %v", err)
+	}
+	if os.Getenv("TMDB_API_KEY") == "" {
+		t.Skip("TMDB_API_KEY not set")
+	}
+
+	dbCfg := config.NewDB()
+	dbConn, err := db.New(*dbCfg)
+	if err != nil {
+		t.Skipf("DB unreachable: %v", err)
+	}
+	defer dbConn.Close()
+
+	tmdbCfg := config.NewTMDB()
+	tmdbClient := tmdb.NewClient(tmdbCfg.APIKey)
+	repo := movies.NewRepository(dbConn)
+	svc := movies.NewService(tmdbClient, repo)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const movieID = 550 // Fight Club — stable TMDB id with both keywords and credits.
+
+	// Ensure we exercise the fetch+persist path, not the cache hit path.
+	_, _ = dbConn.ExecContext(ctx, `delete from movies where movie_id = $1`, movieID)
+	_, _ = dbConn.ExecContext(ctx,
+		`delete from media_index where id = $1 and media_type = 'movie'`,
+		movieID)
+
+	movie, err := svc.GetMovieById(ctx, movieID, "tmdb")
+	if err != nil {
+		t.Fatalf("GetMovieById: %v", err)
+	}
+	if movie == nil {
+		t.Fatal("expected movie, got nil")
+	}
+	if movie.Keywords == nil {
+		t.Error("Keywords on returned movie is nil")
+	}
+	if movie.Credits == nil {
+		t.Error("Credits on returned movie is nil")
+	}
+
+	// Verify the persisted row, not just the in-memory normalize output.
+	var keywords, credits []byte
+	if err := dbConn.QueryRowContext(ctx,
+		`select keywords, credits from movies where movie_id = $1`,
+		movieID).Scan(&keywords, &credits); err != nil {
+		t.Fatalf("read persisted row: %v", err)
+	}
+	if len(keywords) == 0 {
+		t.Fatal("persisted keywords column is empty")
+	}
+	if len(credits) == 0 {
+		t.Fatal("persisted credits column is empty")
+	}
+
+	// keywords must be an array of {id, name} objects — not the TMDB wrapper.
+	var kw []map[string]any
+	if err := json.Unmarshal(keywords, &kw); err != nil {
+		t.Fatalf("keywords is not a JSON array (likely still wrapped): %v\nraw: %s", err, keywords)
+	}
+	if len(kw) == 0 {
+		t.Error("expected non-empty keywords array for movie 550")
+	} else if _, ok := kw[0]["id"]; !ok {
+		t.Errorf("first keyword missing id field: %+v", kw[0])
+	}
+
+	// credits should be an object containing cast/crew arrays.
+	var cr map[string]any
+	if err := json.Unmarshal(credits, &cr); err != nil {
+		t.Fatalf("credits is not a JSON object: %v", err)
+	}
+	if _, ok := cr["cast"]; !ok {
+		t.Error("credits.cast missing")
+	}
+	if _, ok := cr["crew"]; !ok {
+		t.Error("credits.crew missing")
 	}
 }

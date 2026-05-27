@@ -78,7 +78,7 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 
 	raw, err := s.client.TMDBRequest(
 		"GET",
-		fmt.Sprintf("/movie/%d?language=en-US", movieID),
+		fmt.Sprintf("/movie/%d?language=en-US&append_to_response=keywords,credits", movieID),
 		nil,
 	)
 	if err != nil {
@@ -122,7 +122,7 @@ func (s *Service) GetMovieCollection(
 
 	rawMovie, err := s.client.TMDBRequest(
 		"GET",
-		fmt.Sprintf("/movie/%d?language=en-US", movieID),
+		fmt.Sprintf("/movie/%d?language=en-US&append_to_response=keywords,credits", movieID),
 		nil,
 	)
 	if err != nil {

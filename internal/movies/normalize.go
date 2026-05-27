@@ -57,6 +57,13 @@ func NormalizeTMDBMovie(raw map[string]interface{}) *Movie {
 		return &t
 	}
 
+	// TMDB returns keywords wrapped: { "keywords": { "keywords": [...] } }.
+	// Store the inner array directly so the column holds the useful shape.
+	var keywordsField *json.RawMessage
+	if wrapper, ok := raw["keywords"].(map[string]interface{}); ok {
+		keywordsField = j(wrapper["keywords"])
+	}
+
 	return &Movie{
 		MovieID:             intVal("id"),
 		Adult:               boolVal("adult"),
@@ -83,6 +90,8 @@ func NormalizeTMDBMovie(raw map[string]interface{}) *Movie {
 		Video:               boolVal("video"),
 		VoteAverage:         floatVal("vote_average"),
 		VoteCount:           intVal("vote_count"),
+		Keywords:            keywordsField,
+		Credits:             j(raw["credits"]),
 	}
 }
 

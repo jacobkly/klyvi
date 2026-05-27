@@ -54,7 +54,8 @@ func (r *Repository) InsertMovie(ctx context.Context, movie *Movie) error {
 			popularity, poster_path, production_companies,
 			production_countries, release_date, revenue,
 			runtime, spoken_languages, status,
-			tagline, title, video, vote_average, vote_count
+			tagline, title, video, vote_average, vote_count,
+			keywords, credits
 		) values (
 			:movie_id, :adult, :backdrop_path, :belongs_to_collection,
 			:budget, :genres, :homepage, :imdb_id,
@@ -62,7 +63,8 @@ func (r *Repository) InsertMovie(ctx context.Context, movie *Movie) error {
 			:popularity, :poster_path, :production_companies,
 			:production_countries, :release_date, :revenue,
 			:runtime, :spoken_languages, :status,
-			:tagline, :title, :video, :vote_average, :vote_count
+			:tagline, :title, :video, :vote_average, :vote_count,
+			:keywords, :credits
 		)
 	`, movie)
 

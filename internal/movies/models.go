@@ -31,6 +31,8 @@ type Movie struct {
 	Video               bool             `db:"video" json:"video"`
 	VoteAverage         float64          `db:"vote_average" json:"vote_average"`
 	VoteCount           int              `db:"vote_count" json:"vote_count"`
+	Keywords            *json.RawMessage `db:"keywords" json:"keywords"`
+	Credits             *json.RawMessage `db:"credits" json:"credits"`
 	CreatedAt           time.Time        `db:"created_at" json:"created_at"`
 	UpdatedAt           time.Time        `db:"updated_at" json:"updated_at"`
 }
