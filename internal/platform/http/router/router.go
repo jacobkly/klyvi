@@ -80,6 +80,7 @@ func New(services Services) *chi.Mux {
 		r.Group(func(r chi.Router) {
 			r.Use(services.AuthMW)
 			r.Use(services.Users.EnsureUserMiddleware())
+			r.Use(middleware.UserLoggerMiddleware)
 
 			usersAPI := users.NewAPI(services.Users)
 			r.Get("/users/me", usersAPI.GetMe)
