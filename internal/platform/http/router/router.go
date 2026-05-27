@@ -10,6 +10,7 @@ import (
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/http/middleware"
+	"klyvi-api/internal/reco"
 	"klyvi-api/internal/search"
 	"klyvi-api/internal/tracking"
 	"klyvi-api/internal/tv"
@@ -23,6 +24,7 @@ type Services struct {
 	Users        *users.Service
 	Tracking     *tracking.Service
 	Interactions *interactions.Service
+	Reco         *reco.Orchestrator
 
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
@@ -78,6 +80,9 @@ func New(services Services) *chi.Mux {
 
 			interactionsAPI := interactions.NewAPI(services.Interactions)
 			r.Post("/interactions", interactionsAPI.Record)
+
+			recoAPI := reco.NewAPI(services.Reco)
+			r.Get("/reco/feed", recoAPI.Feed)
 		})
 	})
 

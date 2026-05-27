@@ -17,6 +17,7 @@ import (
 	"klyvi-api/internal/platform/http/router"
 	"klyvi-api/internal/platform/tmdb"
 	"klyvi-api/internal/interactions"
+	"klyvi-api/internal/reco"
 	"klyvi-api/internal/search"
 	"klyvi-api/internal/tracking"
 	"klyvi-api/internal/tv"
@@ -59,6 +60,11 @@ func main() {
 	trackingService := tracking.NewService(trackingRepo)
 	interactionsService := interactions.NewService(interactionsRepo, trackingRepo)
 
+	// Recommender orchestrator. Catalog/signal/seen adapters are placeholders
+	// until slices 4-5/4-6 wire the real ones; with no Scorer registered the
+	// orchestrator short-circuits Feed to an empty list.
+	recoOrchestrator := reco.NewOrchestrator(emptyCatalog{}, emptySignal{}, emptySeen{}, reco.DefaultConfig())
+
 	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
 		JWKSURL:  cfg.Supabase.JWKSURL,
 		Issuer:   cfg.Supabase.Issuer,
@@ -75,6 +81,7 @@ func main() {
 		Users:        userService,
 		Tracking:     trackingService,
 		Interactions: interactionsService,
+		Reco:         recoOrchestrator,
 		AuthMW:       authMW,
 	})
 
