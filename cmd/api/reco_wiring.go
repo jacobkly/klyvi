@@ -77,7 +77,7 @@ func (a *signalAdapter) ListByUser(ctx context.Context, userID uuid.UUID, sinceD
 			select media_id, media_type, kind, rating,
 			       extract(epoch from (now() - created_at)) / 86400.0 as age_days
 			from interactions
-			where user_id = $1 and created_at >= now() - ($2 || ' days')::interval
+			where user_id = $1 and created_at >= now() - make_interval(days => $2)
 			order by created_at desc
 		`
 		args = append(args, sinceDays)

@@ -34,7 +34,7 @@ func (r *Repository) ListByUser(ctx context.Context, userID uuid.UUID, sinceDays
 	if sinceDays > 0 {
 		err := r.db.SelectContext(ctx, &rows, `
 			select * from interactions
-			where user_id = $1 and created_at >= now() - ($2 || ' days')::interval
+			where user_id = $1 and created_at >= now() - make_interval(days => $2)
 			order by created_at desc
 		`, userID, sinceDays)
 		return rows, err
