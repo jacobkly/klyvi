@@ -10,15 +10,17 @@ import (
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/search"
+	"klyvi-api/internal/tracking"
 	"klyvi-api/internal/tv"
 	"klyvi-api/internal/users"
 )
 
 type Services struct {
-	Movies *movies.Service
-	TV     *tv.Service
-	Search *search.Service
-	Users  *users.Service
+	Movies   *movies.Service
+	TV       *tv.Service
+	Search   *search.Service
+	Users    *users.Service
+	Tracking *tracking.Service
 
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
@@ -63,6 +65,14 @@ func New(services Services) *chi.Mux {
 
 			usersAPI := users.NewAPI(services.Users)
 			r.Get("/users/me", usersAPI.GetMe)
+
+			trackingAPI := tracking.NewAPI(services.Tracking)
+			r.Route("/tracking", func(r chi.Router) {
+				r.Get("/", trackingAPI.List)
+				r.Post("/", trackingAPI.Add)
+				r.Patch("/{media_id}", trackingAPI.Update)
+				r.Delete("/{media_id}", trackingAPI.Delete)
+			})
 		})
 	})
 
