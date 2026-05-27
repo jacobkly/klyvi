@@ -14,6 +14,7 @@ import (
 type UserRepository interface {
 	EnsureUser(ctx context.Context, id uuid.UUID) error
 	GetUserByID(ctx context.Context, id uuid.UUID) (*User, error)
+	UpdateProfile(ctx context.Context, id uuid.UUID, patch UpdateProfilePatch) (*User, error)
 }
 
 type Service struct {
@@ -31,6 +32,38 @@ func (s *Service) EnsureUser(ctx context.Context, id uuid.UUID) error {
 func (s *Service) GetMe(ctx context.Context, id uuid.UUID) (*User, error) {
 	return s.repo.GetUserByID(ctx, id)
 }
+
+// UpdateProfileRequest is the validated body for PATCH /v1/users/me.
+type UpdateProfileRequest struct {
+	Username  *string `json:"username"`
+	Bio       *string `json:"bio"`
+	AvatarURL *string `json:"avatar_url"`
+	BannerURL *string `json:"banner_url"`
+}
+
+// UpdateMe applies a profile patch. Light validation: username, when
+// provided, must be 3..40 chars. Other fields are passed through as-is —
+// length/format constraints are a frontend concern at this stage.
+func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileRequest) (*User, error) {
+	if req.Username != nil {
+		n := len(*req.Username)
+		if n < 3 || n > 40 {
+			return nil, errInvalidUsername
+		}
+	}
+	return s.repo.UpdateProfile(ctx, id, UpdateProfilePatch{
+		Username:  req.Username,
+		Bio:       req.Bio,
+		AvatarURL: req.AvatarURL,
+		BannerURL: req.BannerURL,
+	})
+}
+
+var errInvalidUsername = &validationErr{msg: "username must be 3..40 characters"}
+
+type validationErr struct{ msg string }
+
+func (e *validationErr) Error() string { return e.msg }
 
 // EnsureUserMiddleware upserts the `users` row on every authenticated request.
 // Mount it AFTER the JWT auth middleware on protected routes — it assumes the

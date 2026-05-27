@@ -1,6 +1,7 @@
 package users
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"klyvi-api/internal/platform/http/middleware"
@@ -44,4 +45,32 @@ func (a *API) GetMe(w http.ResponseWriter, r *http.Request) {
 		middleware.StatsFromContext(r.Context()),
 		user,
 	)
+}
+
+// UpdateMe — PATCH /v1/users/me. Partial profile update.
+func (a *API) UpdateMe(w http.ResponseWriter, r *http.Request) {
+	id, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	var req UpdateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+
+	user, err := a.service.UpdateMe(r.Context(), id, req)
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if user == nil {
+		response.WriteError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	response.WriteSuccess(w, http.StatusOK, "v1",
+		middleware.StatsFromContext(r.Context()), user)
 }

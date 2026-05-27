@@ -41,6 +41,38 @@ func (r *Repository) GetUserByID(ctx context.Context, id uuid.UUID) (*User, erro
 	return &u, err
 }
 
+// UpdateProfilePatch is the partial-update shape. nil fields are unchanged.
+type UpdateProfilePatch struct {
+	Username  *string
+	Bio       *string
+	AvatarURL *string
+	BannerURL *string
+}
+
+// UpdateProfile applies a partial patch to the user row using COALESCE — only
+// non-nil fields in the patch overwrite. Returns the updated row, or nil if
+// no row matched the id.
+func (r *Repository) UpdateProfile(ctx context.Context, id uuid.UUID, patch UpdateProfilePatch) (*User, error) {
+	var u User
+	err := r.db.QueryRowxContext(ctx, `
+		update users set
+			username   = coalesce($2, username),
+			bio        = coalesce($3, bio),
+			avatar_url = coalesce($4, avatar_url),
+			banner_url = coalesce($5, banner_url),
+			updated_at = now()
+		where id = $1
+		returning *
+	`, id, patch.Username, patch.Bio, patch.AvatarURL, patch.BannerURL).StructScan(&u)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 func defaultUsername(id uuid.UUID) string {
 	s := id.String()
 	return fmt.Sprintf("user_%s", s[:8])
