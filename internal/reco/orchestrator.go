@@ -121,10 +121,12 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID) ([]Scored, er
 	}
 
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
-	if len(scored) > o.cfg.FeedSize {
-		scored = scored[:o.cfg.FeedSize]
-	}
-	return scored, nil
+
+	// MMR rerank trades a little relevance for a noticeably more varied
+	// feed — see ARCHITECTURE §5.6. Tier 0 candidates have nil Features in
+	// the synthetic test path, in which case candidateSimilarity returns 0
+	// and MMRReorder degenerates to plain score order.
+	return MMRReorder(scored, o.cfg.FeedSize, o.cfg.MMRLambda), nil
 }
 
 // pickScorer applies the tier cascade. Slice 4-7/4-8 will introduce
