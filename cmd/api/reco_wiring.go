@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -113,6 +114,142 @@ func (a *signalAdapter) ListByUser(ctx context.Context, userID uuid.UUID, sinceD
 	}
 	return out, nil
 }
+
+// profileAdapter persists and loads TasteProfile rows from the
+// taste_profiles table. Implements reco.ProfileRepository.
+type profileAdapter struct {
+	db *sqlx.DB
+}
+
+func newProfileAdapter(db *sqlx.DB) *profileAdapter { return &profileAdapter{db: db} }
+
+func (a *profileAdapter) GetProfile(ctx context.Context, userID uuid.UUID) (*reco.TasteProfile, error) {
+	var row struct {
+		UserID             uuid.UUID       `db:"user_id"`
+		GenreWeights       json.RawMessage `db:"genre_weights"`
+		KeywordWeights     json.RawMessage `db:"keyword_weights"`
+		EraWeights         json.RawMessage `db:"era_weights"`
+		QualitySensitivity float64         `db:"quality_sensitivity"`
+		LikedCount         int             `db:"liked_count"`
+		DislikedCount      int             `db:"disliked_count"`
+		UpdatedAt          time.Time       `db:"updated_at"`
+	}
+	err := a.db.GetContext(ctx, &row,
+		`select * from taste_profiles where user_id = $1`, userID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &reco.TasteProfile{
+		UserID:             row.UserID,
+		GenreWeights:       intKeyMap(row.GenreWeights),
+		KeywordWeights:     intKeyMap(row.KeywordWeights),
+		EraWeights:         intKeyMap(row.EraWeights),
+		QualitySensitivity: row.QualitySensitivity,
+		LikedCount:         row.LikedCount,
+		DislikedCount:      row.DislikedCount,
+		UpdatedAt:          row.UpdatedAt,
+	}, nil
+}
+
+func (a *profileAdapter) UpsertProfile(ctx context.Context, p *reco.TasteProfile) error {
+	genreJSON, _ := json.Marshal(stringKeyMap(p.GenreWeights))
+	keywordJSON, _ := json.Marshal(stringKeyMap(p.KeywordWeights))
+	eraJSON, _ := json.Marshal(stringKeyMap(p.EraWeights))
+
+	_, err := a.db.ExecContext(ctx, `
+		insert into taste_profiles
+			(user_id, genre_weights, keyword_weights, era_weights,
+			 quality_sensitivity, liked_count, disliked_count, updated_at)
+		values ($1, $2, $3, $4, $5, $6, $7, now())
+		on conflict (user_id) do update set
+			genre_weights = excluded.genre_weights,
+			keyword_weights = excluded.keyword_weights,
+			era_weights = excluded.era_weights,
+			quality_sensitivity = excluded.quality_sensitivity,
+			liked_count = excluded.liked_count,
+			disliked_count = excluded.disliked_count,
+			updated_at = now()
+	`, p.UserID, genreJSON, keywordJSON, eraJSON,
+		p.QualitySensitivity, p.LikedCount, p.DislikedCount)
+	return err
+}
+
+// JSONB stores keys as strings. Round-trip helpers keep the in-memory
+// TasteProfile typed as map[int]float64 — friendlier for math.
+func stringKeyMap(m map[int]float64) map[string]float64 {
+	out := make(map[string]float64, len(m))
+	for k, v := range m {
+		out[itoa(k)] = v
+	}
+	return out
+}
+
+func intKeyMap(raw json.RawMessage) map[int]float64 {
+	if len(raw) == 0 {
+		return map[int]float64{}
+	}
+	var s map[string]float64
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return map[int]float64{}
+	}
+	out := make(map[int]float64, len(s))
+	for k, v := range s {
+		n, err := atoi(k)
+		if err != nil {
+			continue
+		}
+		out[n] = v
+	}
+	return out
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
+}
+
+func atoi(s string) (int, error) {
+	var n int
+	var sign = 1
+	for i, c := range s {
+		if i == 0 && c == '-' {
+			sign = -1
+			continue
+		}
+		if c < '0' || c > '9' {
+			return 0, errParse
+		}
+		n = n*10 + int(c-'0')
+	}
+	return sign * n, nil
+}
+
+var errParse = &parseErr{}
+
+type parseErr struct{}
+
+func (*parseErr) Error() string { return "parse error" }
 
 // seenAdapter unions the user's interactions + media_list rows to produce
 // the set of "already-touched" media_ids. The recommender filters out

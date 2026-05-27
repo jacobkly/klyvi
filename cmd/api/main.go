@@ -69,7 +69,8 @@ func main() {
 		newSeenAdapter(dbConn),
 		reco.DefaultConfig(),
 	).WithTier0(reco.NewTier0()).
-		WithTier1(reco.NewTier1(reco.DefaultConfig()))
+		WithTier1(reco.NewTier1(reco.DefaultConfig())).
+		WithTier2(reco.NewTier2(reco.DefaultConfig(), newProfileAdapter(dbConn)))
 
 	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
 		JWKSURL:  cfg.Supabase.JWKSURL,
