@@ -60,10 +60,15 @@ func main() {
 	trackingService := tracking.NewService(trackingRepo)
 	interactionsService := interactions.NewService(interactionsRepo, trackingRepo)
 
-	// Recommender orchestrator. Catalog/signal/seen adapters are placeholders
-	// until slices 4-5/4-6 wire the real ones; with no Scorer registered the
-	// orchestrator short-circuits Feed to an empty list.
-	recoOrchestrator := reco.NewOrchestrator(emptyCatalog{}, emptySignal{}, emptySeen{}, reco.DefaultConfig())
+	// Recommender orchestrator. Adapters wrap movies.Repository + raw SQL
+	// against interactions/media_list to feed the orchestrator. Tier 0 is
+	// always registered; Tier 1/2 land in subsequent slices.
+	recoOrchestrator := reco.NewOrchestrator(
+		newCatalogAdapter(movieRepo),
+		newSignalAdapter(dbConn),
+		newSeenAdapter(dbConn),
+		reco.DefaultConfig(),
+	).WithTier0(reco.NewTier0())
 
 	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
 		JWKSURL:  cfg.Supabase.JWKSURL,

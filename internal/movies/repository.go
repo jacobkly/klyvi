@@ -3,6 +3,7 @@ package movies
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 
 	"github.com/jmoiron/sqlx"
 )
@@ -119,6 +120,36 @@ func (r *Repository) GetCollectionByCollectionID(
 		return nil, nil
 	}
 	return movies, err
+}
+
+// RecoCandidateRow is a flat projection of the movies cache for the
+// recommender. The recommender's Candidate / MediaFeatures types are
+// constructed from these in an adapter in cmd/api.
+type RecoCandidateRow struct {
+	MovieID     int              `db:"movie_id"`
+	MediaID     int              `db:"media_id"`
+	Genres      *json.RawMessage `db:"genres"`
+	Keywords    *json.RawMessage `db:"keywords"`
+	ReleaseDate *sql.NullTime    `db:"release_date"`
+	VoteAverage float64          `db:"vote_average"`
+	VoteCount   int              `db:"vote_count"`
+}
+
+// ListCandidatesForReco returns up to `limit` movies suitable as feed
+// candidates, joined with their media_index id. Cheap query — feed
+// generation is sub-second.
+func (r *Repository) ListCandidatesForReco(ctx context.Context, limit int) ([]RecoCandidateRow, error) {
+	var rows []RecoCandidateRow
+	err := r.db.SelectContext(ctx, &rows, `
+		select m.movie_id, mi.media_id, m.genres, m.keywords, m.release_date,
+		       m.vote_average, m.vote_count
+		from movies m
+		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
+		where m.vote_count > 0
+		order by m.vote_count desc
+		limit $1
+	`, limit)
+	return rows, err
 }
 
 func (r *Repository) InsertMovieCollectionBatch(
