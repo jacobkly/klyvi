@@ -7,6 +7,7 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 
 	"klyvi-api/internal/health"
+	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/search"
@@ -16,11 +17,12 @@ import (
 )
 
 type Services struct {
-	Movies   *movies.Service
-	TV       *tv.Service
-	Search   *search.Service
-	Users    *users.Service
-	Tracking *tracking.Service
+	Movies       *movies.Service
+	TV           *tv.Service
+	Search       *search.Service
+	Users        *users.Service
+	Tracking     *tracking.Service
+	Interactions *interactions.Service
 
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
@@ -73,6 +75,9 @@ func New(services Services) *chi.Mux {
 				r.Patch("/{media_id}", trackingAPI.Update)
 				r.Delete("/{media_id}", trackingAPI.Delete)
 			})
+
+			interactionsAPI := interactions.NewAPI(services.Interactions)
+			r.Post("/interactions", interactionsAPI.Record)
 		})
 	})
 
