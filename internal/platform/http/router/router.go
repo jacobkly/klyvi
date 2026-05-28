@@ -11,6 +11,7 @@ import (
 	"klyvi-api/internal/health"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
+	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/search"
@@ -27,6 +28,7 @@ type Services struct {
 	Tracking     *tracking.Service
 	Interactions *interactions.Service
 	Reco         *reco.Orchestrator
+	Onboarding   *onboarding.Service
 
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
@@ -74,6 +76,11 @@ func New(services Services) *chi.Mux {
 
 		searchAPI := search.NewAPI(services.Search)
 		r.Get("/search", searchAPI.GetSearchResult)
+
+		// Onboarding pool is public — the frontend hits it before the user
+		// has authenticated (the swipe deck on the welcome screen).
+		onboardingAPI := onboarding.NewAPI(services.Onboarding)
+		r.Get("/onboarding/pool", onboardingAPI.Pool)
 
 		// --- Protected routes: auth required, user row auto-upserted on
 		// first successful authentication.
