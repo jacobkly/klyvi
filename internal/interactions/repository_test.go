@@ -2,14 +2,18 @@ package interactions_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"klyvi-api/config"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/platform/db"
+	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/tracking"
 	"klyvi-api/internal/users"
 
@@ -147,6 +151,29 @@ func TestInteractions_RecordRatedRequiresRating(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected validation error for missing rating on kind=rated")
+	}
+}
+
+// Verifies GET /v1/interactions for a user with no history returns
+// "data": [], not "data": null. Same JSON-contract guard as tracking.
+func TestInteractions_List_EmptyIsArrayNotNull(t *testing.T) {
+	env := setup(t)
+	api := interactions.NewAPI(env.service)
+
+	req := httptest.NewRequest("GET", "/v1/interactions", nil)
+	req = req.WithContext(middleware.WithUserUUID(req.Context(), env.userID))
+	rec := httptest.NewRecorder()
+	api.List(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d body: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"data":[]`) {
+		t.Errorf(`expected "data":[] in body, got: %s`, body)
+	}
+	if strings.Contains(body, `"data":null`) {
+		t.Errorf(`response contains "data":null: %s`, body)
 	}
 }
 

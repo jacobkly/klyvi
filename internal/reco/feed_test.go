@@ -189,6 +189,32 @@ func TestFeed_ResolvesReasonNames(t *testing.T) {
 	_ = foundUnknownGenre // not strictly required — depends on topReasons trimming to 3
 }
 
+// Verifies Tier 0 emits an empty Reasons slice, not nil. JSON contract:
+// "Reasons":[] not "Reasons":null. Frontend declared the field as an
+// array; the Go nil-slice quirk should not leak.
+func TestTier0_EmptyReasonsIsArrayNotNil(t *testing.T) {
+	cands := []Candidate{{
+		MediaID:   1,
+		MediaType: "movie",
+		Features: &MediaFeatures{
+			MediaID:     1,
+			MediaType:   "movie",
+			VoteCount:   100,
+			VoteAverage: 8.0,
+		},
+	}}
+	scored, err := NewTier0().Score(context.Background(), nil, cands)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	if len(scored) == 0 {
+		t.Fatal("no scored items")
+	}
+	if scored[0].Reasons == nil {
+		t.Error("Tier 0 Reasons should be []Reason{}, not nil — JSON contract")
+	}
+}
+
 // stubCatalogWithLiked overrides CandidatesByMediaIDs to seed liked-set
 // features for the user context, while delegating everything else.
 type stubCatalogWithLiked struct {

@@ -2,14 +2,18 @@ package tracking_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"klyvi-api/config"
 	"klyvi-api/internal/platform/db"
+	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/tracking"
 	"klyvi-api/internal/users"
 
@@ -316,6 +320,30 @@ func TestTracking_List_EnrichesEntries(t *testing.T) {
 	}
 	if seasonEntry.ReleaseYear == nil {
 		t.Error("season ReleaseYear: got nil, want a year from season air_date or series first_air_date")
+	}
+}
+
+// Verifies the JSON contract: GET /v1/tracking for a user with no entries
+// returns "data": [], not "data": null. Frontend declared the field as an
+// array in the OpenAPI spec; the Go nil-slice quirk should not leak.
+func TestTracking_List_EmptyIsArrayNotNull(t *testing.T) {
+	env := setupTracking(t)
+	api := tracking.NewAPI(env.service)
+
+	req := httptest.NewRequest("GET", "/v1/tracking", nil)
+	req = req.WithContext(middleware.WithUserUUID(req.Context(), env.userID))
+	rec := httptest.NewRecorder()
+	api.List(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d body: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"data":[]`) {
+		t.Errorf(`expected "data":[] in body, got: %s`, body)
+	}
+	if strings.Contains(body, `"data":null`) {
+		t.Errorf(`response contains "data":null: %s`, body)
 	}
 }
 

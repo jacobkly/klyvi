@@ -78,10 +78,10 @@ func (t *Tier0) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 				Candidate: c,
 				Score:     wr,
 				// Tier 0 has no per-feature reasons — the frontend renders
-				// cold-start cards without an explainability label. Reasons
-				// stay nil so the JSON response is `[]`/null rather than a
-				// dangling free-form string that doesn't fit the schema.
-				Reasons: nil,
+				// cold-start cards without an explainability label.
+				// Initialised to an empty slice (not nil) so the JSON
+				// response is `[]`, matching the OpenAPI contract.
+				Reasons: []Reason{},
 			},
 			primaryGenre: primary,
 		})

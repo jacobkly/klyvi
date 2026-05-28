@@ -67,6 +67,11 @@ func (a *API) List(w http.ResponseWriter, r *http.Request) {
 		response.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Guarantee a JSON array (not null) for callers; OpenAPI declares the
+	// field as an array.
+	if rows == nil {
+		rows = []Interaction{}
+	}
 
 	response.WriteSuccess(w, http.StatusOK, "v1",
 		middleware.StatsFromContext(r.Context()), rows)

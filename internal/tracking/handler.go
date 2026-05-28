@@ -128,6 +128,11 @@ func (a *API) List(w http.ResponseWriter, r *http.Request) {
 		response.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Guarantee a JSON array (not null) for callers; OpenAPI declares the
+	// field as an array.
+	if entries == nil {
+		entries = []Entry{}
+	}
 
 	response.WriteSuccess(w, http.StatusOK, "v1",
 		middleware.StatsFromContext(r.Context()), entries)
