@@ -124,15 +124,21 @@ func (r *Repository) GetCollectionByCollectionID(
 
 // RecoCandidateRow is a flat projection of the movies cache for the
 // recommender. The recommender's Candidate / MediaFeatures types are
-// constructed from these in an adapter in cmd/api.
+// constructed from these in an adapter in cmd/api. Display fields
+// (title, poster_path, backdrop_path) are included so the feed handler
+// can return everything the frontend needs to render a card without an
+// N+1 follow-up lookup.
 type RecoCandidateRow struct {
-	MovieID     int              `db:"movie_id"`
-	MediaID     int              `db:"media_id"`
-	Genres      *json.RawMessage `db:"genres"`
-	Keywords    *json.RawMessage `db:"keywords"`
-	ReleaseDate *sql.NullTime    `db:"release_date"`
-	VoteAverage float64          `db:"vote_average"`
-	VoteCount   int              `db:"vote_count"`
+	MovieID      int              `db:"movie_id"`
+	MediaID      int              `db:"media_id"`
+	Title        *string          `db:"title"`
+	PosterPath   *string          `db:"poster_path"`
+	BackdropPath *string          `db:"backdrop_path"`
+	Genres       *json.RawMessage `db:"genres"`
+	Keywords     *json.RawMessage `db:"keywords"`
+	ReleaseDate  *sql.NullTime    `db:"release_date"`
+	VoteAverage  float64          `db:"vote_average"`
+	VoteCount    int              `db:"vote_count"`
 }
 
 // CandidatesByMediaIDs returns the feed projection for a specific set of
@@ -144,13 +150,53 @@ func (r *Repository) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) (
 	}
 	var rows []RecoCandidateRow
 	err := r.db.SelectContext(ctx, &rows, `
-		select m.movie_id, mi.media_id, m.genres, m.keywords, m.release_date,
-		       m.vote_average, m.vote_count
+		select m.movie_id, mi.media_id, m.title, m.poster_path, m.backdrop_path,
+		       m.genres, m.keywords, m.release_date, m.vote_average, m.vote_count
 		from movies m
 		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
 		where mi.media_id = any($1)
 	`, mediaIDs)
 	return rows, err
+}
+
+// LookupGenreNames returns id→name pairs for the requested genre ids by
+// scanning the JSONB genres column across the movies cache. Ids that
+// don't appear in any cached movie are simply absent from the returned
+// map. Cheap because the query is bounded by len(ids) and most genres
+// recur across the catalog.
+func (r *Repository) LookupGenreNames(ctx context.Context, ids []int) (map[int]string, error) {
+	return r.lookupJSONBNames(ctx, "genres", ids)
+}
+
+// LookupKeywordNames is the keywords twin of LookupGenreNames.
+func (r *Repository) LookupKeywordNames(ctx context.Context, ids []int) (map[int]string, error) {
+	return r.lookupJSONBNames(ctx, "keywords", ids)
+}
+
+// lookupJSONBNames scans `column` (a JSONB array of {id, name} objects)
+// across the movies table and returns name strings for the requested ids.
+// coalesce(column, '[]') handles null arrays without erroring.
+func (r *Repository) lookupJSONBNames(ctx context.Context, column string, ids []int) (map[int]string, error) {
+	if len(ids) == 0 {
+		return map[int]string{}, nil
+	}
+	query := `
+		select distinct (elem->>'id')::int as id, elem->>'name' as name
+		from movies, jsonb_array_elements(coalesce(` + column + `, '[]'::jsonb)) elem
+		where (elem->>'id')::int = any($1)
+	`
+	var rows []struct {
+		ID   int    `db:"id"`
+		Name string `db:"name"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, query, ids); err != nil {
+		return nil, err
+	}
+	out := make(map[int]string, len(rows))
+	for _, r := range rows {
+		out[r.ID] = r.Name
+	}
+	return out, nil
 }
 
 // ListCandidatesForReco returns up to `limit` movies suitable as feed
@@ -159,8 +205,8 @@ func (r *Repository) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) (
 func (r *Repository) ListCandidatesForReco(ctx context.Context, limit int) ([]RecoCandidateRow, error) {
 	var rows []RecoCandidateRow
 	err := r.db.SelectContext(ctx, &rows, `
-		select m.movie_id, mi.media_id, m.genres, m.keywords, m.release_date,
-		       m.vote_average, m.vote_count
+		select m.movie_id, mi.media_id, m.title, m.poster_path, m.backdrop_path,
+		       m.genres, m.keywords, m.release_date, m.vote_average, m.vote_count
 		from movies m
 		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
 		where m.vote_count > 0

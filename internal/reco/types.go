@@ -20,18 +20,41 @@ type MediaFeatures struct {
 
 // Candidate is a media item the orchestrator may rank for a user. Features
 // can be nil for Tier 0 (cold start) — Tier 1+ require populated features.
+//
+// The display fields (TMDBID, Title, PosterPath, BackdropPath, ReleaseYear,
+// VoteAverage) are populated by the catalog adapter so the feed handler can
+// return everything the frontend needs to render a card without an N+1
+// follow-up lookup. The scorers themselves do not read these fields — they
+// ride through the embedding into Scored unchanged.
 type Candidate struct {
-	MediaID   int
-	MediaType string
-	Features  *MediaFeatures
+	MediaID      int
+	MediaType    string
+	TMDBID       int
+	Title        string
+	PosterPath   string
+	BackdropPath string
+	ReleaseYear  int
+	VoteAverage  float64
+	Features     *MediaFeatures
 }
 
-// Scored is a ranked Candidate plus the score and human-readable reasons
+// Scored is a ranked Candidate plus the score and structured reasons
 // (used for paid-tier explanations and for harness/debug output).
 type Scored struct {
 	Candidate
 	Score   float64
-	Reasons []string
+	Reasons []Reason
+}
+
+// Reason is a single explainability token attached to a Scored item.
+// Kind is "keyword" or "genre"; ID is the TMDB feature id; Name is the
+// human-readable label resolved server-side from the movies cache (empty
+// when the catalog doesn't carry the name for that id — frontend can
+// render the id as a fallback or hide it).
+type Reason struct {
+	Kind string `json:"kind"`
+	ID   int    `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 // SignalItem is one piece of user signal — a media item with the weighted

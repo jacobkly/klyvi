@@ -20,6 +20,11 @@ type CatalogRepository interface {
 	// CandidatesByMediaIDs returns Candidates for a specific set of media_ids,
 	// used to load features for items in the user's interaction history.
 	CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) ([]Candidate, error)
+
+	// LookupReasonNames resolves genre and keyword ids to their human
+	// names by scanning the JSONB columns on the movies cache. Missing
+	// ids are simply absent from the returned maps — never an error.
+	LookupReasonNames(ctx context.Context, genreIDs, keywordIDs []int) (map[int]string, map[int]string, error)
 }
 
 // SignalRepository pulls the user's interaction history for the signal
@@ -126,7 +131,66 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID) ([]Scored, er
 	// feed. Tier 0 candidates have nil Features in the synthetic test
 	// path, in which case candidateSimilarity returns 0 and MMRReorder
 	// degenerates to plain score order.
-	return MMRReorder(scored, o.cfg.FeedSize, o.cfg.MMRLambda), nil
+	ranked := MMRReorder(scored, o.cfg.FeedSize, o.cfg.MMRLambda)
+
+	// Resolve reason names. Done once over the entire feed instead of
+	// per-candidate so the lookup is a single DB round-trip regardless
+	// of feed size.
+	o.resolveReasonNames(ctx, ranked)
+
+	return ranked, nil
+}
+
+// resolveReasonNames mutates the scored slice, filling in Reason.Name
+// for any (kind,id) the catalog can resolve. Failures are logged
+// best-effort and do not block the response — the frontend can render
+// the id alone if the name is missing.
+func (o *Orchestrator) resolveReasonNames(ctx context.Context, scored []Scored) {
+	// Collect unique ids per kind.
+	gSet := map[int]struct{}{}
+	kSet := map[int]struct{}{}
+	for _, s := range scored {
+		for _, r := range s.Reasons {
+			switch r.Kind {
+			case "genre":
+				gSet[r.ID] = struct{}{}
+			case "keyword":
+				kSet[r.ID] = struct{}{}
+			}
+		}
+	}
+	if len(gSet) == 0 && len(kSet) == 0 {
+		return
+	}
+
+	gIDs := make([]int, 0, len(gSet))
+	for id := range gSet {
+		gIDs = append(gIDs, id)
+	}
+	kIDs := make([]int, 0, len(kSet))
+	for id := range kSet {
+		kIDs = append(kIDs, id)
+	}
+
+	gNames, kNames, err := o.catalog.LookupReasonNames(ctx, gIDs, kIDs)
+	if err != nil {
+		// Best-effort: missing names are not fatal for the feed.
+		return
+	}
+	for i := range scored {
+		for j, r := range scored[i].Reasons {
+			switch r.Kind {
+			case "genre":
+				if n, ok := gNames[r.ID]; ok {
+					scored[i].Reasons[j].Name = n
+				}
+			case "keyword":
+				if n, ok := kNames[r.ID]; ok {
+					scored[i].Reasons[j].Name = n
+				}
+			}
+		}
+	}
 }
 
 // pickScorer applies the tier cascade. Slice 4-7/4-8 will introduce

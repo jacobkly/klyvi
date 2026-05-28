@@ -134,11 +134,12 @@ func pooledEraWeights(items []SignalItem) map[int]float64 {
 func genreKeyset(f *MediaFeatures) []int   { return f.GenreIDs }
 func keywordKeyset(f *MediaFeatures) []int { return f.KeywordIDs }
 
-// topReasons returns at most a couple of feature labels that contributed
-// most to a candidate's score — for explainability and harness output.
-// The labels are just the integer ids here; the frontend resolves them to
-// human names via the movies cache when it renders.
-func topReasons(f *MediaFeatures, posKeyword, posGenre map[int]float64) []string {
+// topReasons returns up to three structured Reasons identifying the
+// features that contributed most to a candidate's score. Name is left
+// empty here — the orchestrator resolves names against the catalog after
+// all scorers have run, so we only pay for one DB lookup per feed call
+// regardless of how many candidates contribute a given feature id.
+func topReasons(f *MediaFeatures, posKeyword, posGenre map[int]float64) []Reason {
 	type idScore struct {
 		id    int
 		score float64
@@ -159,9 +160,9 @@ func topReasons(f *MediaFeatures, posKeyword, posGenre map[int]float64) []string
 	if len(ranked) > 3 {
 		ranked = ranked[:3]
 	}
-	out := make([]string, len(ranked))
+	out := make([]Reason, len(ranked))
 	for i, r := range ranked {
-		out[i] = r.kind + ":" + itoa(r.id)
+		out[i] = Reason{Kind: r.kind, ID: r.id}
 	}
 	return out
 }

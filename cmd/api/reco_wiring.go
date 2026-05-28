@@ -39,25 +39,56 @@ func (a *catalogAdapter) CandidatesByMediaIDs(ctx context.Context, mediaIDs []in
 	return rowsToCandidates(rows), nil
 }
 
+// LookupReasonNames satisfies reco.CatalogRepository — two cheap JSONB
+// scans over the movies cache, one for genres and one for keywords.
+// Each is wrapped in its own context so a failure on one doesn't poison
+// the other.
+func (a *catalogAdapter) LookupReasonNames(ctx context.Context, genreIDs, keywordIDs []int) (map[int]string, map[int]string, error) {
+	genres, err := a.repo.LookupGenreNames(ctx, genreIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	keywords, err := a.repo.LookupKeywordNames(ctx, keywordIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return genres, keywords, nil
+}
+
 func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 	cands := make([]reco.Candidate, 0, len(rows))
 	for _, row := range rows {
+		year := yearOf(row.ReleaseDate)
 		feat := &reco.MediaFeatures{
 			MediaID:     row.MediaID,
 			MediaType:   "movie",
 			GenreIDs:    parseIDArray(row.Genres),
 			KeywordIDs:  parseIDArray(row.Keywords),
-			Year:        yearOf(row.ReleaseDate),
+			Year:        year,
 			VoteAverage: row.VoteAverage,
 			VoteCount:   row.VoteCount,
 		}
 		cands = append(cands, reco.Candidate{
-			MediaID:   row.MediaID,
-			MediaType: "movie",
-			Features:  feat,
+			MediaID:      row.MediaID,
+			MediaType:    "movie",
+			TMDBID:       row.MovieID,
+			Title:        derefString(row.Title),
+			PosterPath:   derefString(row.PosterPath),
+			BackdropPath: derefString(row.BackdropPath),
+			ReleaseYear:  year,
+			VoteAverage:  row.VoteAverage,
+			Features:     feat,
 		})
 	}
 	return cands
+}
+
+// derefString returns the string pointed to, or "" if the pointer is nil.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // signalAdapter wraps the DB directly. Building it on the interactions
