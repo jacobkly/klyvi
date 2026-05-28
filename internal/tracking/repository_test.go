@@ -217,6 +217,108 @@ func TestTracking_AddSeasonResolvesMediaIndex(t *testing.T) {
 	}
 }
 
+// Verifies that List enriches each entry with display fields joined from
+// the catalog: movies get title/poster/backdrop/year/tmdb_id; seasons get
+// the parent series' title and a season-specific poster + season_number +
+// season_name. Frontend renders the library view directly off this without
+// per-row follow-up lookups.
+func TestTracking_List_EnrichesEntries(t *testing.T) {
+	env := setupTracking(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	statusCompleted := tracking.StatusCompleted
+	score := 95
+	if _, err := env.service.Add(ctx, env.userID, tracking.AddRequest{
+		TMDBID:    550, // Fight Club
+		MediaType: tracking.MediaTypeMovie,
+		Status:    &statusCompleted,
+		Score:     &score,
+	}); err != nil {
+		t.Fatalf("Add movie: %v", err)
+	}
+
+	statusWatching := tracking.StatusWatching
+	seasonNum := 1
+	if _, err := env.service.Add(ctx, env.userID, tracking.AddRequest{
+		TMDBID:       1396, // Breaking Bad
+		MediaType:    tracking.MediaTypeSeason,
+		SeasonNumber: &seasonNum,
+		Status:       &statusWatching,
+	}); err != nil {
+		t.Fatalf("Add season: %v", err)
+	}
+
+	list, err := env.service.List(ctx, env.userID, tracking.ListFilters{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(list))
+	}
+
+	var movieEntry, seasonEntry *tracking.Entry
+	for i := range list {
+		switch list[i].MediaType {
+		case tracking.MediaTypeMovie:
+			movieEntry = &list[i]
+		case tracking.MediaTypeSeason:
+			seasonEntry = &list[i]
+		}
+	}
+	if movieEntry == nil {
+		t.Fatal("movie entry not present in list")
+	}
+	if seasonEntry == nil {
+		t.Fatal("season entry not present in list")
+	}
+
+	// Movie enrichment: TMDBID, Title, PosterPath, BackdropPath, ReleaseYear
+	// populated; season fields nil.
+	if movieEntry.TMDBID == nil || *movieEntry.TMDBID != 550 {
+		t.Errorf("movie TMDBID: got %v, want 550", movieEntry.TMDBID)
+	}
+	if movieEntry.Title == nil || *movieEntry.Title == "" {
+		t.Errorf("movie Title empty/nil: %v", movieEntry.Title)
+	}
+	if movieEntry.PosterPath == nil || *movieEntry.PosterPath == "" {
+		t.Errorf("movie PosterPath empty/nil: %v", movieEntry.PosterPath)
+	}
+	if movieEntry.BackdropPath == nil || *movieEntry.BackdropPath == "" {
+		t.Errorf("movie BackdropPath empty/nil: %v", movieEntry.BackdropPath)
+	}
+	if movieEntry.ReleaseYear == nil || *movieEntry.ReleaseYear == 0 {
+		t.Errorf("movie ReleaseYear: %v", movieEntry.ReleaseYear)
+	}
+	if movieEntry.SeasonNumber != nil {
+		t.Errorf("movie SeasonNumber should be nil, got %v", movieEntry.SeasonNumber)
+	}
+	if movieEntry.SeasonName != nil {
+		t.Errorf("movie SeasonName should be nil, got %v", movieEntry.SeasonName)
+	}
+
+	// Season enrichment: parent series TMDBID + Title; season's own PosterPath
+	// (or series fallback) + SeasonNumber + SeasonName + ReleaseYear.
+	if seasonEntry.TMDBID == nil || *seasonEntry.TMDBID != 1396 {
+		t.Errorf("season parent TMDBID: got %v, want 1396", seasonEntry.TMDBID)
+	}
+	if seasonEntry.Title == nil || *seasonEntry.Title == "" {
+		t.Errorf("season Title (series name) empty/nil: %v", seasonEntry.Title)
+	}
+	if seasonEntry.PosterPath == nil || *seasonEntry.PosterPath == "" {
+		t.Errorf("season PosterPath empty/nil: %v", seasonEntry.PosterPath)
+	}
+	if seasonEntry.SeasonNumber == nil || *seasonEntry.SeasonNumber != 1 {
+		t.Errorf("season SeasonNumber: got %v, want 1", seasonEntry.SeasonNumber)
+	}
+	if seasonEntry.SeasonName == nil {
+		t.Error("season SeasonName: got nil, want non-nil")
+	}
+	if seasonEntry.ReleaseYear == nil {
+		t.Error("season ReleaseYear: got nil, want a year from season air_date or series first_air_date")
+	}
+}
+
 func TestTracking_EnsureMediaIndexAndGetID_Concurrent(t *testing.T) {
 	env := setupTracking(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
