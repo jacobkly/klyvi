@@ -71,7 +71,7 @@ const entrySelectClause = `
 	ml.total_rewatches, ml.notes, ml.is_deleted,
 	ml.created_at, ml.updated_at,
 	coalesce(m.movie_id, tvs.tv_id) as tmdb_id,
-	coalesce(m.title, tvs.original_name) as title,
+	coalesce(m.title, tvs.name, tvs.original_name) as title,
 	coalesce(m.poster_path, tvse.poster_path, tvs.poster_path) as poster_path,
 	coalesce(m.backdrop_path, tvs.backdrop_path) as backdrop_path,
 	coalesce(

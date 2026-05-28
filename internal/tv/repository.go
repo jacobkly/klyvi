@@ -21,7 +21,7 @@ func NewRepository(db *sqlx.DB) *Repository {
 const tvSeriesColumns = `tv_id, adult, backdrop_path, created_by, first_air_date,
 	genres, homepage, in_production, last_air_date, last_episode_to_air,
 	next_episode_to_air, networks, number_of_episodes, number_of_seasons,
-	original_language, original_name, overview, popularity, poster_path,
+	name, original_language, original_name, overview, popularity, poster_path,
 	production_companies, production_countries, seasons, spoken_languages,
 	status, tagline, type, vote_average, vote_count, keywords, credits,
 	created_at, updated_at`
@@ -43,14 +43,14 @@ func (r *Repository) InsertTVSeries(ctx context.Context, series *TVSeries) error
 			tv_id, adult, backdrop_path, created_by, first_air_date,
 			genres, homepage, in_production, last_air_date, last_episode_to_air,
 			next_episode_to_air, networks, number_of_episodes, number_of_seasons,
-			original_language, original_name, overview, popularity, poster_path,
+			name, original_language, original_name, overview, popularity, poster_path,
 			production_companies, production_countries, seasons, spoken_languages,
 			status, tagline, type, vote_average, vote_count, keywords, credits
 		) values (
 			:tv_id, :adult, :backdrop_path, :created_by, :first_air_date,
 			:genres, :homepage, :in_production, :last_air_date, :last_episode_to_air,
 			:next_episode_to_air, :networks, :number_of_episodes, :number_of_seasons,
-			:original_language, :original_name, :overview, :popularity, :poster_path,
+			:name, :original_language, :original_name, :overview, :popularity, :poster_path,
 			:production_companies, :production_countries, :seasons, :spoken_languages,
 			:status, :tagline, :type, :vote_average, :vote_count, :keywords, :credits
 		)

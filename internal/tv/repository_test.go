@@ -148,6 +148,12 @@ func TestService_GetTvById_PopulatesSeriesKeywordsAndCredits(t *testing.T) {
 	if series.Credits == nil {
 		t.Error("Credits on returned series is nil")
 	}
+	// Localised TMDB title — populated alongside original_name so the
+	// frontend doesn't have to fall back on the original_name field for
+	// English-language series.
+	if series.Name == nil || *series.Name == "" {
+		t.Errorf("Name empty/nil: %v", series.Name)
+	}
 
 	var keywords, credits []byte
 	if err := dbh.QueryRowContext(ctx,

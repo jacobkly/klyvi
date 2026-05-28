@@ -80,6 +80,7 @@ func NormalizeTMDBTVSeries(raw map[string]interface{}) *TVSeries {
 		Networks:            j(raw["networks"]),
 		NumberOfEpisodes:    intVal("number_of_episodes"),
 		NumberOfSeasons:     intVal("number_of_seasons"),
+		Name:                str("name"),
 		OriginalLanguage:    str("original_language"),
 		OriginalName:        str("original_name"),
 		Overview:            str("overview"),

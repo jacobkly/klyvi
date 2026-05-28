@@ -27,6 +27,7 @@ type TVSeries struct {
 	Networks            *json.RawMessage `db:"networks" json:"networks"`
 	NumberOfEpisodes    int              `db:"number_of_episodes" json:"number_of_episodes"`
 	NumberOfSeasons     int              `db:"number_of_seasons" json:"number_of_seasons"`
+	Name                *string          `db:"name" json:"name"`
 	OriginalLanguage    *string          `db:"original_language" json:"original_language"`
 	OriginalName        *string          `db:"original_name" json:"original_name"`
 	Overview            *string          `db:"overview" json:"overview"`
