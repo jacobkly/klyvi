@@ -3,11 +3,22 @@ package users
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 )
+
+// uniqueViolation is the SQLSTATE Postgres raises when an insert or update
+// collides with a unique index.
+const uniqueViolation = "23505"
+
+// usernameUniqueIndex is the index created in migration 00022. Matching on
+// its name keeps an unrelated future unique violation from being reported to
+// the user as a username collision.
+const usernameUniqueIndex = "users_username_lower_key"
 
 type Repository struct {
 	db *sqlx.DB
@@ -41,6 +52,19 @@ func (r *Repository) GetUserByID(ctx context.Context, id uuid.UUID) (*User, erro
 	return &u, err
 }
 
+// UsernameExists reports whether a username is already held, compared
+// case-insensitively so it agrees with the users_username_lower_key index.
+func (r *Repository) UsernameExists(ctx context.Context, name string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowxContext(ctx, `
+		select exists(select 1 from users where lower(username) = lower($1))
+	`, name).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("username exists check: %w", err)
+	}
+	return exists, nil
+}
+
 // UpdateProfilePatch is the partial-update shape. nil fields are unchanged.
 type UpdateProfilePatch struct {
 	Username  *string
@@ -52,11 +76,24 @@ type UpdateProfilePatch struct {
 // UpdateProfile applies a partial patch to the user row using COALESCE — only
 // non-nil fields in the patch overwrite. Returns the updated row, or nil if
 // no row matched the id.
+//
+// username_changed_at is stamped in the same statement that writes the name,
+// so the two can never drift. The lower() comparison reads the pre-update
+// value, which means re-saving the same name (or only its capitalisation)
+// does not count as a change and does not start a cooldown.
+//
+// A concurrent update that loses the race on users_username_lower_key comes
+// back as ErrUsernameTaken rather than a driver error, so the caller does not
+// have to know what SQLSTATE 23505 is.
 func (r *Repository) UpdateProfile(ctx context.Context, id uuid.UUID, patch UpdateProfilePatch) (*User, error) {
 	var u User
 	err := r.db.QueryRowxContext(ctx, `
 		update users set
-			username   = coalesce($2, username),
+			username            = coalesce($2, username),
+			username_changed_at = case
+				when $2 is not null and lower($2) <> lower(username) then now()
+				else username_changed_at
+			end,
 			bio        = coalesce($3, bio),
 			avatar_url = coalesce($4, avatar_url),
 			banner_url = coalesce($5, banner_url),
@@ -64,13 +101,26 @@ func (r *Repository) UpdateProfile(ctx context.Context, id uuid.UUID, patch Upda
 		where id = $1
 		returning *
 	`, id, patch.Username, patch.Bio, patch.AvatarURL, patch.BannerURL).StructScan(&u)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		if isUsernameTaken(err) {
+			return nil, ErrUsernameTaken
+		}
+		return nil, fmt.Errorf("update profile: %w", err)
 	}
 	return &u, nil
+}
+
+// isUsernameTaken reports whether err is a unique violation on the username
+// index specifically.
+func isUsernameTaken(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == uniqueViolation && pgErr.ConstraintName == usernameUniqueIndex
 }
 
 func defaultUsername(id uuid.UUID) string {

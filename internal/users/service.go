@@ -15,6 +15,7 @@ type UserRepository interface {
 	EnsureUser(ctx context.Context, id uuid.UUID) error
 	GetUserByID(ctx context.Context, id uuid.UUID) (*User, error)
 	UpdateProfile(ctx context.Context, id uuid.UUID, patch UpdateProfilePatch) (*User, error)
+	UsernameExists(ctx context.Context, name string) (bool, error)
 }
 
 type Service struct {
@@ -41,14 +42,16 @@ type UpdateProfileRequest struct {
 	BannerURL *string `json:"banner_url"`
 }
 
-// UpdateMe applies a profile patch. Light validation: username, when
-// provided, must be 3..40 chars. Other fields are passed through as-is —
-// length/format constraints are a frontend concern at this stage.
+// UpdateMe applies a profile patch. A username, when provided, must pass
+// ValidateUsername. Other fields are passed through as-is — length and format
+// constraints on those are a frontend concern at this stage.
+//
+// Collisions are not pre-checked here: the unique index is the only race-free
+// answer, and the repository already translates it into ErrUsernameTaken.
 func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileRequest) (*User, error) {
 	if req.Username != nil {
-		n := len(*req.Username)
-		if n < 3 || n > 40 {
-			return nil, errInvalidUsername
+		if err := ValidateUsername(*req.Username); err != nil {
+			return nil, err
 		}
 	}
 	return s.repo.UpdateProfile(ctx, id, UpdateProfilePatch{
@@ -59,11 +62,43 @@ func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileR
 	})
 }
 
-var errInvalidUsername = &validationErr{msg: "username must be 3..40 characters"}
+// UsernameAvailability is the answer to "can I have this name?". Reason is
+// empty when Available is true.
+type UsernameAvailability struct {
+	Username  string `json:"username"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason"`
+}
 
-type validationErr struct{ msg string }
+// CheckUsernameAvailable answers for an unauthenticated caller during sign-up.
+// It reports format and reservation problems without touching the database,
+// and only queries when the name is otherwise usable.
+//
+// This necessarily leaks "does this name exist", which is unavoidable for the
+// feature to work and acceptable because usernames are public display names.
+// What must never leak from here is any mapping to an email address.
+func (s *Service) CheckUsernameAvailable(ctx context.Context, name string) (*UsernameAvailability, error) {
+	if err := ValidateUsername(name); err != nil {
+		return &UsernameAvailability{
+			Username:  name,
+			Available: false,
+			Reason:    UnavailableReason(err),
+		}, nil
+	}
 
-func (e *validationErr) Error() string { return e.msg }
+	taken, err := s.repo.UsernameExists(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if taken {
+		return &UsernameAvailability{
+			Username:  name,
+			Available: false,
+			Reason:    ReasonTaken,
+		}, nil
+	}
+	return &UsernameAvailability{Username: name, Available: true}, nil
+}
 
 // EnsureUserMiddleware upserts the `users` row on every authenticated request.
 // Mount it AFTER the JWT auth middleware on protected routes — it assumes the

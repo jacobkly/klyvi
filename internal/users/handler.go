@@ -2,6 +2,7 @@ package users
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"klyvi-api/internal/platform/http/middleware"
@@ -63,7 +64,7 @@ func (a *API) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := a.service.UpdateMe(r.Context(), id, req)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		response.WriteError(w, statusForUsernameError(err), err.Error())
 		return
 	}
 	if user == nil {
@@ -73,4 +74,22 @@ func (a *API) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	response.WriteSuccess(w, http.StatusOK, "v1",
 		middleware.StatsFromContext(r.Context()), user)
+}
+
+// statusForUsernameError maps the username failure modes onto status codes
+// the client can branch on. Anything unrecognised is a 500 — a profile patch
+// that fails for a reason we did not name is a server problem, and reporting
+// it as 400 would tell the user to fix input that is not wrong.
+func statusForUsernameError(err error) int {
+	var cooldown *UsernameCooldownError
+	switch {
+	case errors.Is(err, ErrUsernameInvalid):
+		return http.StatusBadRequest
+	case errors.Is(err, ErrUsernameReserved), errors.Is(err, ErrUsernameTaken):
+		return http.StatusConflict
+	case errors.As(err, &cooldown):
+		return http.StatusTooManyRequests
+	default:
+		return http.StatusInternalServerError
+	}
 }
