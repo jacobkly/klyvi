@@ -63,11 +63,13 @@ func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileR
 }
 
 // UsernameAvailability is the answer to "can I have this name?". Reason is
-// empty when Available is true.
+// null when Available is true, and otherwise one of the Reason* constants —
+// the client shows a different message for each, so a bare boolean is not
+// enough.
 type UsernameAvailability struct {
-	Username  string `json:"username"`
-	Available bool   `json:"available"`
-	Reason    string `json:"reason"`
+	Username  string  `json:"username"`
+	Available bool    `json:"available"`
+	Reason    *string `json:"reason"`
 }
 
 // CheckUsernameAvailable answers for an unauthenticated caller during sign-up.
@@ -79,11 +81,7 @@ type UsernameAvailability struct {
 // What must never leak from here is any mapping to an email address.
 func (s *Service) CheckUsernameAvailable(ctx context.Context, name string) (*UsernameAvailability, error) {
 	if err := ValidateUsername(name); err != nil {
-		return &UsernameAvailability{
-			Username:  name,
-			Available: false,
-			Reason:    UnavailableReason(err),
-		}, nil
+		return unavailable(name, UnavailableReason(err)), nil
 	}
 
 	taken, err := s.repo.UsernameExists(ctx, name)
@@ -91,13 +89,13 @@ func (s *Service) CheckUsernameAvailable(ctx context.Context, name string) (*Use
 		return nil, err
 	}
 	if taken {
-		return &UsernameAvailability{
-			Username:  name,
-			Available: false,
-			Reason:    ReasonTaken,
-		}, nil
+		return unavailable(name, ReasonTaken), nil
 	}
 	return &UsernameAvailability{Username: name, Available: true}, nil
+}
+
+func unavailable(name, reason string) *UsernameAvailability {
+	return &UsernameAvailability{Username: name, Available: false, Reason: &reason}
 }
 
 // EnsureUserMiddleware upserts the `users` row on every authenticated request.

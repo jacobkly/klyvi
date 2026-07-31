@@ -76,6 +76,32 @@ func (a *API) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		middleware.StatsFromContext(r.Context()), user)
 }
 
+// CheckUsernameAvailable — GET /v1/users/username-available?username=<name>.
+//
+// Public by necessity: sign-up has no session yet, so this cannot sit behind
+// the JWT middleware. It is rate-limited at the route instead, because an
+// uncapped unauthenticated read of the users table is a free enumerator.
+//
+// An unusable name is a 200 with available=false, not a 4xx — "is this name
+// free" was answered successfully even when the answer is no. Only a
+// malformed request (no username at all) is a 400.
+func (a *API) CheckUsernameAvailable(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("username")
+	if name == "" {
+		response.WriteError(w, http.StatusBadRequest, "username query parameter is required")
+		return
+	}
+
+	result, err := a.service.CheckUsernameAvailable(r.Context(), name)
+	if err != nil {
+		response.WriteError(w, http.StatusInternalServerError, "could not check username availability")
+		return
+	}
+
+	response.WriteSuccess(w, http.StatusOK, "v1",
+		middleware.StatsFromContext(r.Context()), result)
+}
+
 // statusForUsernameError maps the username failure modes onto status codes
 // the client can branch on. Anything unrecognised is a 500 — a profile patch
 // that fails for a reason we did not name is a server problem, and reporting

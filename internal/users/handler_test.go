@@ -166,8 +166,12 @@ func TestCheckUsernameAvailable(t *testing.T) {
 			if got.Available != tt.available {
 				t.Errorf("available = %v, want %v", got.Available, tt.available)
 			}
-			if got.Reason != tt.reason {
-				t.Errorf("reason = %q, want %q", got.Reason, tt.reason)
+			if reason := derefReason(got.Reason); reason != tt.reason {
+				t.Errorf("reason = %q, want %q", reason, tt.reason)
+			}
+			// An available name reports a null reason, not an empty string.
+			if tt.available && got.Reason != nil {
+				t.Errorf("reason = %q on an available name, want null", *got.Reason)
 			}
 			if got.Username != tt.input {
 				t.Errorf("username = %q, want %q", got.Username, tt.input)
@@ -187,6 +191,13 @@ func TestCheckUsernameAvailable_SkipsQueryForUnusableNames(t *testing.T) {
 			t.Errorf("CheckUsernameAvailable(%q) queried the database: %v", name, err)
 		}
 	}
+}
+
+func derefReason(r *string) string {
+	if r == nil {
+		return ""
+	}
+	return *r
 }
 
 var errUnexpectedQuery = errUnexpected{}

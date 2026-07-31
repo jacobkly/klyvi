@@ -82,6 +82,15 @@ func New(services Services) *chi.Mux {
 		onboardingAPI := onboarding.NewAPI(services.Onboarding)
 		r.Get("/onboarding/pool", onboardingAPI.Pool)
 
+		// Username availability is public for the same reason: sign-up has
+		// no session yet. It reads the users table, so it carries its own
+		// rate limit rather than relying on auth to keep the volume sane.
+		usersPublicAPI := users.NewAPI(services.Users)
+		r.With(middleware.RateLimit(middleware.RateLimitConfig{
+			RequestsPerMinute: 20,
+			Burst:             10,
+		})).Get("/users/username-available", usersPublicAPI.CheckUsernameAvailable)
+
 		// --- Protected routes: auth required, user row auto-upserted on
 		// first successful authentication.
 		r.Group(func(r chi.Router) {
