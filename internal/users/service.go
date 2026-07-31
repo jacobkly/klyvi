@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -43,14 +45,18 @@ type UpdateProfileRequest struct {
 }
 
 // UpdateMe applies a profile patch. A username, when provided, must pass
-// ValidateUsername. Other fields are passed through as-is — length and format
-// constraints on those are a frontend concern at this stage.
+// ValidateUsername and clear the change cooldown. Other fields are passed
+// through as-is — length and format constraints on those are a frontend
+// concern at this stage.
 //
 // Collisions are not pre-checked here: the unique index is the only race-free
 // answer, and the repository already translates it into ErrUsernameTaken.
 func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileRequest) (*User, error) {
 	if req.Username != nil {
 		if err := ValidateUsername(*req.Username); err != nil {
+			return nil, err
+		}
+		if err := s.checkUsernameCooldown(ctx, id, *req.Username); err != nil {
 			return nil, err
 		}
 	}
@@ -60,6 +66,34 @@ func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileR
 		AvatarURL: req.AvatarURL,
 		BannerURL: req.BannerURL,
 	})
+}
+
+// checkUsernameCooldown refuses a rename that lands inside the cooldown
+// window. Two cases deliberately pass straight through:
+//
+//   - username_changed_at is nil. The row still holds the auto-generated
+//     user_<8 hex> name, which the user never chose, so claiming a real name
+//     for the first time is free. This is what lets the web client apply the
+//     name picked at sign-up without consuming the user's one change.
+//   - The name is unchanged, ignoring case. Re-saving a profile form, or
+//     fixing capitalisation, is not a rename and must not start a cooldown or
+//     reject a PATCH that is really editing the bio.
+func (s *Service) checkUsernameCooldown(ctx context.Context, id uuid.UUID, next string) error {
+	current, err := s.repo.GetUserByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if current == nil || current.UsernameChangedAt == nil {
+		return nil
+	}
+	if strings.EqualFold(current.Username, next) {
+		return nil
+	}
+
+	if retryAt := current.UsernameChangedAt.Add(UsernameChangeCooldown); time.Now().Before(retryAt) {
+		return &UsernameCooldownError{RetryAt: retryAt}
+	}
+	return nil
 }
 
 // UsernameAvailability is the answer to "can I have this name?". Reason is
