@@ -45,6 +45,7 @@ type Entry struct {
 	FinishDate      *time.Time `db:"finish_date" json:"finish_date"`
 	TotalRewatches  int        `db:"total_rewatches" json:"total_rewatches"`
 	Notes           *string    `db:"notes" json:"notes"`
+	Favorite        bool       `db:"favorite" json:"favorite"`
 	IsDeleted       bool       `db:"is_deleted" json:"is_deleted"`
 	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
 	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`

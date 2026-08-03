@@ -11,7 +11,7 @@ import (
 // in the consumer package per repo convention.
 type TrackingRepository interface {
 	EnsureMediaIndexAndGetID(ctx context.Context, tmdbID int, mediaType string, seasonNumber *int) (int, error)
-	AddEntry(ctx context.Context, userID uuid.UUID, mediaID int, mediaType string, status *string, score *int, episodeProgress *int, notes *string) (*Entry, error)
+	AddEntry(ctx context.Context, userID uuid.UUID, mediaID int, p AddParams) (*Entry, error)
 	GetEntry(ctx context.Context, userID uuid.UUID, mediaID int) (*Entry, error)
 	UpdateEntry(ctx context.Context, userID uuid.UUID, mediaID int, patch UpdatePatch) (*Entry, error)
 	DeleteEntry(ctx context.Context, userID uuid.UUID, mediaID int) (bool, error)
@@ -37,6 +37,7 @@ type AddRequest struct {
 	Score           *int    `json:"score"`
 	EpisodeProgress *int    `json:"episode_progress"`
 	Notes           *string `json:"notes"`
+	Favorite        *bool   `json:"favorite"`
 }
 
 // UpdateRequest is the validated input for PATCH /v1/tracking/{media_id}.
@@ -46,6 +47,7 @@ type UpdateRequest struct {
 	Score           *int    `json:"score"`
 	EpisodeProgress *int    `json:"episode_progress"`
 	Notes           *string `json:"notes"`
+	Favorite        *bool   `json:"favorite"`
 }
 
 // Add validates the request, ensures the media_index row, and inserts the
@@ -77,7 +79,14 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, req AddRequest) (*E
 		return nil, err
 	}
 
-	return s.repo.AddEntry(ctx, userID, mediaID, req.MediaType, req.Status, req.Score, req.EpisodeProgress, req.Notes)
+	return s.repo.AddEntry(ctx, userID, mediaID, AddParams{
+		MediaType:       req.MediaType,
+		Status:          req.Status,
+		Score:           req.Score,
+		EpisodeProgress: req.EpisodeProgress,
+		Notes:           req.Notes,
+		Favorite:        req.Favorite,
+	})
 }
 
 // Update applies a patch to an existing entry. Returns nil if no entry
@@ -95,6 +104,7 @@ func (s *Service) Update(ctx context.Context, userID uuid.UUID, mediaID int, req
 		Score:           req.Score,
 		EpisodeProgress: req.EpisodeProgress,
 		Notes:           req.Notes,
+		Favorite:        req.Favorite,
 	})
 }
 

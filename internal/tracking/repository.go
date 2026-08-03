@@ -48,6 +48,18 @@ type UpdatePatch struct {
 	Score           *int
 	EpisodeProgress *int
 	Notes           *string
+	Favorite        *bool
+}
+
+// AddParams is the insert shape for a new tracking entry. Optional fields
+// nil out to the table defaults.
+type AddParams struct {
+	MediaType       string
+	Status          *string
+	Score           *int
+	EpisodeProgress *int
+	Notes           *string
+	Favorite        *bool
 }
 
 // ListFilters narrows the result set for the user-facing list endpoint.
@@ -68,7 +80,7 @@ const entrySelectClause = `
 	ml.id, ml.user_id, ml.media_id, ml.media_type,
 	ml.status, ml.score, ml.episode_progress,
 	ml.start_date, ml.finish_date,
-	ml.total_rewatches, ml.notes, ml.is_deleted,
+	ml.total_rewatches, ml.notes, ml.favorite, ml.is_deleted,
 	ml.created_at, ml.updated_at,
 	coalesce(m.movie_id, tvs.tv_id) as tmdb_id,
 	coalesce(m.title, tvs.name, tvs.original_name) as title,
@@ -98,14 +110,14 @@ const entryFromClause = `
 
 // AddEntry inserts a new tracking row, then returns the enriched row via
 // GetEntry. Idempotent: a second add for the same (user, media_id) returns
-// the existing entry rather than erroring. status / score /
-// episode_progress / notes can be nil to use the table defaults.
-func (r *Repository) AddEntry(ctx context.Context, userID uuid.UUID, mediaID int, mediaType string, status *string, score *int, episodeProgress *int, notes *string) (*Entry, error) {
+// the existing entry rather than erroring. Optional params nil out to the
+// table defaults.
+func (r *Repository) AddEntry(ctx context.Context, userID uuid.UUID, mediaID int, p AddParams) (*Entry, error) {
 	if _, err := r.db.ExecContext(ctx, `
-		insert into media_list (user_id, media_id, media_type, status, score, episode_progress, notes)
-		values ($1, $2, $3, $4, $5, coalesce($6, 0), $7)
+		insert into media_list (user_id, media_id, media_type, status, score, episode_progress, notes, favorite)
+		values ($1, $2, $3, $4, $5, coalesce($6, 0), $7, coalesce($8, false))
 		on conflict (user_id, media_id) do nothing
-	`, userID, mediaID, mediaType, status, score, episodeProgress, notes); err != nil {
+	`, userID, mediaID, p.MediaType, p.Status, p.Score, p.EpisodeProgress, p.Notes, p.Favorite); err != nil {
 		return nil, err
 	}
 	return r.GetEntry(ctx, userID, mediaID)
@@ -133,9 +145,10 @@ func (r *Repository) UpdateEntry(ctx context.Context, userID uuid.UUID, mediaID 
 			score = coalesce($4, score),
 			episode_progress = coalesce($5, episode_progress),
 			notes = coalesce($6, notes),
+			favorite = coalesce($7, favorite),
 			updated_at = now()
 		where user_id = $1 and media_id = $2
-	`, userID, mediaID, patch.Status, patch.Score, patch.EpisodeProgress, patch.Notes)
+	`, userID, mediaID, patch.Status, patch.Score, patch.EpisodeProgress, patch.Notes, patch.Favorite)
 	if err != nil {
 		return nil, err
 	}
