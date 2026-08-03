@@ -101,6 +101,7 @@ func New(services Services) *chi.Mux {
 			usersAPI := users.NewAPI(services.Users)
 			r.Get("/users/me", usersAPI.GetMe)
 			r.Patch("/users/me", usersAPI.UpdateMe)
+			r.Delete("/users/me", usersAPI.DeleteMe)
 			r.Post("/users/me/avatar", usersAPI.UploadAvatar)
 			r.Delete("/users/me/avatar", usersAPI.DeleteAvatar)
 			r.Get("/users/me/stats", usersAPI.GetStats)

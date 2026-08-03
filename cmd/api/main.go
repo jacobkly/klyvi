@@ -69,7 +69,9 @@ func main() {
 
 	userService := users.NewService(userRepo)
 	if supabaseClient != nil {
-		userService = userService.WithAvatarStorage(supabaseClient, cfg.Supabase.StorageBucket)
+		userService = userService.
+			WithAvatarStorage(supabaseClient, cfg.Supabase.StorageBucket).
+			WithAccountDeletion(supabaseClient, cfg.Supabase.StorageBucket)
 	}
 	trackingService := tracking.NewService(trackingRepo)
 	interactionsService := interactions.NewService(interactionsRepo, trackingRepo)

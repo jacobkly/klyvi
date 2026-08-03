@@ -64,6 +64,10 @@ func (f *fakeUserRepo) StatsEventsByUser(context.Context, uuid.UUID) ([]users.St
 	return nil, nil
 }
 
+func (f *fakeUserRepo) DeleteAccountData(context.Context, uuid.UUID) error {
+	return nil
+}
+
 func patchUsername(t *testing.T, repo *fakeUserRepo, body string) *httptest.ResponseRecorder {
 	t.Helper()
 

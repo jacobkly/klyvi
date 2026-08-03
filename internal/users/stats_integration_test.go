@@ -7,6 +7,62 @@ import (
 	"klyvi-api/internal/users"
 )
 
+// DeleteAccountData must clear every app-side table for the user in one
+// transaction. Seed a row in each, delete, and confirm they are gone.
+func TestDeleteAccountData_RemovesAllAppRows(t *testing.T) {
+	repo, dbConn, ctx := usernameTestRepo(t)
+	id := newTestUser(t, repo, dbConn, ctx)
+
+	// Seed one row in each app table. media_list/interactions need a
+	// media_index spine row; 550 (Fight Club) is in the seeded catalog.
+	var mediaID int
+	if err := dbConn.GetContext(ctx, &mediaID, `
+		insert into media_index (id, season_number, media_type)
+		values (550, null, 'movie')
+		on conflict (id, season_number, media_type) do update set media_type = excluded.media_type
+		returning media_id
+	`); err != nil {
+		t.Fatalf("seed media_index: %v", err)
+	}
+	if _, err := dbConn.ExecContext(ctx, `
+		insert into media_list (user_id, media_id, media_type) values ($1, $2, 'movie')
+	`, id, mediaID); err != nil {
+		t.Fatalf("seed media_list: %v", err)
+	}
+	if _, err := dbConn.ExecContext(ctx, `
+		insert into interactions (user_id, media_id, media_type, kind) values ($1, $2, 'movie', 'logged')
+	`, id, mediaID); err != nil {
+		t.Fatalf("seed interactions: %v", err)
+	}
+	if _, err := dbConn.ExecContext(ctx, `
+		insert into taste_profiles (user_id) values ($1)
+	`, id); err != nil {
+		t.Fatalf("seed taste_profiles: %v", err)
+	}
+
+	if err := repo.DeleteAccountData(ctx, id); err != nil {
+		t.Fatalf("DeleteAccountData: %v", err)
+	}
+
+	for _, tbl := range []string{"media_list", "interactions", "taste_profiles"} {
+		var n int
+		if err := dbConn.GetContext(ctx, &n,
+			`select count(*) from `+tbl+` where user_id = $1`, id); err != nil {
+			t.Fatalf("count %s: %v", tbl, err)
+		}
+		if n != 0 {
+			t.Errorf("%s still has %d rows after delete", tbl, n)
+		}
+	}
+	var users int
+	if err := dbConn.GetContext(ctx, &users, `select count(*) from users where id = $1`, id); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if users != 0 {
+		t.Error("users row survived account deletion")
+	}
+}
+
 // Proves the stats projections parse and scan against real Postgres — the
 // aggregation itself is covered by the pure ComputeStats tests. Uses a
 // fresh user, so both queries exercise their full column lists and return

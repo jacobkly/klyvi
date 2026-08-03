@@ -134,6 +134,40 @@ func (r *Repository) StatsRowsByUser(ctx context.Context, id uuid.UUID) ([]Stats
 	return rows, nil
 }
 
+// DeleteAccountData removes all app-side rows for a user in one transaction:
+// tracking, interactions, taste profile, and the users row itself. Account
+// deletion is inherently cross-table, so this one method reaches beyond the
+// users table by design — the alternative, orchestrating four packages'
+// repos without a shared transaction, could half-delete on a failure.
+func (r *Repository) DeleteAccountData(ctx context.Context, id uuid.UUID) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// media_list, interactions, taste_profiles reference users(id) ON DELETE
+	// CASCADE, so deleting the users row would suffice — but deleting them
+	// explicitly first keeps this correct even if a future table drops the
+	// cascade, and reads clearly.
+	stmts := []string{
+		`delete from media_list where user_id = $1`,
+		`delete from interactions where user_id = $1`,
+		`delete from taste_profiles where user_id = $1`,
+		`delete from users where id = $1`,
+	}
+	for _, q := range stmts {
+		if _, err := tx.ExecContext(ctx, q, id); err != nil {
+			return fmt.Errorf("delete account data: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete tx: %w", err)
+	}
+	return nil
+}
+
 // StatsEventsByUser returns the deliberate-action timestamps feeding the
 // activity heatmap and watch years. Impressions are excluded — passive
 // scroll-bys are not activity.

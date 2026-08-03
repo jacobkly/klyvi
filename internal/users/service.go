@@ -52,6 +52,7 @@ type UserRepository interface {
 	ClearAvatarURL(ctx context.Context, id uuid.UUID) (*User, error)
 	StatsRowsByUser(ctx context.Context, id uuid.UUID) ([]StatsRow, error)
 	StatsEventsByUser(ctx context.Context, id uuid.UUID) ([]StatsEvent, error)
+	DeleteAccountData(ctx context.Context, id uuid.UUID) error
 }
 
 type Service struct {
@@ -60,6 +61,9 @@ type Service struct {
 	// storage is nil unless avatar brokering is configured; the avatar
 	// endpoints check and degrade with ErrStorageNotConfigured.
 	storage AvatarStorage
+	// deleter is nil unless account deletion is configured (same Supabase
+	// client). DeleteAccount checks and degrades the same way.
+	deleter AccountDeleter
 	bucket  string
 }
 

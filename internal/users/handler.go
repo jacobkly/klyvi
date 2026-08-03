@@ -77,6 +77,27 @@ func (a *API) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		middleware.StatsFromContext(r.Context()), user)
 }
 
+// DeleteMe — DELETE /v1/users/me. Removes all app data, the avatar object,
+// and the Supabase auth user. 204 on success; the client signs out after.
+func (a *API) DeleteMe(w http.ResponseWriter, r *http.Request) {
+	id, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	if err := a.service.DeleteAccount(r.Context(), id); err != nil {
+		if errors.Is(err, ErrStorageNotConfigured) {
+			response.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		response.WriteError(w, http.StatusInternalServerError, "could not delete account")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // GetStats — GET /v1/users/me/stats. The profile Stats tab payload.
 func (a *API) GetStats(w http.ResponseWriter, r *http.Request) {
 	id, ok := middleware.UserUUIDFromContext(r.Context())
