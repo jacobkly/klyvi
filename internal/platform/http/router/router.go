@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/cors"
 
 	"klyvi-api/internal/health"
+	"klyvi-api/internal/imports"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/onboarding"
@@ -31,6 +32,7 @@ type Services struct {
 	Reco         *reco.Orchestrator
 	Onboarding   *onboarding.Service
 	Rankings     *rankings.Service
+	Imports      *imports.Service
 
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
@@ -139,6 +141,12 @@ func New(services Services) *chi.Mux {
 
 			recoAPI := reco.NewAPI(services.Reco)
 			r.Get("/reco/feed", recoAPI.Feed)
+
+			importsAPI := imports.NewAPI(services.Imports)
+			r.Route("/imports", func(r chi.Router) {
+				r.Post("/", importsAPI.Create)
+				r.Get("/{id}", importsAPI.Get)
+			})
 		})
 	})
 

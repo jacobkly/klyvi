@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"klyvi-api/config"
+	"klyvi-api/internal/imports"
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/http/middleware"
@@ -80,6 +81,8 @@ func main() {
 	}
 	onboardingService := onboarding.NewService(onboardingRepo, movieService)
 	rankingsService := rankings.NewService(tmdbClient, rankings.NewRepository(dbConn))
+	importsService := imports.NewService(
+		imports.NewRepository(dbConn), tmdbClient, trackingService, interactionsService)
 
 	// Recommender orchestrator. Adapters wrap movies.Repository + raw SQL
 	// against interactions/media_list to feed the orchestrator. Tier 0 is
@@ -112,6 +115,7 @@ func main() {
 		Reco:           recoOrchestrator,
 		Onboarding:     onboardingService,
 		Rankings:       rankingsService,
+		Imports:        importsService,
 		AuthMW:         authMW,
 		AllowedOrigins: cfg.Server.AllowedOrigins,
 	})
