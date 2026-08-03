@@ -77,6 +77,24 @@ func (a *API) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		middleware.StatsFromContext(r.Context()), user)
 }
 
+// GetStats — GET /v1/users/me/stats. The profile Stats tab payload.
+func (a *API) GetStats(w http.ResponseWriter, r *http.Request) {
+	id, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	stats, err := a.service.GetStats(r.Context(), id)
+	if err != nil {
+		response.WriteError(w, http.StatusInternalServerError, "could not compute stats")
+		return
+	}
+
+	response.WriteSuccess(w, http.StatusOK, "v1",
+		middleware.StatsFromContext(r.Context()), stats)
+}
+
 // UploadAvatar — POST /v1/users/me/avatar. Multipart field `file`.
 //
 // The client never talks to storage directly (architecture rule): the API

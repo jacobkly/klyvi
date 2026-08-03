@@ -56,6 +56,14 @@ func (f *fakeUserRepo) ClearAvatarURL(context.Context, uuid.UUID) (*users.User, 
 	return &out, nil
 }
 
+func (f *fakeUserRepo) StatsRowsByUser(context.Context, uuid.UUID) ([]users.StatsRow, error) {
+	return nil, nil
+}
+
+func (f *fakeUserRepo) StatsEventsByUser(context.Context, uuid.UUID) ([]users.StatsEvent, error) {
+	return nil, nil
+}
+
 func patchUsername(t *testing.T, repo *fakeUserRepo, body string) *httptest.ResponseRecorder {
 	t.Helper()
 

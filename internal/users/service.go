@@ -50,6 +50,8 @@ type UserRepository interface {
 	UpdateProfile(ctx context.Context, id uuid.UUID, patch UpdateProfilePatch) (*User, error)
 	UsernameExists(ctx context.Context, name string) (bool, error)
 	ClearAvatarURL(ctx context.Context, id uuid.UUID) (*User, error)
+	StatsRowsByUser(ctx context.Context, id uuid.UUID) ([]StatsRow, error)
+	StatsEventsByUser(ctx context.Context, id uuid.UUID) ([]StatsEvent, error)
 }
 
 type Service struct {
@@ -128,6 +130,20 @@ func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileR
 		Settings:  req.Settings,
 		Birthday:  birthday,
 	})
+}
+
+// GetStats aggregates the user's library and event log into the profile
+// Stats payload.
+func (s *Service) GetStats(ctx context.Context, id uuid.UUID) (*Stats, error) {
+	rows, err := s.repo.StatsRowsByUser(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	events, err := s.repo.StatsEventsByUser(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return ComputeStats(rows, events, time.Now()), nil
 }
 
 // checkUsernameCooldown refuses a rename that lands inside the cooldown

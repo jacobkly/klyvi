@@ -63,6 +63,141 @@ func (r *Repository) GetUserByID(ctx context.Context, id uuid.UUID) (*User, erro
 	return &u, err
 }
 
+// statsScanRow is the raw scan shape for StatsRowsByUser; JSONB and array
+// columns land as bytes/strings here and are decoded into StatsRow.
+type statsScanRow struct {
+	MediaType             string  `db:"media_type"`
+	Status                *string `db:"status"`
+	Score                 *int    `db:"score"`
+	EpisodeProgress       *int    `db:"episode_progress"`
+	TotalRewatches        int     `db:"total_rewatches"`
+	RuntimeMinutes        *int    `db:"runtime_minutes"`
+	EpisodeRuntimeMinutes *int    `db:"episode_runtime_minutes"`
+	EpisodeCount          *int    `db:"episode_count"`
+	ReleaseYear           *int    `db:"release_year"`
+	GenresRaw             []byte  `db:"genres_raw"`
+	CountriesRaw          []byte  `db:"countries_raw"`
+}
+
+// StatsRowsByUser projects the user's tracking entries with the catalog
+// facts the stats aggregation needs. This is a read-model over media_list +
+// catalog tables owned here because profile stats are a users-domain
+// concept; the write paths for those tables stay in their own packages.
+func (r *Repository) StatsRowsByUser(ctx context.Context, id uuid.UUID) ([]StatsRow, error) {
+	var raw []statsScanRow
+	err := r.db.SelectContext(ctx, &raw, `
+		select
+			ml.media_type, ml.status, ml.score, ml.episode_progress, ml.total_rewatches,
+			m.runtime as runtime_minutes,
+			(tvs.episode_run_time)[1] as episode_runtime_minutes,
+			case when tvse.episodes is not null then jsonb_array_length(tvse.episodes) end as episode_count,
+			coalesce(
+				extract(year from m.release_date)::int,
+				extract(year from tvse.air_date)::int,
+				extract(year from tvs.first_air_date)::int
+			) as release_year,
+			coalesce(m.genres, tvs.genres) as genres_raw,
+			case
+				when ml.media_type = 'movie' then m.production_countries
+				else to_jsonb(tvs.origin_country)
+			end as countries_raw
+		from media_list ml
+		left join media_index mi on mi.media_id = ml.media_id
+		left join movies m on ml.media_type = 'movie' and m.movie_id = mi.id
+		left join tv_series tvs on ml.media_type = 'season' and tvs.tv_id = mi.id
+		left join tv_seasons tvse
+			on ml.media_type = 'season'
+			and tvse.tv_id = mi.id
+			and tvse.season_number = mi.season_number
+		where ml.user_id = $1
+	`, id)
+	if err != nil {
+		return nil, fmt.Errorf("stats rows: %w", err)
+	}
+
+	rows := make([]StatsRow, 0, len(raw))
+	for _, sr := range raw {
+		rows = append(rows, StatsRow{
+			MediaType:             sr.MediaType,
+			Status:                sr.Status,
+			Score:                 sr.Score,
+			EpisodeProgress:       sr.EpisodeProgress,
+			TotalRewatches:        sr.TotalRewatches,
+			RuntimeMinutes:        sr.RuntimeMinutes,
+			EpisodeRuntimeMinutes: sr.EpisodeRuntimeMinutes,
+			EpisodeCount:          sr.EpisodeCount,
+			ReleaseYear:           sr.ReleaseYear,
+			Genres:                decodeGenreNames(sr.GenresRaw),
+			Countries:             decodeCountryLabels(sr.CountriesRaw),
+		})
+	}
+	return rows, nil
+}
+
+// StatsEventsByUser returns the deliberate-action timestamps feeding the
+// activity heatmap and watch years. Impressions are excluded — passive
+// scroll-bys are not activity.
+func (r *Repository) StatsEventsByUser(ctx context.Context, id uuid.UUID) ([]StatsEvent, error) {
+	var events []StatsEvent
+	err := r.db.SelectContext(ctx, &events, `
+		select created_at from interactions
+		where user_id = $1 and kind in ('logged', 'rated', 'saved')
+		order by created_at
+	`, id)
+	if err != nil {
+		return nil, fmt.Errorf("stats events: %w", err)
+	}
+	return events, nil
+}
+
+// decodeGenreNames extracts names from the catalog genres JSONB shape
+// ([{id, name}, …]). Unparseable input degrades to no genres rather than
+// failing the whole stats call.
+func decodeGenreNames(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var gs []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &gs); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(gs))
+	for _, g := range gs {
+		if g.Name != "" {
+			out = append(out, g.Name)
+		}
+	}
+	return out
+}
+
+// decodeCountryLabels handles both catalog country shapes: movies carry
+// [{iso_3166_1, name}], TV carries a plain ISO-code array.
+func decodeCountryLabels(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var objs []struct {
+		ISO  string `json:"iso_3166_1"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &objs); err == nil && len(objs) > 0 && (objs[0].ISO != "" || objs[0].Name != "") {
+		out := make([]string, 0, len(objs))
+		for _, o := range objs {
+			if o.ISO != "" {
+				out = append(out, o.ISO)
+			}
+		}
+		return out
+	}
+	var codes []string
+	if err := json.Unmarshal(raw, &codes); err == nil {
+		return codes
+	}
+	return nil
+}
+
 // ClearAvatarURL nulls avatar_url — the COALESCE patch path cannot express
 // "set to NULL", so the avatar delete flow gets its own statement.
 func (r *Repository) ClearAvatarURL(ctx context.Context, id uuid.UUID) (*User, error) {
