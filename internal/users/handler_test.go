@@ -22,6 +22,10 @@ type fakeUserRepo struct {
 	updateErr  error
 	existsResp bool
 	existsErr  error
+
+	// lastPatch records what UpdateProfile received, so tests can assert
+	// tri-state semantics (absent vs clear vs set) actually reached the repo.
+	lastPatch users.UpdateProfilePatch
 }
 
 func (f *fakeUserRepo) EnsureUser(context.Context, uuid.UUID) error { return nil }
@@ -31,6 +35,7 @@ func (f *fakeUserRepo) GetUserByID(context.Context, uuid.UUID) (*users.User, err
 }
 
 func (f *fakeUserRepo) UpdateProfile(_ context.Context, _ uuid.UUID, patch users.UpdateProfilePatch) (*users.User, error) {
+	f.lastPatch = patch
 	if f.updateErr != nil {
 		return nil, f.updateErr
 	}

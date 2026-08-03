@@ -16,6 +16,7 @@ type User struct {
 	// auto-generated name, which is what makes the first change free. The
 	// client reads it to show when the next change unlocks.
 	UsernameChangedAt *time.Time       `db:"username_changed_at" json:"username_changed_at"`
+	Birthday          *DateOnly        `db:"birthday" json:"birthday"`
 	Bio               *string          `db:"bio" json:"bio"`
 	AvatarURL         *string          `db:"avatar_url" json:"avatar_url"`
 	BannerURL         *string          `db:"banner_url" json:"banner_url"`

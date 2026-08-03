@@ -84,6 +84,8 @@ type UpdateProfilePatch struct {
 	BannerURL *string
 	// Settings replaces the whole JSONB blob when non-nil.
 	Settings *json.RawMessage
+	// Birthday is tri-state — see OptionalDate.
+	Birthday OptionalDate
 }
 
 // UpdateProfile applies a partial patch to the user row using COALESCE — only
@@ -111,10 +113,12 @@ func (r *Repository) UpdateProfile(ctx context.Context, id uuid.UUID, patch Upda
 			avatar_url = coalesce($4, avatar_url),
 			banner_url = coalesce($5, banner_url),
 			settings   = coalesce($6, settings),
+			birthday   = case when $7 then $8 else birthday end,
 			updated_at = now()
 		where id = $1
 		returning *
-	`, id, patch.Username, patch.Bio, patch.AvatarURL, patch.BannerURL, settingsArg(patch.Settings)).StructScan(&u)
+	`, id, patch.Username, patch.Bio, patch.AvatarURL, patch.BannerURL, settingsArg(patch.Settings),
+		patch.Birthday.Set, patch.Birthday.Value).StructScan(&u)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

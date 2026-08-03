@@ -111,7 +111,8 @@ func statusForProfileError(err error) int {
 	switch {
 	case errors.Is(err, ErrUsernameInvalid),
 		errors.Is(err, ErrSettingsInvalid),
-		errors.Is(err, ErrSettingsTooLarge):
+		errors.Is(err, ErrSettingsTooLarge),
+		errors.Is(err, ErrBirthdayInvalid):
 		return http.StatusBadRequest
 	case errors.Is(err, ErrUsernameReserved), errors.Is(err, ErrUsernameTaken):
 		return http.StatusConflict

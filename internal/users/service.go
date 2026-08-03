@@ -76,6 +76,9 @@ type UpdateProfileRequest struct {
 	// Settings replaces the whole blob when present (the client owns the
 	// merge). Absent means unchanged.
 	Settings *json.RawMessage `json:"settings"`
+	// Birthday is tri-state: absent = unchanged, null = clear, value = set.
+	// Kept raw so absent and null stay distinguishable; parsed in UpdateMe.
+	Birthday json.RawMessage `json:"birthday"`
 }
 
 // UpdateMe applies a profile patch. A username, when provided, must pass
@@ -99,12 +102,17 @@ func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileR
 			return nil, err
 		}
 	}
+	birthday, err := parseBirthday(req.Birthday)
+	if err != nil {
+		return nil, err
+	}
 	return s.repo.UpdateProfile(ctx, id, UpdateProfilePatch{
 		Username:  req.Username,
 		Bio:       req.Bio,
 		AvatarURL: req.AvatarURL,
 		BannerURL: req.BannerURL,
 		Settings:  req.Settings,
+		Birthday:  birthday,
 	})
 }
 
