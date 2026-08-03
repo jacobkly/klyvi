@@ -105,6 +105,8 @@ func New(services Services) *chi.Mux {
 			r.Post("/users/me/avatar", usersAPI.UploadAvatar)
 			r.Delete("/users/me/avatar", usersAPI.DeleteAvatar)
 			r.Get("/users/me/stats", usersAPI.GetStats)
+			r.Get("/users/me/export", usersAPI.ExportTracking)
+			r.Get("/users/me/data", usersAPI.ExportAccountData)
 
 			trackingAPI := tracking.NewAPI(services.Tracking)
 			r.Route("/tracking", func(r chi.Router) {

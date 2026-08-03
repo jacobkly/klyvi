@@ -67,14 +67,16 @@ func main() {
 		log.Println("supabase service-role client not configured; avatar endpoints disabled")
 	}
 
-	userService := users.NewService(userRepo)
+	trackingService := tracking.NewService(trackingRepo)
+	interactionsService := interactions.NewService(interactionsRepo, trackingRepo)
+
+	userService := users.NewService(userRepo).
+		WithExportSources(trackingService, interactionsService)
 	if supabaseClient != nil {
 		userService = userService.
 			WithAvatarStorage(supabaseClient, cfg.Supabase.StorageBucket).
 			WithAccountDeletion(supabaseClient, cfg.Supabase.StorageBucket)
 	}
-	trackingService := tracking.NewService(trackingRepo)
-	interactionsService := interactions.NewService(interactionsRepo, trackingRepo)
 	onboardingService := onboarding.NewService(onboardingRepo, movieService)
 
 	// Recommender orchestrator. Adapters wrap movies.Repository + raw SQL

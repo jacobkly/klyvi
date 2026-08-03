@@ -65,6 +65,11 @@ type Service struct {
 	// client). DeleteAccount checks and degrades the same way.
 	deleter AccountDeleter
 	bucket  string
+
+	// tracking + interactions feed the export endpoints; wired via
+	// WithExportSources. Always present in the assembled server.
+	tracking     TrackingReader
+	interactions InteractionReader
 }
 
 func NewService(repo UserRepository) *Service {

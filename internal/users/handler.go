@@ -77,6 +77,60 @@ func (a *API) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		middleware.StatsFromContext(r.Context()), user)
 }
 
+// ExportTracking — GET /v1/users/me/export?format=csv|json. Downloads the
+// tracking list as an attachment. csv is the default.
+func (a *API) ExportTracking(w http.ResponseWriter, r *http.Request) {
+	id, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	format := r.URL.Query().Get("format")
+	switch format {
+	case "", "csv":
+		data, err := a.service.ExportTrackingCSV(r.Context(), id)
+		if err != nil {
+			response.WriteError(w, http.StatusInternalServerError, "could not export")
+			return
+		}
+		writeAttachment(w, "text/csv", "klyvi-tracking.csv", data)
+	case "json":
+		data, err := a.service.ExportTrackingJSON(r.Context(), id)
+		if err != nil {
+			response.WriteError(w, http.StatusInternalServerError, "could not export")
+			return
+		}
+		writeAttachment(w, "application/json", "klyvi-tracking.json", data)
+	default:
+		response.WriteError(w, http.StatusBadRequest, "format must be csv or json")
+	}
+}
+
+// ExportAccountData — GET /v1/users/me/data. The GDPR bundle: everything held
+// about the user, as a JSON attachment.
+func (a *API) ExportAccountData(w http.ResponseWriter, r *http.Request) {
+	id, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	data, err := a.service.ExportAccountData(r.Context(), id)
+	if err != nil {
+		response.WriteError(w, http.StatusInternalServerError, "could not export account data")
+		return
+	}
+	writeAttachment(w, "application/json", "klyvi-account.json", data)
+}
+
+func writeAttachment(w http.ResponseWriter, contentType, filename string, data []byte) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
 // DeleteMe — DELETE /v1/users/me. Removes all app data, the avatar object,
 // and the Supabase auth user. 204 on success; the client signs out after.
 func (a *API) DeleteMe(w http.ResponseWriter, r *http.Request) {
