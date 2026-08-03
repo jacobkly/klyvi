@@ -109,6 +109,11 @@ func New(services Services) *chi.Mux {
 			r.Route("/tracking", func(r chi.Router) {
 				r.Get("/", trackingAPI.List)
 				r.Post("/", trackingAPI.Add)
+				// Scoped bulk delete of the whole list; the single-entry
+				// delete lives on /{media_id} below and does not collide.
+				r.Delete("/", trackingAPI.DeleteList)
+				// Static segment — chi matches it ahead of /{media_id}.
+				r.Post("/reset-scores", trackingAPI.ResetScores)
 				r.Patch("/{media_id}", trackingAPI.Update)
 				r.Delete("/{media_id}", trackingAPI.Delete)
 			})

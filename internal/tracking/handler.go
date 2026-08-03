@@ -106,6 +106,64 @@ func (a *API) Delete(w http.ResponseWriter, r *http.Request) {
 		map[string]bool{"deleted": true})
 }
 
+// scopeRequest is the body for the danger-zone operations: a single
+// media-type scope, required.
+type scopeRequest struct {
+	MediaType string `json:"media_type"`
+}
+
+// ResetScores — POST /v1/tracking/reset-scores. Nulls every score in the
+// given media-type scope. Irreversible; the client confirms intent.
+func (a *API) ResetScores(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	var req scopeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+
+	affected, err := a.service.ResetScores(r.Context(), userID, req.MediaType)
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response.WriteSuccess(w, http.StatusOK, "v1",
+		middleware.StatsFromContext(r.Context()),
+		map[string]int64{"affected": affected})
+}
+
+// DeleteList — DELETE /v1/tracking. Deletes every row in the given
+// media-type scope. Irreversible.
+func (a *API) DeleteList(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	var req scopeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+
+	affected, err := a.service.DeleteList(r.Context(), userID, req.MediaType)
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response.WriteSuccess(w, http.StatusOK, "v1",
+		middleware.StatsFromContext(r.Context()),
+		map[string]int64{"affected": affected})
+}
+
 // List — GET /v1/tracking?media_type=movie&status=completed
 func (a *API) List(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.UserUUIDFromContext(r.Context())

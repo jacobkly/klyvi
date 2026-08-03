@@ -175,6 +175,32 @@ func (r *Repository) DeleteEntry(ctx context.Context, userID uuid.UUID, mediaID 
 	return rows > 0, nil
 }
 
+// ResetScoresByMediaType nulls every score in one media-type scope and
+// reports how many rows changed. Rows whose score is already NULL are not
+// counted — "affected" answers "how many scores did I just erase".
+func (r *Repository) ResetScoresByMediaType(ctx context.Context, userID uuid.UUID, mediaType string) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		update media_list set score = null, updated_at = now()
+		where user_id = $1 and media_type = $2 and score is not null
+	`, userID, mediaType)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// DeleteByMediaType removes every tracking row in one media-type scope and
+// reports how many went.
+func (r *Repository) DeleteByMediaType(ctx context.Context, userID uuid.UUID, mediaType string) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		delete from media_list where user_id = $1 and media_type = $2
+	`, userID, mediaType)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // ListByUser returns the tracking entries for a user, filterable by media_type
 // and status. Most recently touched first. The JOIN populates display
 // fields so the frontend can render directly off this without per-row

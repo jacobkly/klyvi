@@ -16,6 +16,8 @@ type TrackingRepository interface {
 	UpdateEntry(ctx context.Context, userID uuid.UUID, mediaID int, patch UpdatePatch) (*Entry, error)
 	DeleteEntry(ctx context.Context, userID uuid.UUID, mediaID int) (bool, error)
 	ListByUser(ctx context.Context, userID uuid.UUID, filters ListFilters) ([]Entry, error)
+	ResetScoresByMediaType(ctx context.Context, userID uuid.UUID, mediaType string) (int64, error)
+	DeleteByMediaType(ctx context.Context, userID uuid.UUID, mediaType string) (int64, error)
 }
 
 type Service struct {
@@ -125,6 +127,25 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, filters ListFilter
 		}
 	}
 	return s.repo.ListByUser(ctx, userID, filters)
+}
+
+// ResetScores nulls every score in one media-type scope. Irreversible;
+// the handler owns confirming intent, this owns doing exactly what was
+// asked and reporting the count.
+func (s *Service) ResetScores(ctx context.Context, userID uuid.UUID, mediaType string) (int64, error) {
+	if err := validateMediaType(mediaType); err != nil {
+		return 0, err
+	}
+	return s.repo.ResetScoresByMediaType(ctx, userID, mediaType)
+}
+
+// DeleteList removes every tracking row in one media-type scope.
+// Irreversible.
+func (s *Service) DeleteList(ctx context.Context, userID uuid.UUID, mediaType string) (int64, error) {
+	if err := validateMediaType(mediaType); err != nil {
+		return 0, err
+	}
+	return s.repo.DeleteByMediaType(ctx, userID, mediaType)
 }
 
 func validateMediaType(mt string) error {
