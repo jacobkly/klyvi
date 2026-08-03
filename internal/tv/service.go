@@ -165,21 +165,41 @@ func (s *Service) GetTvCollection(ctx context.Context, idType string, id int) (i
 	return seasons, nil
 }
 
-func (s *Service) GetTvList(listType string) (interface{}, error) {
-	var endpoint string
-
-	switch listType {
-	case "trending":
-		endpoint = "/trending/tv/week?language=en-US"
-	case "upcoming":
-		endpoint = "/tv/on_the_air?language=en-US&page=1"
-	case "popular":
-		endpoint = "/tv/popular?language=en-US&page=1"
-	case "top_rated":
-		endpoint = "/tv/top_rated?language=en-US&page=1"
-	default:
-		return nil, fmt.Errorf("invalid list type")
+func (s *Service) GetTvList(listType string, page int) (interface{}, error) {
+	endpoint, err := listEndpoint(listType, page)
+	if err != nil {
+		return nil, err
 	}
 
 	return s.client.TMDBRequest("GET", endpoint, nil)
+}
+
+// tmdbMaxPage is TMDB's hard upper bound on the page parameter.
+const tmdbMaxPage = 500
+
+// listEndpoint builds the TMDB list path for a browse page. Out-of-range
+// pages clamp rather than error, mirroring the movies package.
+func listEndpoint(listType string, page int) (string, error) {
+	if page < 1 {
+		page = 1
+	}
+	if page > tmdbMaxPage {
+		page = tmdbMaxPage
+	}
+
+	var base string
+	switch listType {
+	case "trending":
+		base = "/trending/tv/week"
+	case "upcoming":
+		base = "/tv/on_the_air"
+	case "popular":
+		base = "/tv/popular"
+	case "top_rated":
+		base = "/tv/top_rated"
+	default:
+		return "", fmt.Errorf("invalid list type")
+	}
+
+	return fmt.Sprintf("%s?language=en-US&page=%d", base, page), nil
 }
