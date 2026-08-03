@@ -13,6 +13,7 @@ import (
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/platform/http/middleware"
+	"klyvi-api/internal/rankings"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/search"
 	"klyvi-api/internal/tracking"
@@ -29,6 +30,7 @@ type Services struct {
 	Interactions *interactions.Service
 	Reco         *reco.Orchestrator
 	Onboarding   *onboarding.Service
+	Rankings     *rankings.Service
 
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
@@ -90,6 +92,13 @@ func New(services Services) *chi.Mux {
 			RequestsPerMinute: 20,
 			Burst:             10,
 		})).Get("/users/username-available", usersPublicAPI.CheckUsernameAvailable)
+
+		// Top-100 rankings are public and cached server-side for 24h.
+		rankingsAPI := rankings.NewAPI(services.Rankings)
+		r.Route("/rankings", func(r chi.Router) {
+			r.Get("/movies", rankingsAPI.Movies)
+			r.Get("/tv", rankingsAPI.TV)
+		})
 
 		// --- Protected routes: auth required, user row auto-upserted on
 		// first successful authentication.

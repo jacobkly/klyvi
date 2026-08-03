@@ -17,6 +17,7 @@ import (
 	"klyvi-api/internal/platform/http/router"
 	"klyvi-api/internal/platform/supabase"
 	"klyvi-api/internal/platform/tmdb"
+	"klyvi-api/internal/rankings"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/reco"
@@ -78,6 +79,7 @@ func main() {
 			WithAccountDeletion(supabaseClient, cfg.Supabase.StorageBucket)
 	}
 	onboardingService := onboarding.NewService(onboardingRepo, movieService)
+	rankingsService := rankings.NewService(tmdbClient, rankings.NewRepository(dbConn))
 
 	// Recommender orchestrator. Adapters wrap movies.Repository + raw SQL
 	// against interactions/media_list to feed the orchestrator. Tier 0 is
@@ -109,6 +111,7 @@ func main() {
 		Interactions:   interactionsService,
 		Reco:           recoOrchestrator,
 		Onboarding:     onboardingService,
+		Rankings:       rankingsService,
 		AuthMW:         authMW,
 		AllowedOrigins: cfg.Server.AllowedOrigins,
 	})
