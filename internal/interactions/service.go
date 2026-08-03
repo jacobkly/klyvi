@@ -89,6 +89,41 @@ func (s *Service) Record(ctx context.Context, userID uuid.UUID, req RecordReques
 	return e, nil
 }
 
+// MaxBatchSize caps a single batch. A screenful of impressions is well under
+// this; the cap stops a client from turning one request into an unbounded
+// write.
+const MaxBatchSize = 25
+
+// BatchResult reports how a batch fared. Not all-or-nothing: a malformed row
+// is rejected while the good rows still land, so one bad impression cannot
+// cost a whole screenful of real signal.
+type BatchResult struct {
+	Accepted int `json:"accepted"`
+	Rejected int `json:"rejected"`
+}
+
+// RecordBatch records many interactions in one call. Each row is validated
+// and written independently via Record; a row that fails counts toward
+// Rejected and does not abort the rest.
+func (s *Service) RecordBatch(ctx context.Context, userID uuid.UUID, reqs []RecordRequest) (*BatchResult, error) {
+	if len(reqs) == 0 {
+		return nil, fmt.Errorf("batch must contain at least one interaction")
+	}
+	if len(reqs) > MaxBatchSize {
+		return nil, fmt.Errorf("batch too large: %d exceeds the limit of %d", len(reqs), MaxBatchSize)
+	}
+
+	var res BatchResult
+	for _, req := range reqs {
+		if _, err := s.Record(ctx, userID, req); err != nil {
+			res.Rejected++
+			continue
+		}
+		res.Accepted++
+	}
+	return &res, nil
+}
+
 func (s *Service) ListByUser(ctx context.Context, userID uuid.UUID, sinceDays int) ([]Interaction, error) {
 	return s.repo.ListByUser(ctx, userID, sinceDays)
 }

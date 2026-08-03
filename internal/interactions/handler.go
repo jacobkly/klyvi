@@ -41,6 +41,33 @@ func (a *API) Record(w http.ResponseWriter, r *http.Request) {
 		middleware.StatsFromContext(r.Context()), rec)
 }
 
+// RecordBatch — POST /v1/interactions/batch. Body `{ "interactions": [...] }`,
+// capped at MaxBatchSize. Per-row accept/reject; the response reports counts.
+func (a *API) RecordBatch(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	var req struct {
+		Interactions []RecordRequest `json:"interactions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+
+	res, err := a.service.RecordBatch(r.Context(), userID, req.Interactions)
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response.WriteSuccess(w, http.StatusOK, "v1",
+		middleware.StatsFromContext(r.Context()), res)
+}
+
 // List — GET /v1/interactions?since_days=30
 //
 // Returns the authenticated user's interaction history, most recent first.

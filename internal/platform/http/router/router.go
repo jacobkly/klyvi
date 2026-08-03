@@ -124,6 +124,7 @@ func New(services Services) *chi.Mux {
 			interactionsAPI := interactions.NewAPI(services.Interactions)
 			r.Route("/interactions", func(r chi.Router) {
 				r.Post("/", interactionsAPI.Record)
+				r.Post("/batch", interactionsAPI.RecordBatch)
 				r.Get("/", interactionsAPI.List)
 			})
 
