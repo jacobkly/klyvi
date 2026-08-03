@@ -50,6 +50,12 @@ func (f *fakeUserRepo) UsernameExists(context.Context, string) (bool, error) {
 	return f.existsResp, f.existsErr
 }
 
+func (f *fakeUserRepo) ClearAvatarURL(context.Context, uuid.UUID) (*users.User, error) {
+	out := *f.user
+	out.AvatarURL = nil
+	return &out, nil
+}
+
 func patchUsername(t *testing.T, repo *fakeUserRepo, body string) *httptest.ResponseRecorder {
 	t.Helper()
 

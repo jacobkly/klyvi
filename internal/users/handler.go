@@ -3,6 +3,7 @@ package users
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"klyvi-api/internal/platform/http/middleware"
@@ -74,6 +75,93 @@ func (a *API) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	response.WriteSuccess(w, http.StatusOK, "v1",
 		middleware.StatsFromContext(r.Context()), user)
+}
+
+// UploadAvatar — POST /v1/users/me/avatar. Multipart field `file`.
+//
+// The client never talks to storage directly (architecture rule): the API
+// receives the image, normalises it (512px square JPEG, EXIF stripped by
+// re-encode), stores it under the user id, and writes the public URL to the
+// profile row.
+func (a *API) UploadAvatar(w http.ResponseWriter, r *http.Request) {
+	id, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	// Cap the whole request slightly above the image cap so a too-large
+	// image reaches the typed 413 below instead of a socket error.
+	r.Body = http.MaxBytesReader(w, r.Body, MaxAvatarBytes+512*1024)
+	if err := r.ParseMultipartForm(MaxAvatarBytes + 512*1024); err != nil {
+		response.WriteError(w, http.StatusRequestEntityTooLarge, ErrImageTooLarge.Error())
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, "multipart field 'file' is required")
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, MaxAvatarBytes+1))
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, "could not read upload")
+		return
+	}
+	if len(data) > MaxAvatarBytes {
+		response.WriteError(w, http.StatusRequestEntityTooLarge, ErrImageTooLarge.Error())
+		return
+	}
+
+	user, err := a.service.UpdateAvatar(r.Context(), id, data)
+	if err != nil {
+		response.WriteError(w, statusForAvatarError(err), err.Error())
+		return
+	}
+	if user == nil {
+		response.WriteError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	response.WriteSuccess(w, http.StatusOK, "v1",
+		middleware.StatsFromContext(r.Context()), user)
+}
+
+// DeleteAvatar — DELETE /v1/users/me/avatar.
+func (a *API) DeleteAvatar(w http.ResponseWriter, r *http.Request) {
+	id, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	user, err := a.service.DeleteAvatar(r.Context(), id)
+	if err != nil {
+		response.WriteError(w, statusForAvatarError(err), err.Error())
+		return
+	}
+	if user == nil {
+		response.WriteError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	response.WriteSuccess(w, http.StatusOK, "v1",
+		middleware.StatsFromContext(r.Context()), user)
+}
+
+func statusForAvatarError(err error) int {
+	switch {
+	case errors.Is(err, ErrNotAnImage):
+		return http.StatusBadRequest
+	case errors.Is(err, ErrImageTooLarge):
+		return http.StatusRequestEntityTooLarge
+	default:
+		// Includes ErrStorageNotConfigured — a deployment problem, not the
+		// caller's input.
+		return http.StatusInternalServerError
+	}
 }
 
 // CheckUsernameAvailable — GET /v1/users/username-available?username=<name>.

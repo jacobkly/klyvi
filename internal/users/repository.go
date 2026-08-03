@@ -63,6 +63,24 @@ func (r *Repository) GetUserByID(ctx context.Context, id uuid.UUID) (*User, erro
 	return &u, err
 }
 
+// ClearAvatarURL nulls avatar_url — the COALESCE patch path cannot express
+// "set to NULL", so the avatar delete flow gets its own statement.
+func (r *Repository) ClearAvatarURL(ctx context.Context, id uuid.UUID) (*User, error) {
+	var u User
+	err := r.db.QueryRowxContext(ctx, `
+		update users set avatar_url = null, updated_at = now()
+		where id = $1
+		returning *
+	`, id).StructScan(&u)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("clear avatar url: %w", err)
+	}
+	return &u, nil
+}
+
 // UsernameExists reports whether a username is already held, compared
 // case-insensitively so it agrees with the users_username_lower_key index.
 func (r *Repository) UsernameExists(ctx context.Context, name string) (bool, error) {

@@ -43,10 +43,20 @@ type ConfTMDB struct {
 
 // ConfSupabase holds the verification-side knobs for Supabase JWTs. Issuer
 // and Audience are optional; when unset, those claim checks are skipped.
+//
+// URL + ServiceRoleKey enable the two server-brokered Supabase features:
+// avatar storage and auth-user deletion. Optional — when unset, those two
+// endpoints return an explicit "not configured" error and everything else
+// works. The service-role key is server-side only and must never reach a
+// client bundle.
 type ConfSupabase struct {
 	JWKSURL  string `env:"SUPABASE_JWKS_URL,required"`
 	Issuer   string `env:"SUPABASE_JWT_ISSUER"`
 	Audience string `env:"SUPABASE_JWT_AUDIENCE"`
+
+	URL            string `env:"SUPABASE_URL"`
+	ServiceRoleKey string `env:"SUPABASE_SERVICE_ROLE_KEY"`
+	StorageBucket  string `env:"SUPABASE_STORAGE_BUCKET,default=avatars"`
 }
 
 func New() *Conf {

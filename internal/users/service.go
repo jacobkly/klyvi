@@ -49,14 +49,28 @@ type UserRepository interface {
 	GetUserByID(ctx context.Context, id uuid.UUID) (*User, error)
 	UpdateProfile(ctx context.Context, id uuid.UUID, patch UpdateProfilePatch) (*User, error)
 	UsernameExists(ctx context.Context, name string) (bool, error)
+	ClearAvatarURL(ctx context.Context, id uuid.UUID) (*User, error)
 }
 
 type Service struct {
 	repo UserRepository
+
+	// storage is nil unless avatar brokering is configured; the avatar
+	// endpoints check and degrade with ErrStorageNotConfigured.
+	storage AvatarStorage
+	bucket  string
 }
 
 func NewService(repo UserRepository) *Service {
 	return &Service{repo: repo}
+}
+
+// WithAvatarStorage wires the storage client the avatar endpoints use.
+// Chainable at construction: users.NewService(repo).WithAvatarStorage(sb, bucket).
+func (s *Service) WithAvatarStorage(storage AvatarStorage, bucket string) *Service {
+	s.storage = storage
+	s.bucket = bucket
+	return s
 }
 
 func (s *Service) EnsureUser(ctx context.Context, id uuid.UUID) error {

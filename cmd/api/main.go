@@ -15,6 +15,7 @@ import (
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/platform/http/router"
+	"klyvi-api/internal/platform/supabase"
 	"klyvi-api/internal/platform/tmdb"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/onboarding"
@@ -58,7 +59,18 @@ func main() {
 	movieService := movies.NewService(tmdbClient, movieRepo)
 	tvService := tv.NewService(tmdbClient, tvRepo)
 	searchService := search.NewService(tmdbClient, movieRepo)
+	// Nil when SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are unset — the
+	// avatar endpoints then answer with an explicit not-configured error
+	// while everything else runs normally.
+	supabaseClient := supabase.New(cfg.Supabase.URL, cfg.Supabase.ServiceRoleKey)
+	if supabaseClient == nil {
+		log.Println("supabase service-role client not configured; avatar endpoints disabled")
+	}
+
 	userService := users.NewService(userRepo)
+	if supabaseClient != nil {
+		userService = userService.WithAvatarStorage(supabaseClient, cfg.Supabase.StorageBucket)
+	}
 	trackingService := tracking.NewService(trackingRepo)
 	interactionsService := interactions.NewService(interactionsRepo, trackingRepo)
 	onboardingService := onboarding.NewService(onboardingRepo, movieService)
