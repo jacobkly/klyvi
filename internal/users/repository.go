@@ -3,6 +3,7 @@ package users
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -10,6 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 )
+
+// settingsArg converts the optional settings blob to a driver-friendly
+// value: nil pointer → SQL NULL (COALESCE keeps the stored blob), non-nil →
+// the raw bytes for the JSONB write.
+func settingsArg(s *json.RawMessage) any {
+	if s == nil {
+		return nil
+	}
+	return []byte(*s)
+}
 
 // uniqueViolation is the SQLSTATE Postgres raises when an insert or update
 // collides with a unique index.
@@ -71,6 +82,8 @@ type UpdateProfilePatch struct {
 	Bio       *string
 	AvatarURL *string
 	BannerURL *string
+	// Settings replaces the whole JSONB blob when non-nil.
+	Settings *json.RawMessage
 }
 
 // UpdateProfile applies a partial patch to the user row using COALESCE — only
@@ -97,10 +110,11 @@ func (r *Repository) UpdateProfile(ctx context.Context, id uuid.UUID, patch Upda
 			bio        = coalesce($3, bio),
 			avatar_url = coalesce($4, avatar_url),
 			banner_url = coalesce($5, banner_url),
+			settings   = coalesce($6, settings),
 			updated_at = now()
 		where id = $1
 		returning *
-	`, id, patch.Username, patch.Bio, patch.AvatarURL, patch.BannerURL).StructScan(&u)
+	`, id, patch.Username, patch.Bio, patch.AvatarURL, patch.BannerURL, settingsArg(patch.Settings)).StructScan(&u)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

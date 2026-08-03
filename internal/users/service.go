@@ -2,6 +2,8 @@ package users
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -11,6 +13,35 @@ import (
 
 	"klyvi-api/internal/platform/http/middleware"
 )
+
+// MaxSettingsBytes caps the opaque settings blob. Large enough for every UI
+// preference the client has sketched, small enough that the column cannot be
+// abused as free storage.
+const MaxSettingsBytes = 8 * 1024
+
+var (
+	ErrSettingsInvalid  = errors.New("settings must be a JSON object")
+	ErrSettingsTooLarge = errors.New("settings too large")
+)
+
+// validateSettings enforces the only two rules the server owns: the blob
+// parses as a JSON object, and it fits the cap. Content is the client's.
+func validateSettings(raw json.RawMessage) error {
+	if len(raw) > MaxSettingsBytes {
+		return ErrSettingsTooLarge
+	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return ErrSettingsInvalid
+	}
+	// json.Unmarshal accepts the literal null into a map without error;
+	// reject it explicitly so "settings": null cannot wipe the blob to a
+	// non-object value.
+	if probe == nil {
+		return ErrSettingsInvalid
+	}
+	return nil
+}
 
 // UserRepository is the persistence boundary the users service needs.
 type UserRepository interface {
@@ -42,6 +73,9 @@ type UpdateProfileRequest struct {
 	Bio       *string `json:"bio"`
 	AvatarURL *string `json:"avatar_url"`
 	BannerURL *string `json:"banner_url"`
+	// Settings replaces the whole blob when present (the client owns the
+	// merge). Absent means unchanged.
+	Settings *json.RawMessage `json:"settings"`
 }
 
 // UpdateMe applies a profile patch. A username, when provided, must pass
@@ -60,11 +94,17 @@ func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileR
 			return nil, err
 		}
 	}
+	if req.Settings != nil {
+		if err := validateSettings(*req.Settings); err != nil {
+			return nil, err
+		}
+	}
 	return s.repo.UpdateProfile(ctx, id, UpdateProfilePatch{
 		Username:  req.Username,
 		Bio:       req.Bio,
 		AvatarURL: req.AvatarURL,
 		BannerURL: req.BannerURL,
+		Settings:  req.Settings,
 	})
 }
 

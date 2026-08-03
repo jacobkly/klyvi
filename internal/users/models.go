@@ -21,6 +21,10 @@ type User struct {
 	BannerURL         *string          `db:"banner_url" json:"banner_url"`
 	FavoriteMedia     *json.RawMessage `db:"favorite_media" json:"favorite_media"`
 	FavoritePeople    *json.RawMessage `db:"favorite_people" json:"favorite_people"`
+	// Settings is an opaque client-owned JSON object (theme, notification
+	// toggles, list preferences, …). The server validates only shape and
+	// size; the client owns the schema and the merge.
+	Settings json.RawMessage `db:"settings" json:"settings"`
 	IsActive          bool             `db:"is_active" json:"is_active"`
 	CreatedAt         time.Time        `db:"created_at" json:"created_at"`
 	UpdatedAt         time.Time        `db:"updated_at" json:"updated_at"`

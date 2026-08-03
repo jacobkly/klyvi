@@ -64,7 +64,7 @@ func (a *API) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := a.service.UpdateMe(r.Context(), id, req)
 	if err != nil {
-		response.WriteError(w, statusForUsernameError(err), err.Error())
+		response.WriteError(w, statusForProfileError(err), err.Error())
 		return
 	}
 	if user == nil {
@@ -102,14 +102,16 @@ func (a *API) CheckUsernameAvailable(w http.ResponseWriter, r *http.Request) {
 		middleware.StatsFromContext(r.Context()), result)
 }
 
-// statusForUsernameError maps the username failure modes onto status codes
-// the client can branch on. Anything unrecognised is a 500 — a profile patch
+// statusForProfileError maps the profile-patch failure modes onto status
+// codes the client can branch on. Anything unrecognised is a 500 — a patch
 // that fails for a reason we did not name is a server problem, and reporting
 // it as 400 would tell the user to fix input that is not wrong.
-func statusForUsernameError(err error) int {
+func statusForProfileError(err error) int {
 	var cooldown *UsernameCooldownError
 	switch {
-	case errors.Is(err, ErrUsernameInvalid):
+	case errors.Is(err, ErrUsernameInvalid),
+		errors.Is(err, ErrSettingsInvalid),
+		errors.Is(err, ErrSettingsTooLarge):
 		return http.StatusBadRequest
 	case errors.Is(err, ErrUsernameReserved), errors.Is(err, ErrUsernameTaken):
 		return http.StatusConflict
