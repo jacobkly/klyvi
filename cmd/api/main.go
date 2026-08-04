@@ -50,6 +50,9 @@ func main() {
 	}
 
 	tmdbClient := tmdb.NewClient(cfg.TMDB.APIKey)
+	// Cache catalog reads in-process; a cold key under load collapses to one
+	// upstream call. Everything that reads TMDB goes through this wrapper.
+	cachedTMDB := tmdb.NewCachingTMDBClient(tmdbClient)
 
 	movieRepo := movies.NewRepository(dbConn)
 	tvRepo := tv.NewRepository(dbConn)
@@ -58,9 +61,9 @@ func main() {
 	interactionsRepo := interactions.NewRepository(dbConn)
 	onboardingRepo := onboarding.NewRepository(dbConn)
 
-	movieService := movies.NewService(tmdbClient, movieRepo)
-	tvService := tv.NewService(tmdbClient, tvRepo)
-	searchService := search.NewService(tmdbClient, movieRepo)
+	movieService := movies.NewService(cachedTMDB, movieRepo)
+	tvService := tv.NewService(cachedTMDB, tvRepo)
+	searchService := search.NewService(cachedTMDB, movieRepo)
 	// Nil when SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are unset — the
 	// avatar endpoints then answer with an explicit not-configured error
 	// while everything else runs normally.
@@ -80,9 +83,9 @@ func main() {
 			WithAccountDeletion(supabaseClient, cfg.Supabase.StorageBucket)
 	}
 	onboardingService := onboarding.NewService(onboardingRepo, movieService)
-	rankingsService := rankings.NewService(tmdbClient, rankings.NewRepository(dbConn))
+	rankingsService := rankings.NewService(cachedTMDB, rankings.NewRepository(dbConn))
 	importsService := imports.NewService(
-		imports.NewRepository(dbConn), tmdbClient, trackingService, interactionsService)
+		imports.NewRepository(dbConn), cachedTMDB, trackingService, interactionsService)
 
 	// Recommender orchestrator. Adapters wrap movies.Repository + raw SQL
 	// against interactions/media_list to feed the orchestrator. Tier 0 is
