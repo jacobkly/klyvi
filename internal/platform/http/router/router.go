@@ -55,6 +55,14 @@ const (
 	batchBodyCap = 1 << 20   // 1 MiB — interactions batch
 )
 
+// Cache-Control windows for the public catalog. Catalog is stable, so a 1h
+// browser/CDN cache with a day of stale-while-revalidate; search is fresher.
+const (
+	catalogMaxAge = 3600  // 1h
+	catalogSWR    = 86400 // 24h
+	searchMaxAge  = 600   // 10m
+)
+
 func New(services Services) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -86,6 +94,7 @@ func New(services Services) *chi.Mux {
 		// --- Public catalog routes: catalog/search work without auth.
 		movieAPI := movies.NewAPI(services.Movies)
 		r.Route("/movies", func(r chi.Router) {
+			r.Use(middleware.CacheControl(catalogMaxAge, catalogSWR))
 			r.Get("/{id}", movieAPI.GetMovieById)
 			r.Get("/{id}/recommendations", movieAPI.GetMovieRecommendations)
 			r.Get("/{id}/collection", movieAPI.GetMovieCollection)
@@ -94,6 +103,7 @@ func New(services Services) *chi.Mux {
 
 		tvAPI := tv.NewAPI(services.TV)
 		r.Route("/tv", func(r chi.Router) {
+			r.Use(middleware.CacheControl(catalogMaxAge, catalogSWR))
 			r.Get("/{id}", tvAPI.GetTvById)
 			r.Get("/{id}/recommendations", tvAPI.GetTvRecommendations)
 			r.Get("/{id}/collection", tvAPI.GetTvCollection)
@@ -103,10 +113,10 @@ func New(services Services) *chi.Mux {
 		// Search is capped tighter than the global limit: it is the least
 		// cacheable public endpoint and the most expensive per call.
 		searchAPI := search.NewAPI(services.Search)
-		r.With(middleware.RateLimit(middleware.RateLimitConfig{
-			RequestsPerMinute: 60,
-			Burst:             20,
-		})).Get("/search", searchAPI.GetSearchResult)
+		r.With(
+			middleware.RateLimit(middleware.RateLimitConfig{RequestsPerMinute: 60, Burst: 20}),
+			middleware.CacheControl(searchMaxAge, 0),
+		).Get("/search", searchAPI.GetSearchResult)
 
 		// Onboarding pool is public — the frontend hits it before the user
 		// has authenticated (the swipe deck on the welcome screen).
@@ -125,6 +135,7 @@ func New(services Services) *chi.Mux {
 		// Top-100 rankings are public and cached server-side for 24h.
 		rankingsAPI := rankings.NewAPI(services.Rankings)
 		r.Route("/rankings", func(r chi.Router) {
+			r.Use(middleware.CacheControl(catalogMaxAge, catalogSWR))
 			r.Get("/movies", rankingsAPI.Movies)
 			r.Get("/tv", rankingsAPI.TV)
 		})
