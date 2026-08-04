@@ -83,3 +83,39 @@ func TestRateLimit_DefaultsWhenUnconfigured(t *testing.T) {
 		t.Errorf("zero-value config should still serve, got %d", code)
 	}
 }
+
+func doGetCF(t *testing.T, h http.Handler, remoteAddr, cfIP string) int {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/v1/rankings/movies", nil)
+	req.RemoteAddr = remoteAddr
+	req.Header.Set("CF-Connecting-IP", cfIP)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// Behind the tunnel every request shares cloudflared's RemoteAddr, so the limiter
+// must key on CF-Connecting-IP — otherwise it throttles all clients as one and
+// lets a single client evade the cap by reconnecting on a new source port.
+func TestRateLimit_KeysOnCFConnectingIPBehindTunnel(t *testing.T) {
+	h := middleware.RateLimit(middleware.RateLimitConfig{
+		RequestsPerMinute: 60,
+		Burst:             1,
+	})(okHandler())
+
+	const tunnelPeer = "172.18.0.5" // cloudflared; identical for every real client
+
+	// One real client spends its single token, then is limited even though its
+	// next request arrives on a different tunnel source port.
+	if code := doGetCF(t, h, tunnelPeer+":4001", "203.0.113.10"); code != http.StatusOK {
+		t.Fatalf("first request from client A got %d, want 200", code)
+	}
+	if code := doGetCF(t, h, tunnelPeer+":4002", "203.0.113.10"); code != http.StatusTooManyRequests {
+		t.Errorf("second request from client A got %d, want 429", code)
+	}
+
+	// A different real client over the same tunnel peer is unaffected.
+	if code := doGetCF(t, h, tunnelPeer+":4003", "203.0.113.99"); code != http.StatusOK {
+		t.Errorf("client B got %d, want 200", code)
+	}
+}

@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -46,9 +45,9 @@ type visitor struct {
 // cap. It is deliberately in-process: a single API instance is the current
 // deployment, and a shared store is only worth it once there is more than one.
 //
-// Behind a proxy this keys on the proxy's address unless RemoteAddr is already
-// being rewritten upstream, which would make the limit global rather than
-// per-client. Revisit when a real proxy lands in front of this.
+// The bucket key comes from ClientIP, which reads the real client from
+// CF-Connecting-IP behind the Cloudflare tunnel (where RemoteAddr is always
+// cloudflared) and falls back to the TCP peer otherwise.
 func RateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 	perMinute := cfg.RequestsPerMinute
 	if perMinute <= 0 {
@@ -89,21 +88,11 @@ func RateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !limiterFor(clientIP(r)).Allow() {
+			if !limiterFor(ClientIP(r)).Allow() {
 				response.WriteError(w, http.StatusTooManyRequests, "too many requests")
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// clientIP strips the source port so that every new TCP connection from one
-// caller shares a bucket rather than getting a fresh one.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
