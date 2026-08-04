@@ -25,6 +25,12 @@ type ConfServer struct {
 	// "http://localhost:3000,https://klyvi.app"). Optional — defaults
 	// to localhost dev origins when unset.
 	AllowedOrigins string `env:"ALLOWED_ORIGINS"`
+
+	// RateLimitRPM / RateLimitBurst tune the global per-IP rate limiter on the
+	// /v1 surface. Optional; the defaults suit a public catalog where a single
+	// page load fires several requests.
+	RateLimitRPM   int `env:"SERVER_RATELIMIT_RPM,default=120"`
+	RateLimitBurst int `env:"SERVER_RATELIMIT_BURST,default=40"`
 }
 
 type ConfDB struct {

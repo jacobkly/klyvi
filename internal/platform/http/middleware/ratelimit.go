@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"math"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -88,7 +90,17 @@ func RateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !limiterFor(ClientIP(r)).Allow() {
+			// Reserve (rather than Allow) so a rejection can report how long the
+			// client should wait. A held token is cancelled on rejection so the
+			// limiter state is unchanged, matching Allow's semantics.
+			res := limiterFor(ClientIP(r)).Reserve()
+			if !res.OK() {
+				response.WriteError(w, http.StatusTooManyRequests, "too many requests")
+				return
+			}
+			if delay := res.Delay(); delay > 0 {
+				res.Cancel()
+				w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(delay.Seconds()))))
 				response.WriteError(w, http.StatusTooManyRequests, "too many requests")
 				return
 			}

@@ -118,6 +118,8 @@ func main() {
 		Imports:        importsService,
 		AuthMW:         authMW,
 		AllowedOrigins: cfg.Server.AllowedOrigins,
+		RateLimitRPM:   cfg.Server.RateLimitRPM,
+		RateLimitBurst: cfg.Server.RateLimitBurst,
 	})
 
 	srv := &http.Server{

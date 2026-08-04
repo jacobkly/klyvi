@@ -41,6 +41,11 @@ type Services struct {
 	// AllowedOrigins is the comma-separated CORS origin list from config.
 	// Empty string falls back to localhost dev defaults.
 	AllowedOrigins string
+
+	// RateLimitRPM / RateLimitBurst configure the global per-IP limiter mounted
+	// on the /v1 group.
+	RateLimitRPM   int
+	RateLimitBurst int
 }
 
 func New(services Services) *chi.Mux {
@@ -61,6 +66,13 @@ func New(services Services) *chi.Mux {
 	r.Get("/health", health.Get)
 
 	r.Route("/v1", func(r chi.Router) {
+		// Global per-IP rate limit for the whole API. /health sits on the root
+		// router above and is deliberately left unthrottled for uptime checks.
+		r.Use(middleware.RateLimit(middleware.RateLimitConfig{
+			RequestsPerMinute: services.RateLimitRPM,
+			Burst:             services.RateLimitBurst,
+		}))
+
 		// --- Public catalog routes: catalog/search work without auth.
 		movieAPI := movies.NewAPI(services.Movies)
 		r.Route("/movies", func(r chi.Router) {
@@ -78,8 +90,13 @@ func New(services Services) *chi.Mux {
 			r.Get("/", tvAPI.GetTvList)
 		})
 
+		// Search is capped tighter than the global limit: it is the least
+		// cacheable public endpoint and the most expensive per call.
 		searchAPI := search.NewAPI(services.Search)
-		r.Get("/search", searchAPI.GetSearchResult)
+		r.With(middleware.RateLimit(middleware.RateLimitConfig{
+			RequestsPerMinute: 60,
+			Burst:             20,
+		})).Get("/search", searchAPI.GetSearchResult)
 
 		// Onboarding pool is public — the frontend hits it before the user
 		// has authenticated (the swipe deck on the welcome screen).

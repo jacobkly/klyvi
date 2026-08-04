@@ -84,6 +84,28 @@ func TestRateLimit_DefaultsWhenUnconfigured(t *testing.T) {
 	}
 }
 
+// A 429 should tell the client when to come back, per RFC 6585.
+func TestRateLimit_SetsRetryAfterOnReject(t *testing.T) {
+	h := middleware.RateLimit(middleware.RateLimitConfig{
+		RequestsPerMinute: 60,
+		Burst:             1,
+	})(okHandler())
+
+	doGet(t, h, "203.0.113.50:5000") // spend the only token
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.50:5000"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("got %d, want 429", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("expected a Retry-After header on 429, got none")
+	}
+}
+
 func doGetCF(t *testing.T, h http.Handler, remoteAddr, cfIP string) int {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/v1/rankings/movies", nil)
