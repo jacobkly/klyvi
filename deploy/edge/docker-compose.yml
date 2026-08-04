@@ -1,0 +1,34 @@
+# Shared edge stack for the whole server: one Cloudflare tunnel + one auto-
+# updater that every project reuses. Runs independently of any single app, so
+# deploying or restarting an app never touches your public ingress.
+#
+# One-time prerequisite — create the shared network that app stacks attach to:
+#   docker network create edge
+#
+# Then, in this directory: copy .env.example to .env, add the tunnel token, and
+# `docker compose up -d`.
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # One token for the whole server. Add a Public Hostname route per project in
+    # the Cloudflare dashboard, each pointing at a service on the `edge` network
+    # (e.g. http://klyvi-api:8080).
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - edge
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # One instance watches every labelled container on the host, across all
+    # project stacks — so it lives here, not in each app stack.
+    command: --interval 60 --label-enable --cleanup
+
+# The edge network is created once by hand (docker network create edge) and
+# shared by every app stack, which is what lets the tunnel reach them by name.
+networks:
+  edge:
+    external: true

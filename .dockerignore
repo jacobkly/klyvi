@@ -1,0 +1,29 @@
+# Version control and CI config — not needed to build the binary.
+.git
+.gitignore
+.github
+
+# Local env files and secrets must never enter the build context.
+.env
+.env.*
+!.env.example
+
+# Deploy manifests run on the server, not inside the image.
+deploy/
+
+# Local-only docs and planning (also gitignored).
+*.md
+docs/
+
+# Build output and scratch.
+bin/
+dist/
+tmp/
+
+# Test files are not compiled into the binary.
+*_test.go
+
+# Editor / OS noise.
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,25 @@
+# Klyvi API app stack. Runs the API container only — the shared edge stack
+# (cloudflared + watchtower) in deploy/edge reaches it over the external `edge`
+# network as http://klyvi-api:8080.
+#
+# Prereqs: the `edge` network exists (docker network create edge) and the edge
+# stack is up. Then copy .env.example to .env, fill it in, and
+# `docker compose up -d`.
+services:
+  klyvi-api:
+    image: ghcr.io/jacobkly/klyvi:latest
+    restart: unless-stopped
+    env_file: .env
+    # Give the graceful-shutdown drain (10s in main.go) time before SIGKILL.
+    stop_grace_period: 20s
+    labels:
+      # The edge stack's Watchtower auto-updates only labelled containers.
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - edge
+    # No `ports:` — never published to the host or LAN. The tunnel reaches it
+    # over the edge network as http://klyvi-api:8080 (must match SERVER_PORT).
+
+networks:
+  edge:
+    external: true
