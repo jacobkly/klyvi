@@ -52,6 +52,9 @@ func New(services Services) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(chimiddleware.RequestID)
+	// Recover panics into a 500 before anything else runs, so a handler bug
+	// never drops the connection. Sits after RequestID so the log carries the id.
+	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   parseOrigins(services.AllowedOrigins),
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
