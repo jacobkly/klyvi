@@ -48,6 +48,13 @@ type Services struct {
 	RateLimitBurst int
 }
 
+// Body-size caps for the JSON write endpoints. Multipart uploads (avatar,
+// imports) cap themselves and are deliberately excluded.
+const (
+	jsonBodyCap  = 256 << 10 // 256 KiB — single JSON writes
+	batchBodyCap = 1 << 20   // 1 MiB — interactions batch
+)
+
 func New(services Services) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -131,7 +138,7 @@ func New(services Services) *chi.Mux {
 
 			usersAPI := users.NewAPI(services.Users)
 			r.Get("/users/me", usersAPI.GetMe)
-			r.Patch("/users/me", usersAPI.UpdateMe)
+			r.With(middleware.MaxBodyBytes(jsonBodyCap)).Patch("/users/me", usersAPI.UpdateMe)
 			r.Delete("/users/me", usersAPI.DeleteMe)
 			r.Post("/users/me/avatar", usersAPI.UploadAvatar)
 			r.Delete("/users/me/avatar", usersAPI.DeleteAvatar)
@@ -141,6 +148,8 @@ func New(services Services) *chi.Mux {
 
 			trackingAPI := tracking.NewAPI(services.Tracking)
 			r.Route("/tracking", func(r chi.Router) {
+				// All tracking write bodies are tiny; cap the whole group.
+				r.Use(middleware.MaxBodyBytes(jsonBodyCap))
 				r.Get("/", trackingAPI.List)
 				r.Post("/", trackingAPI.Add)
 				// Scoped bulk delete of the whole list; the single-entry
@@ -154,8 +163,8 @@ func New(services Services) *chi.Mux {
 
 			interactionsAPI := interactions.NewAPI(services.Interactions)
 			r.Route("/interactions", func(r chi.Router) {
-				r.Post("/", interactionsAPI.Record)
-				r.Post("/batch", interactionsAPI.RecordBatch)
+				r.With(middleware.MaxBodyBytes(jsonBodyCap)).Post("/", interactionsAPI.Record)
+				r.With(middleware.MaxBodyBytes(batchBodyCap)).Post("/batch", interactionsAPI.RecordBatch)
 				r.Get("/", interactionsAPI.List)
 			})
 
