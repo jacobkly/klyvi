@@ -9,13 +9,13 @@ import (
 // table yet — future work). All TV-side fields are stubbed because the
 // movies recommender is built first; TV reco is later work.
 type MediaFeatures struct {
-	MediaID     int
-	MediaType   string
-	GenreIDs    []int
-	KeywordIDs  []int
-	Year        int // 0 if unknown
-	VoteAverage float64
-	VoteCount   int
+	MediaID     int     `json:"media_id"`
+	MediaType   string  `json:"media_type"`
+	GenreIDs    []int   `json:"genre_ids"`
+	KeywordIDs  []int   `json:"keyword_ids"`
+	Year        int     `json:"year"` // 0 if unknown
+	VoteAverage float64 `json:"vote_average"`
+	VoteCount   int     `json:"vote_count"`
 }
 
 // Candidate is a media item the orchestrator may rank for a user. Features
@@ -27,23 +27,23 @@ type MediaFeatures struct {
 // follow-up lookup. The scorers themselves do not read these fields — they
 // ride through the embedding into Scored unchanged.
 type Candidate struct {
-	MediaID      int
-	MediaType    string
-	TMDBID       int
-	Title        string
-	PosterPath   string
-	BackdropPath string
-	ReleaseYear  int
-	VoteAverage  float64
-	Features     *MediaFeatures
+	MediaID      int            `json:"media_id"`
+	MediaType    string         `json:"media_type"`
+	TMDBID       int            `json:"tmdb_id"`
+	Title        string         `json:"title"`
+	PosterPath   string         `json:"poster_path"`
+	BackdropPath string         `json:"backdrop_path"`
+	ReleaseYear  int            `json:"release_year"`
+	VoteAverage  float64        `json:"vote_average"`
+	Features     *MediaFeatures `json:"features"`
 }
 
 // Scored is a ranked Candidate plus the score and structured reasons
 // (used for paid-tier explanations and for harness/debug output).
 type Scored struct {
 	Candidate
-	Score   float64
-	Reasons []Reason
+	Score   float64  `json:"score"`
+	Reasons []Reason `json:"reasons"`
 }
 
 // Reason is a single explainability token attached to a Scored item.

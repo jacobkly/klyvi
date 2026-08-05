@@ -30,6 +30,10 @@ func (a *API) Feed(w http.ResponseWriter, r *http.Request) {
 		response.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Guarantee a JSON array, never null, matching the documented shape.
+	if scored == nil {
+		scored = []Scored{}
+	}
 
 	response.WriteSuccess(w, http.StatusOK, "v1",
 		middleware.StatsFromContext(r.Context()), scored)

@@ -142,9 +142,9 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID) ([]Scored, er
 }
 
 // resolveReasonNames mutates the scored slice, filling in Reason.Name
-// for any (kind,id) the catalog can resolve. Failures are logged
-// best-effort and do not block the response — the frontend can render
-// the id alone if the name is missing.
+// for any (kind,id) the catalog can resolve. Name resolution is best-effort:
+// a lookup failure is ignored and does not block the response — the frontend
+// can render the id alone if the name is missing.
 func (o *Orchestrator) resolveReasonNames(ctx context.Context, scored []Scored) {
 	// Collect unique ids per kind.
 	gSet := map[int]struct{}{}
