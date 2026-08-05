@@ -3,6 +3,7 @@ package tracking
 import (
 	"context"
 	"database/sql"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -216,12 +217,12 @@ func (r *Repository) ListByUser(ctx context.Context, userID uuid.UUID, filters L
 	if filters.MediaType != nil {
 		args = append(args, *filters.MediaType)
 		sb.WriteString(" and ml.media_type = $")
-		sb.WriteString(itoa(len(args)))
+		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	if filters.Status != nil {
 		args = append(args, *filters.Status)
 		sb.WriteString(" and ml.status = $")
-		sb.WriteString(itoa(len(args)))
+		sb.WriteString(strconv.Itoa(len(args)))
 	}
 	sb.WriteString(" order by ml.updated_at desc")
 
@@ -230,14 +231,4 @@ func (r *Repository) ListByUser(ctx context.Context, userID uuid.UUID, filters L
 		return nil, err
 	}
 	return entries, nil
-}
-
-// itoa is a tiny helper to avoid pulling strconv just for $N placeholders.
-func itoa(n int) string {
-	if n < 10 {
-		return string(rune('0' + n))
-	}
-	// Two-digit fallback; the filter list above never produces more than a
-	// handful of placeholders, so this is defensive only.
-	return string(rune('0'+n/10)) + string(rune('0'+n%10))
 }
