@@ -24,7 +24,10 @@ func (r *Repository) GetByTMDBID(ctx context.Context, tmdbID int) (*Movie, error
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &movie, err
+	if err != nil {
+		return nil, err
+	}
+	return &movie, nil
 }
 
 func (r *Repository) GetMovieIDByMediaID(ctx context.Context, mediaID int) (int, error) {
