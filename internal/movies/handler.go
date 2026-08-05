@@ -34,7 +34,7 @@ func (a *API) GetMovieById(w http.ResponseWriter, r *http.Request) {
 
 	movie, err := a.service.GetMovieById(r.Context(), id, idType)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -53,7 +53,7 @@ func (a *API) GetMovieRecommendations(w http.ResponseWriter, r *http.Request) {
 
 	recommendations, err := a.service.GetMovieRecommendations(id)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -76,7 +76,7 @@ func (a *API) GetMovieCollection(w http.ResponseWriter, r *http.Request) {
 
 	collections, err := a.service.GetMovieCollection(r.Context(), id)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -173,7 +173,7 @@ func (a *API) GetMovieList(w http.ResponseWriter, r *http.Request) {
 
 	data, err := a.service.GetMovieList(listType, page)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		respondError(w, err)
 		return
 	}
 

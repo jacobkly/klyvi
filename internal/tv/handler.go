@@ -47,7 +47,7 @@ func (a *API) GetTvById(w http.ResponseWriter, r *http.Request) {
 
 	tv, err := a.service.GetTvById(r.Context(), idType, id, seasonNum)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -77,7 +77,7 @@ func (a *API) GetTvRecommendations(w http.ResponseWriter, r *http.Request) {
 
 	recommendations, err := a.service.GetTvRecommendations(r.Context(), idType, id)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -107,7 +107,7 @@ func (a *API) GetTvCollection(w http.ResponseWriter, r *http.Request) {
 
 	collection, err := a.service.GetTvCollection(r.Context(), idType, id)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -129,7 +129,7 @@ func (a *API) GetTvList(w http.ResponseWriter, r *http.Request) {
 
 	data, err := a.service.GetTvList(listType, page)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		respondError(w, err)
 		return
 	}
 

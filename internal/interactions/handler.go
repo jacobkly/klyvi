@@ -33,7 +33,7 @@ func (a *API) Record(w http.ResponseWriter, r *http.Request) {
 
 	rec, err := a.service.Record(r.Context(), userID, req)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -60,7 +60,7 @@ func (a *API) RecordBatch(w http.ResponseWriter, r *http.Request) {
 
 	res, err := a.service.RecordBatch(r.Context(), userID, req.Interactions)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -91,7 +91,7 @@ func (a *API) List(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := a.service.ListByUser(r.Context(), userID, sinceDays)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 	// Guarantee a JSON array (not null) for callers; OpenAPI declares the

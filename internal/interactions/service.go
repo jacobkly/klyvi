@@ -2,7 +2,6 @@ package interactions
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/google/uuid"
 )
@@ -44,25 +43,25 @@ type RecordRequest struct {
 
 func (s *Service) Record(ctx context.Context, userID uuid.UUID, req RecordRequest) (*Interaction, error) {
 	if req.TMDBID <= 0 {
-		return nil, fmt.Errorf("tmdb_id is required and must be positive")
+		return nil, invalid("tmdb_id is required and must be positive")
 	}
 	if err := validateMediaType(req.MediaType); err != nil {
 		return nil, err
 	}
 	if req.MediaType == MediaTypeSeason && req.SeasonNumber == nil {
-		return nil, fmt.Errorf("season_number is required for media_type=season")
+		return nil, invalid("season_number is required for media_type=season")
 	}
 	if req.MediaType == MediaTypeMovie && req.SeasonNumber != nil {
-		return nil, fmt.Errorf("season_number must be omitted for media_type=movie")
+		return nil, invalid("season_number must be omitted for media_type=movie")
 	}
 	if err := validateKind(req.Kind); err != nil {
 		return nil, err
 	}
 	if req.Kind == KindRated && req.Rating == nil {
-		return nil, fmt.Errorf("rating is required when kind=rated")
+		return nil, invalid("rating is required when kind=rated")
 	}
 	if req.Rating != nil && (*req.Rating < 0 || *req.Rating > 100) {
-		return nil, fmt.Errorf("rating must be between 0 and 100")
+		return nil, invalid("rating must be between 0 and 100")
 	}
 	if req.Source != nil {
 		if err := validateSource(*req.Source); err != nil {
@@ -107,10 +106,10 @@ type BatchResult struct {
 // Rejected and does not abort the rest.
 func (s *Service) RecordBatch(ctx context.Context, userID uuid.UUID, reqs []RecordRequest) (*BatchResult, error) {
 	if len(reqs) == 0 {
-		return nil, fmt.Errorf("batch must contain at least one interaction")
+		return nil, invalid("batch must contain at least one interaction")
 	}
 	if len(reqs) > MaxBatchSize {
-		return nil, fmt.Errorf("batch too large: %d exceeds the limit of %d", len(reqs), MaxBatchSize)
+		return nil, invalid("batch too large: %d exceeds the limit of %d", len(reqs), MaxBatchSize)
 	}
 
 	var res BatchResult
@@ -137,7 +136,7 @@ func validateMediaType(mt string) error {
 	case MediaTypeMovie, MediaTypeSeason:
 		return nil
 	default:
-		return fmt.Errorf("invalid media_type %q", mt)
+		return invalid("invalid media_type %q", mt)
 	}
 }
 
@@ -146,7 +145,7 @@ func validateKind(k string) error {
 	case KindLogged, KindRated, KindDismissed, KindSaved, KindImpression, KindClicked:
 		return nil
 	default:
-		return fmt.Errorf("invalid kind %q", k)
+		return invalid("invalid kind %q", k)
 	}
 }
 
@@ -155,6 +154,6 @@ func validateSource(s string) error {
 	case SourceSearch, SourceDetail, SourceFeed, SourceOnboarding:
 		return nil
 	default:
-		return fmt.Errorf("invalid source %q", s)
+		return invalid("invalid source %q", s)
 	}
 }

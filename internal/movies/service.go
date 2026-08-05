@@ -61,11 +61,11 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 			return nil, err
 		}
 		if movieID == 0 {
-			return nil, fmt.Errorf("media not found")
+			return nil, ErrMovieNotFound
 		}
 
 	default:
-		return nil, fmt.Errorf("invalid id_type")
+		return nil, ErrInvalidIDType
 	}
 
 	movie, err := s.repo.GetByTMDBID(ctx, movieID)
@@ -228,7 +228,7 @@ func listEndpoint(listType string, page int) (string, error) {
 	case "top_rated":
 		base = "/movie/top_rated"
 	default:
-		return "", fmt.Errorf("invalid list type")
+		return "", ErrInvalidListType
 	}
 
 	return fmt.Sprintf("%s?language=en-US&page=%d", base, page), nil

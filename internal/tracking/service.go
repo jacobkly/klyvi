@@ -2,7 +2,6 @@ package tracking
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/google/uuid"
 )
@@ -61,13 +60,13 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, req AddRequest) (*E
 		return nil, err
 	}
 	if req.MediaType == MediaTypeSeason && req.SeasonNumber == nil {
-		return nil, fmt.Errorf("season_number is required for media_type=season")
+		return nil, invalid("season_number is required for media_type=season")
 	}
 	if req.MediaType == MediaTypeMovie && req.SeasonNumber != nil {
-		return nil, fmt.Errorf("season_number must be omitted for media_type=movie")
+		return nil, invalid("season_number must be omitted for media_type=movie")
 	}
 	if req.TMDBID <= 0 {
-		return nil, fmt.Errorf("tmdb_id is required and must be positive")
+		return nil, invalid("tmdb_id is required and must be positive")
 	}
 	if err := validateStatus(req.Status); err != nil {
 		return nil, err
@@ -153,7 +152,7 @@ func validateMediaType(mt string) error {
 	case MediaTypeMovie, MediaTypeSeason:
 		return nil
 	default:
-		return fmt.Errorf("invalid media_type %q (must be 'movie' or 'season')", mt)
+		return invalid("invalid media_type %q (must be 'movie' or 'season')", mt)
 	}
 }
 
@@ -165,7 +164,7 @@ func validateStatus(s *string) error {
 	case StatusWatching, StatusPlanning, StatusCompleted, StatusRewatching, StatusPaused, StatusDropped:
 		return nil
 	default:
-		return fmt.Errorf("invalid status %q", *s)
+		return invalid("invalid status %q", *s)
 	}
 }
 
@@ -174,7 +173,7 @@ func validateScore(s *int) error {
 		return nil
 	}
 	if *s < 0 || *s > 100 {
-		return fmt.Errorf("score must be between 0 and 100, got %d", *s)
+		return invalid("score must be between 0 and 100, got %d", *s)
 	}
 	return nil
 }

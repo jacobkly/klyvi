@@ -66,7 +66,7 @@ func (s *Service) resolveTVID(ctx context.Context, idType string, id, seasonNum 
 			return 0, 0, err
 		}
 		if tvID == 0 {
-			return 0, 0, fmt.Errorf("media not found")
+			return 0, 0, ErrTVNotFound
 		}
 		// If the caller passed an explicit seasonNum it wins (e.g. asking
 		// for series-level data via an internal id sends seasonNum=0).
@@ -75,7 +75,7 @@ func (s *Service) resolveTVID(ctx context.Context, idType string, id, seasonNum 
 		}
 		return tvID, indexedSeasonNum, nil
 	default:
-		return 0, 0, fmt.Errorf("invalid id type: must be 'external' or 'internal'")
+		return 0, 0, ErrInvalidIDType
 	}
 }
 
@@ -198,7 +198,7 @@ func listEndpoint(listType string, page int) (string, error) {
 	case "top_rated":
 		base = "/tv/top_rated"
 	default:
-		return "", fmt.Errorf("invalid list type")
+		return "", ErrInvalidListType
 	}
 
 	return fmt.Sprintf("%s?language=en-US&page=%d", base, page), nil

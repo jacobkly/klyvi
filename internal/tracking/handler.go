@@ -35,7 +35,7 @@ func (a *API) Add(w http.ResponseWriter, r *http.Request) {
 
 	entry, err := a.service.Add(r.Context(), userID, req)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -65,7 +65,7 @@ func (a *API) Update(w http.ResponseWriter, r *http.Request) {
 
 	entry, err := a.service.Update(r.Context(), userID, mediaID, req)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		respondError(w, err)
 		return
 	}
 	if entry == nil {
@@ -93,7 +93,7 @@ func (a *API) Delete(w http.ResponseWriter, r *http.Request) {
 
 	deleted, err := a.service.Delete(r.Context(), userID, mediaID)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 	if !deleted {
@@ -129,7 +129,7 @@ func (a *API) ResetScores(w http.ResponseWriter, r *http.Request) {
 
 	affected, err := a.service.ResetScores(r.Context(), userID, req.MediaType)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -155,7 +155,7 @@ func (a *API) DeleteList(w http.ResponseWriter, r *http.Request) {
 
 	affected, err := a.service.DeleteList(r.Context(), userID, req.MediaType)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -183,7 +183,7 @@ func (a *API) List(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := a.service.List(r.Context(), userID, filters)
 	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, err.Error())
+		respondError(w, err)
 		return
 	}
 	// Guarantee a JSON array (not null) for callers; OpenAPI declares the
