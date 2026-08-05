@@ -1,6 +1,7 @@
 package reco
 
 import (
+	"log"
 	"net/http"
 
 	"klyvi-api/internal/platform/http/middleware"
@@ -27,7 +28,8 @@ func (a *API) Feed(w http.ResponseWriter, r *http.Request) {
 
 	scored, err := a.orch.Feed(r.Context(), userID)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("reco: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	// Guarantee a JSON array, never null, matching the documented shape.

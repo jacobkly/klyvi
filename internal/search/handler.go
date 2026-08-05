@@ -1,6 +1,7 @@
 package search
 
 import (
+	"log"
 	"net/http"
 
 	"klyvi-api/internal/platform/http/middleware"
@@ -26,7 +27,8 @@ func (a *API) GetSearchResult(w http.ResponseWriter, r *http.Request) {
 
 	searchResult, err := a.service.GetSearchResult(r.Context(), searchType, query)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("search: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
