@@ -115,10 +115,14 @@ func DefaultConfig() Config {
 		BaseImpression: -0.05,
 		HalfLifeDays:   120,
 
+		// Weights tuned by the leave-one-out harness over coherent tastes
+		// (docs/plans/reco-quality.md): keyword-weighting beats genre-only
+		// decisively, and a moderate keyword lead (0.9 vs 0.2) maximises
+		// recall without starving genre breadth. Overridable via RECO_* env.
 		NegativeSimWeight: 0.6,
 		QualityFloorVotes: 25,
-		GenreWeight:       0.3,
-		KeywordWeight:     0.6,
+		GenreWeight:       0.2,
+		KeywordWeight:     0.9,
 		EraWeight:         0.1,
 
 		MMRLambda: 0.7,

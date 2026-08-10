@@ -12,6 +12,20 @@ type Conf struct {
 	DB       ConfDB
 	TMDB     ConfTMDB
 	Supabase ConfSupabase
+	Reco     ConfReco
+}
+
+// ConfReco tunes the recommender's Tier 1/2 scoring weights. Defaults are the
+// values that won the offline leave-one-out sweep (docs/plans/reco-quality.md),
+// so the tuned recommender ships with no env config; override any of them to
+// retune in production without a recompile. Keyword weight leading genre is the
+// differentiator — do not flip that without re-running the harness.
+type ConfReco struct {
+	KeywordWeight     float64 `env:"RECO_KEYWORD_WEIGHT,default=0.9"`
+	GenreWeight       float64 `env:"RECO_GENRE_WEIGHT,default=0.2"`
+	EraWeight         float64 `env:"RECO_ERA_WEIGHT,default=0.1"`
+	NegativeSimWeight float64 `env:"RECO_NEGATIVE_WEIGHT,default=0.6"`
+	QualityFloorVotes int     `env:"RECO_QUALITY_FLOOR,default=25"`
 }
 
 type ConfServer struct {

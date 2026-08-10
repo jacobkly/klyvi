@@ -12,15 +12,15 @@ import (
 
 	"klyvi-api/config"
 	"klyvi-api/internal/imports"
+	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
+	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/platform/http/router"
 	"klyvi-api/internal/platform/supabase"
 	"klyvi-api/internal/platform/tmdb"
 	"klyvi-api/internal/rankings"
-	"klyvi-api/internal/interactions"
-	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/search"
 	"klyvi-api/internal/tracking"
@@ -88,16 +88,23 @@ func main() {
 		imports.NewRepository(dbConn), cachedTMDB, trackingService, interactionsService)
 
 	// Recommender orchestrator. Adapters wrap movies.Repository + raw SQL
-	// against interactions/media_list to feed the orchestrator. Tier 0 is
-	// always registered; Tier 1/2 land in subsequent slices.
+	// against interactions/media_list to feed the orchestrator. Scoring
+	// weights come from the harness-tuned defaults, overridable via RECO_* env.
+	recoCfg := reco.DefaultConfig()
+	recoCfg.KeywordWeight = cfg.Reco.KeywordWeight
+	recoCfg.GenreWeight = cfg.Reco.GenreWeight
+	recoCfg.EraWeight = cfg.Reco.EraWeight
+	recoCfg.NegativeSimWeight = cfg.Reco.NegativeSimWeight
+	recoCfg.QualityFloorVotes = cfg.Reco.QualityFloorVotes
+
 	recoOrchestrator := reco.NewOrchestrator(
 		newCatalogAdapter(movieRepo),
 		newSignalAdapter(dbConn),
 		newSeenAdapter(dbConn),
-		reco.DefaultConfig(),
+		recoCfg,
 	).WithTier0(reco.NewTier0()).
-		WithTier1(reco.NewTier1(reco.DefaultConfig())).
-		WithTier2(reco.NewTier2(reco.DefaultConfig(), newProfileAdapter(dbConn)))
+		WithTier1(reco.NewTier1(recoCfg)).
+		WithTier2(reco.NewTier2(recoCfg, newProfileAdapter(dbConn)))
 
 	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
 		JWKSURL:  cfg.Supabase.JWKSURL,
