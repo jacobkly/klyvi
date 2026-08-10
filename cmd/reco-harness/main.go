@@ -60,6 +60,15 @@ func main() {
 
 	catalog := newCatalogAdapter(movieRepo)
 
+	// Diagnostics: the size of the eligible candidate universe. A small or
+	// mainstream-only catalog caps recommendation quality regardless of the
+	// scorer, so this number is the first thing to read alongside recall@K.
+	if n, err := catalogSize(context.Background(), dbConn); err != nil {
+		log.Printf("catalog size: %v", err)
+	} else {
+		log.Printf("catalog: %d eligible movies (vote_count > 0)", n)
+	}
+
 	if *syntheticUsers > 0 {
 		ids, err := seedSyntheticUsers(context.Background(), dbConn, catalog, *syntheticUsers, *syntheticLikes)
 		if err != nil {
@@ -126,6 +135,19 @@ func main() {
 	}
 }
 
+// catalogSize counts the eligible candidate universe — the same filter
+// ListCandidatesForReco applies — so the harness can report how many movies
+// the recommender actually has to choose from.
+func catalogSize(ctx context.Context, dbConn *sqlx.DB) (int, error) {
+	var n int
+	err := dbConn.GetContext(ctx, &n, `
+		select count(*) from movies m
+		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
+		where m.vote_count > 0
+	`)
+	return n, err
+}
+
 // listUsersWithSignal returns user UUIDs with at least minInteractions rows.
 func listUsersWithSignal(ctx context.Context, dbConn *sqlx.DB, minInteractions int) ([]uuid.UUID, error) {
 	var ids []uuid.UUID
@@ -149,7 +171,7 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, c
 
 	// Identify "positive" items: rated>=70 OR logged.
 	type liked struct {
-		MediaID int
+		MediaID  int
 		IdxInArr int
 	}
 	var likes []liked
@@ -315,6 +337,20 @@ func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapt
 	}
 
 	cands, _ := catalog.SampleMovieCandidates(ctx, cfg.FeedSize*20)
+
+	// Diagnostics: how much signal actually resolved to features, and how big
+	// the candidate pool is. Low feature-resolution means the user's liked
+	// items aren't in the cache (weak signal); a small pool means the feed is
+	// scored against too few movies to feel personal.
+	resolved := 0
+	for _, li := range user.Liked {
+		if li.Features != nil {
+			resolved++
+		}
+	}
+	fmt.Printf("  [diag] liked=%d features_resolved=%d candidate_pool=%d\n",
+		len(user.Liked), resolved, len(cands))
+
 	scored, _ := scorer.Score(ctx, user, cands)
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
 	ranked := reco.MMRReorder(scored, k, cfg.MMRLambda)
