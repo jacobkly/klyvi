@@ -1,10 +1,25 @@
-// seed-catalog walks TMDB's popular + top_rated movie lists and forces the
-// existing movies.Service cache+persist path to populate the local `movies`
-// table with detail rows (including keywords and credits via
-// append_to_response). Run once after a fresh deploy so Tier 0 of the
-// recommender has content to recommend over.
+// seed-catalog populates the local `movies` cache by forcing the existing
+// movies.Service fetch+persist path over a broad set of TMDB movie ids, so
+// the recommender has a large, varied candidate pool to work over (not just
+// the few hundred most globally-popular films).
 //
-//	go run ./cmd/seed-catalog
+// It draws ids from three sources, deduped:
+//   - /movie/popular      — the mainstream base
+//   - /movie/top_rated    — the critically-strong base
+//   - /discover/movie      — a sweep across genre × decade, sorted by
+//     vote_count within each bucket, which is what
+//     produces real spread (e.g. most-voted 1980s
+//     horror, most-voted 2000s romance) instead of
+//     more blockbusters.
+//
+// Every collected id then goes through movies.Service.GetMovieById, which is
+// the same cache-then-fetch path the live API uses — so each row lands with
+// keywords and credits via append_to_response. The run is idempotent: ids
+// already cached are served from the DB and not re-fetched, so re-running to
+// top up (or resuming after an interruption) is cheap.
+//
+//	go run ./cmd/seed-catalog                  # default ~10k sweep
+//	go run ./cmd/seed-catalog -max-movies 3000 # smaller run
 package main
 
 import (
@@ -23,9 +38,53 @@ import (
 	"klyvi-api/internal/platform/tmdb"
 )
 
+// discoverGenres are TMDB's movie genre ids. These ids are stable; the sweep
+// walks each one across every decade window to spread the catalog across
+// tastes rather than piling up on whatever is globally popular. (TV Movie is
+// deliberately omitted — not a theatrical catalog.)
+var discoverGenres = []int{
+	28,    // Action
+	12,    // Adventure
+	16,    // Animation
+	35,    // Comedy
+	80,    // Crime
+	99,    // Documentary
+	18,    // Drama
+	10751, // Family
+	14,    // Fantasy
+	36,    // History
+	27,    // Horror
+	10402, // Music
+	9648,  // Mystery
+	10749, // Romance
+	878,   // Science Fiction
+	53,    // Thriller
+	10752, // War
+	37,    // Western
+}
+
+// decadeWindow is an inclusive primary-release-date range for the discover
+// sweep. Pre-1950 films are sparse and low-vote, so the oldest bucket is a
+// wider 1950–1969 span.
+type decadeWindow struct{ gte, lte string }
+
+var decadeWindows = []decadeWindow{
+	{"1950-01-01", "1969-12-31"},
+	{"1970-01-01", "1979-12-31"},
+	{"1980-01-01", "1989-12-31"},
+	{"1990-01-01", "1999-12-31"},
+	{"2000-01-01", "2009-12-31"},
+	{"2010-01-01", "2019-12-31"},
+	{"2020-01-01", "2025-12-31"},
+}
+
 func main() {
 	popularPages := flag.Int("popular-pages", 15, "number of /movie/popular pages to walk")
 	topRatedPages := flag.Int("top-rated-pages", 10, "number of /movie/top_rated pages to walk")
+	discoverPages := flag.Int("discover-pages", 8, "pages per (genre × decade) discover bucket")
+	minVotes := flag.Int("min-votes", 50, "discover vote_count.gte floor (keeps some quality without staying mainstream-only)")
+	maxMovies := flag.Int("max-movies", 10000, "stop collecting ids once this many unique ids are gathered (0 = no cap)")
+	timeout := flag.Duration("timeout", 3*time.Hour, "overall run timeout")
 	flag.Parse()
 
 	if err := godotenv.Load(".env.dev"); err != nil {
@@ -44,17 +103,17 @@ func main() {
 	repo := movies.NewRepository(dbConn)
 	svc := movies.NewService(client, repo)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	ids, err := collectIDs(ctx, client, *popularPages, *topRatedPages)
+	ids, err := collectIDs(client, *popularPages, *topRatedPages, *discoverPages, *minVotes, *maxMovies)
 	if err != nil {
 		log.Fatalf("collect ids: %v", err)
 	}
-	log.Printf("collected %d unique movie ids from popular/top_rated", len(ids))
+	log.Printf("collected %d unique movie ids (popular+top_rated+discover)", len(ids))
 
 	start := time.Now()
-	var seeded, skipped, failed int
+	var seeded, failed int
 	for i, id := range ids {
 		if _, err := svc.GetMovieById(ctx, id, "tmdb"); err != nil {
 			log.Printf("[%d/%d] id=%d: %v", i+1, len(ids), id, err)
@@ -65,59 +124,102 @@ func main() {
 		// without instrumenting the service is hard, so we just count
 		// "processed successfully" and let the row-count delta speak.
 		seeded++
-		if (i+1)%50 == 0 {
+		if (i+1)%100 == 0 {
 			log.Printf("seeded %d/%d (%.0fs elapsed)", i+1, len(ids), time.Since(start).Seconds())
 		}
 	}
-	_ = skipped
 
 	log.Printf("done: %d processed, %d failed in %s", seeded, failed, time.Since(start))
 	os.Exit(0)
 }
 
-// collectIDs returns a deduplicated, ordered list of TMDB movie ids drawn
-// from /movie/popular and /movie/top_rated. Pages 1..popularPages and
-// 1..topRatedPages respectively.
-func collectIDs(ctx context.Context, client *tmdb.Client, popularPages, topRatedPages int) ([]int, error) {
+// collectIDs returns a deduplicated, ordered list of TMDB movie ids drawn from
+// popular, top_rated, and a genre × decade discover sweep. Collection stops
+// early once maxMovies unique ids are gathered.
+func collectIDs(client *tmdb.Client, popularPages, topRatedPages, discoverPages, minVotes, maxMovies int) ([]int, error) {
 	seen := make(map[int]bool)
 	var ids []int
 
-	walk := func(endpoint string, pages int) error {
-		for p := 1; p <= pages; p++ {
-			raw, err := client.TMDBRequest("GET",
-				fmt.Sprintf("%s?language=en-US&page=%d", endpoint, p), nil)
-			if err != nil {
-				return fmt.Errorf("%s page %d: %w", endpoint, p, err)
-			}
-			results, ok := raw["results"].([]interface{})
+	capped := func() bool { return maxMovies > 0 && len(ids) >= maxMovies }
+
+	add := func(raw map[string]interface{}) {
+		results, ok := raw["results"].([]interface{})
+		if !ok {
+			return
+		}
+		for _, r := range results {
+			item, ok := r.(map[string]interface{})
 			if !ok {
-				return fmt.Errorf("%s page %d: missing results array", endpoint, p)
+				continue
 			}
-			for _, r := range results {
-				item, ok := r.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				idF, ok := item["id"].(float64)
-				if !ok {
-					continue
-				}
-				id := int(idF)
-				if seen[id] {
-					continue
-				}
-				seen[id] = true
-				ids = append(ids, id)
+			idF, ok := item["id"].(float64)
+			if !ok {
+				continue
+			}
+			id := int(idF)
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+
+	// walk pages 1..pages for a bucket, stopping at the cap or when TMDB
+	// reports no further pages (narrow discover buckets are often 1-2 pages).
+	walk := func(build func(page int) string, pages int) error {
+		for p := 1; p <= pages; p++ {
+			if capped() {
+				return nil
+			}
+			raw, err := client.TMDBRequest("GET", build(p), nil)
+			if err != nil {
+				return err
+			}
+			add(raw)
+			if tp, ok := raw["total_pages"].(float64); ok && float64(p) >= tp {
+				break
 			}
 		}
 		return nil
 	}
 
-	if err := walk("/movie/popular", popularPages); err != nil {
-		return nil, err
+	if err := walk(func(p int) string {
+		return fmt.Sprintf("/movie/popular?language=en-US&page=%d", p)
+	}, popularPages); err != nil {
+		return nil, fmt.Errorf("popular: %w", err)
 	}
-	if err := walk("/movie/top_rated", topRatedPages); err != nil {
-		return nil, err
+	if err := walk(func(p int) string {
+		return fmt.Sprintf("/movie/top_rated?language=en-US&page=%d", p)
+	}, topRatedPages); err != nil {
+		return nil, fmt.Errorf("top_rated: %w", err)
 	}
+
+	for _, g := range discoverGenres {
+		if capped() {
+			break
+		}
+		for _, w := range decadeWindows {
+			if capped() {
+				break
+			}
+			genre, window := g, w
+			if err := walk(func(p int) string {
+				return discoverPath(genre, window, minVotes, p)
+			}, discoverPages); err != nil {
+				return nil, fmt.Errorf("discover genre=%d %s..%s: %w", genre, window.gte, window.lte, err)
+			}
+		}
+	}
+
 	return ids, nil
+}
+
+func discoverPath(genre int, w decadeWindow, minVotes, page int) string {
+	return fmt.Sprintf(
+		"/discover/movie?language=en-US&include_adult=false&sort_by=vote_count.desc"+
+			"&vote_count.gte=%d&with_genres=%d"+
+			"&primary_release_date.gte=%s&primary_release_date.lte=%s&page=%d",
+		minVotes, genre, w.gte, w.lte, page,
+	)
 }
