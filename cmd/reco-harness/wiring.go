@@ -36,6 +36,14 @@ func (a *catalogAdapter) CandidatesByMediaIDs(ctx context.Context, mediaIDs []in
 	return rowsToCandidates(rows), nil
 }
 
+func (a *catalogAdapter) CandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]reco.Candidate, error) {
+	rows, err := a.repo.ListCandidatesByTaste(ctx, genreIDs, keywordIDs, minVotes, limit)
+	if err != nil {
+		return nil, err
+	}
+	return rowsToCandidates(rows), nil
+}
+
 func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 	cands := make([]reco.Candidate, 0, len(rows))
 	for _, row := range rows {

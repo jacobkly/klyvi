@@ -27,9 +27,15 @@ const (
 // extension) will satisfy it.
 type CatalogRepository interface {
 	// SampleMovieCandidates returns up to N candidates from the movies cache
-	// suitable for ranking. Tier 0 just pages over this; Tier 1 narrows by
-	// pre-filter.
+	// ranked by popularity. This is the cold-start pool — what a zero-signal
+	// user (Tier 0) sees, and the top-up when taste retrieval is thin.
 	SampleMovieCandidates(ctx context.Context, limit int) ([]Candidate, error)
+
+	// CandidatesByTaste returns up to `limit` candidates that share at least
+	// one of the given genre/keyword ids, above the vote floor. This is the
+	// taste-relevant pool for users with signal — the fix for feeds that
+	// otherwise only ever rank the globally most-popular movies.
+	CandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]Candidate, error)
 
 	// CandidatesByMediaIDs returns Candidates for a specific set of media_ids,
 	// used to load features for items in the user's interaction history.
@@ -136,7 +142,12 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset
 		return nil, err
 	}
 
-	cands, err := o.catalog.SampleMovieCandidates(ctx, candidatePoolSize)
+	// Build a fixed-size candidate pool: taste-relevant for users with signal,
+	// popularity for cold users, topped up so a thin taste match never starves
+	// the feed. Size is independent of the requested page so pagination stays
+	// stable — every page ranks the same pool, and MMR's greedy selection is
+	// prefix-stable, so page 2 continues page 1 without dupes.
+	cands, err := BuildCandidatePool(ctx, o.catalog, user.Liked, o.cfg)
 	if err != nil {
 		return nil, err
 	}

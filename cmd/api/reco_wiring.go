@@ -39,6 +39,14 @@ func (a *catalogAdapter) CandidatesByMediaIDs(ctx context.Context, mediaIDs []in
 	return rowsToCandidates(rows), nil
 }
 
+func (a *catalogAdapter) CandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]reco.Candidate, error) {
+	rows, err := a.repo.ListCandidatesByTaste(ctx, genreIDs, keywordIDs, minVotes, limit)
+	if err != nil {
+		return nil, err
+	}
+	return rowsToCandidates(rows), nil
+}
+
 // LookupReasonNames satisfies reco.CatalogRepository — two cheap JSONB
 // scans over the movies cache, one for genres and one for keywords.
 // Each is wrapped in its own context so a failure on one doesn't poison

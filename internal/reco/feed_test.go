@@ -20,6 +20,10 @@ func (s *stubCatalog) SampleMovieCandidates(ctx context.Context, limit int) ([]C
 	return s.cands, nil
 }
 
+func (s *stubCatalog) CandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]Candidate, error) {
+	return s.cands, nil
+}
+
 func (s *stubCatalog) CandidatesByMediaIDs(ctx context.Context, ids []int) ([]Candidate, error) {
 	return nil, nil
 }

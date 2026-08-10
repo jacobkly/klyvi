@@ -41,6 +41,7 @@ func main() {
 	syntheticUsers := flag.Int("synthetic-users", 0, "if >0, seed N synthetic users with random liked movies before evaluating")
 	syntheticLikes := flag.Int("synthetic-likes", 15, "number of liked items per synthetic user")
 	feedSize := flag.Int("feed-size", 50, "feed K used by the harness; recall@K/MRR computed up to K")
+	cleanSynthetic := flag.Bool("clean-synthetic", false, "delete synthetic harness users (username like 'harness_%') and their interactions, then exit")
 	flag.Parse()
 
 	if err := godotenv.Load(".env.dev"); err != nil {
@@ -53,6 +54,15 @@ func main() {
 		log.Fatalf("db: %v", err)
 	}
 	defer dbConn.Close()
+
+	if *cleanSynthetic {
+		n, err := deleteSyntheticUsers(context.Background(), dbConn)
+		if err != nil {
+			log.Fatalf("clean synthetic: %v", err)
+		}
+		log.Printf("deleted %d synthetic users", n)
+		os.Exit(0)
+	}
 
 	movieRepo := movies.NewRepository(dbConn)
 	recoCfg := reco.DefaultConfig()
@@ -148,6 +158,24 @@ func catalogSize(ctx context.Context, dbConn *sqlx.DB) (int, error) {
 	return n, err
 }
 
+// deleteSyntheticUsers removes users seeded by -synthetic-users (username
+// prefix "harness_") and their interactions, so they don't pollute a real
+// evaluation. Interactions are deleted first in case the FK has no cascade.
+// The underscore in the prefix is escaped so LIKE treats it literally.
+func deleteSyntheticUsers(ctx context.Context, dbConn *sqlx.DB) (int64, error) {
+	if _, err := dbConn.ExecContext(ctx, `
+		delete from interactions
+		where user_id in (select id from users where username like 'harness\_%')
+	`); err != nil {
+		return 0, err
+	}
+	res, err := dbConn.ExecContext(ctx, `delete from users where username like 'harness\_%'`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // listUsersWithSignal returns user UUIDs with at least minInteractions rows.
 func listUsersWithSignal(ctx context.Context, dbConn *sqlx.DB, minInteractions int) ([]uuid.UUID, error) {
 	var ids []uuid.UUID
@@ -227,7 +255,7 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, c
 			user.Disliked = append(user.Disliked, reco.SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
 		}
 
-		cands, err := catalog.SampleMovieCandidates(ctx, cfg.FeedSize*20)
+		cands, err := reco.BuildCandidatePool(ctx, catalog, user.Liked, cfg)
 		if err != nil {
 			return 0, 0, 0, 0, err
 		}
@@ -336,7 +364,7 @@ func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapt
 		user.Liked = append(user.Liked, reco.SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
 	}
 
-	cands, _ := catalog.SampleMovieCandidates(ctx, cfg.FeedSize*20)
+	cands, _ := reco.BuildCandidatePool(ctx, catalog, user.Liked, cfg)
 
 	// Diagnostics: how much signal actually resolved to features, and how big
 	// the candidate pool is. Low feature-resolution means the user's liked
