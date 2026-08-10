@@ -42,6 +42,13 @@ func main() {
 	syntheticLikes := flag.Int("synthetic-likes", 15, "number of liked items per synthetic user")
 	feedSize := flag.Int("feed-size", 50, "feed K used by the harness; recall@K/MRR computed up to K")
 	cleanSynthetic := flag.Bool("clean-synthetic", false, "delete synthetic harness users (username like 'harness_%') and their interactions, then exit")
+	coherent := flag.Bool("coherent-tastes", false, "seed curated coherent-taste users (slow-burn, animation, cerebral-scifi) before evaluating")
+	// Config overrides for recompile-free weight sweeps (<0 = keep default).
+	kwWeight := flag.Float64("keyword-weight", -1, "override reco KeywordWeight")
+	gWeight := flag.Float64("genre-weight", -1, "override reco GenreWeight")
+	eWeight := flag.Float64("era-weight", -1, "override reco EraWeight")
+	negWeight := flag.Float64("neg-weight", -1, "override reco NegativeSimWeight")
+	qFloor := flag.Int("quality-floor", -1, "override reco QualityFloorVotes")
 	flag.Parse()
 
 	if err := godotenv.Load(".env.dev"); err != nil {
@@ -67,6 +74,24 @@ func main() {
 	movieRepo := movies.NewRepository(dbConn)
 	recoCfg := reco.DefaultConfig()
 	recoCfg.FeedSize = *feedSize
+	if *kwWeight >= 0 {
+		recoCfg.KeywordWeight = *kwWeight
+	}
+	if *gWeight >= 0 {
+		recoCfg.GenreWeight = *gWeight
+	}
+	if *eWeight >= 0 {
+		recoCfg.EraWeight = *eWeight
+	}
+	if *negWeight >= 0 {
+		recoCfg.NegativeSimWeight = *negWeight
+	}
+	if *qFloor >= 0 {
+		recoCfg.QualityFloorVotes = *qFloor
+	}
+	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d",
+		recoCfg.KeywordWeight, recoCfg.GenreWeight, recoCfg.EraWeight,
+		recoCfg.NegativeSimWeight, recoCfg.QualityFloorVotes)
 
 	catalog := newCatalogAdapter(movieRepo)
 
@@ -85,6 +110,14 @@ func main() {
 			log.Fatalf("seed synthetic: %v", err)
 		}
 		log.Printf("seeded %d synthetic users", len(ids))
+	}
+
+	if *coherent {
+		ids, err := seedCoherentTastes(context.Background(), dbConn)
+		if err != nil {
+			log.Fatalf("seed coherent tastes: %v", err)
+		}
+		log.Printf("seeded %d coherent-taste users", len(ids))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
@@ -220,6 +253,39 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, c
 
 	scorer := reco.NewTier1(cfg)
 
+	// Preload features for every interacted movie, and build the candidate
+	// pool once from the full taste. Both are (near-)constant across the
+	// leave-one-out trials, so rebuilding them per trial just multiplies DB
+	// round-trips. Holding the pool fixed across trials — and across weight
+	// configs — is exactly what a fair comparison of scorer weights needs.
+	allIDs := make([]int, 0, len(interactions))
+	for _, it := range interactions {
+		if it.MediaType == "movie" {
+			allIDs = append(allIDs, it.MediaID)
+		}
+	}
+	feats, err := catalog.CandidatesByMediaIDs(ctx, allIDs)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	featByID := map[int]*reco.MediaFeatures{}
+	for _, c := range feats {
+		if c.Features != nil {
+			featByID[c.MediaID] = c.Features
+		}
+	}
+
+	fullSignal := reco.AggregateSignal(cfg, interactions)
+	fullLiked, _ := reco.SplitLikedDisliked(fullSignal)
+	fullLikedItems := make([]reco.SignalItem, 0, len(fullLiked))
+	for id, w := range fullLiked {
+		fullLikedItems = append(fullLikedItems, reco.SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
+	}
+	pool, err := reco.BuildCandidatePool(ctx, catalog, fullLikedItems, cfg)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+
 	var hits10, hits50 int
 	var mrrSum float64
 	for _, hidden := range likes {
@@ -229,24 +295,6 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, c
 		signal := reco.AggregateSignal(cfg, held)
 		likedMap, dislikedMap := reco.SplitLikedDisliked(signal)
 
-		ids := make([]int, 0, len(likedMap)+len(dislikedMap))
-		for id := range likedMap {
-			ids = append(ids, id)
-		}
-		for id := range dislikedMap {
-			ids = append(ids, id)
-		}
-		feats, err := catalog.CandidatesByMediaIDs(ctx, ids)
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		featByID := map[int]*reco.MediaFeatures{}
-		for _, c := range feats {
-			if c.Features != nil {
-				featByID[c.MediaID] = c.Features
-			}
-		}
-
 		user := &reco.UserContext{UserID: userID}
 		for id, w := range likedMap {
 			user.Liked = append(user.Liked, reco.SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
@@ -255,16 +303,14 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, c
 			user.Disliked = append(user.Disliked, reco.SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
 		}
 
-		cands, err := reco.BuildCandidatePool(ctx, catalog, user.Liked, cfg)
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
+		// Filter held-in items from the fixed pool; the held-out item stays
+		// and must be recovered by scoring alone.
 		seenIDs := map[int]bool{}
 		for _, it := range held {
 			seenIDs[it.MediaID] = true
 		}
-		filtered := cands[:0]
-		for _, c := range cands {
+		filtered := make([]reco.Candidate, 0, len(pool))
+		for _, c := range pool {
 			if !seenIDs[c.MediaID] {
 				filtered = append(filtered, c)
 			}
