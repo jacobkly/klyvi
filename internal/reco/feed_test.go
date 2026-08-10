@@ -11,9 +11,9 @@ import (
 // and a no-op from CandidatesByMediaIDs. Used for unit testing the
 // orchestrator's response-shaping behaviour without a real DB.
 type stubCatalog struct {
-	cands         []Candidate
-	genreNames    map[int]string
-	keywordNames  map[int]string
+	cands        []Candidate
+	genreNames   map[int]string
+	keywordNames map[int]string
 }
 
 func (s *stubCatalog) SampleMovieCandidates(ctx context.Context, limit int) ([]Candidate, error) {
@@ -71,7 +71,7 @@ func TestFeed_PopulatesDisplayFields(t *testing.T) {
 		DefaultConfig(),
 	).WithTier0(NewTier0())
 
-	out, err := orch.Feed(context.Background(), uuid.New())
+	out, err := orch.Feed(context.Background(), uuid.New(), 30, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestFeed_ResolvesReasonNames(t *testing.T) {
 	orch := NewOrchestrator(cat2, sig, stubSeen{}, DefaultConfig()).
 		WithTier1(NewTier1(DefaultConfig()))
 
-	out, err := orch.Feed(context.Background(), uuid.New())
+	out, err := orch.Feed(context.Background(), uuid.New(), 30, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
@@ -212,6 +212,68 @@ func TestTier0_EmptyReasonsIsArrayNotNil(t *testing.T) {
 	}
 	if scored[0].Reasons == nil {
 		t.Error("Tier 0 Reasons should be []Reason{}, not nil — JSON contract")
+	}
+}
+
+// Verifies feed pagination: each page is the matching contiguous slice of the
+// full feed, so paging with limit/offset never drops or duplicates an item,
+// and an offset past the end returns an empty page rather than erroring.
+func TestFeed_PaginationIsStableAndContiguous(t *testing.T) {
+	genres := []int{28, 12, 16, 35, 80} // distinct primary genres → no genre-cap drops
+	cands := make([]Candidate, 5)
+	for i := range cands {
+		cands[i] = Candidate{
+			MediaID:   i + 1,
+			MediaType: "movie",
+			TMDBID:    i + 1,
+			Features: &MediaFeatures{
+				MediaID:     i + 1,
+				MediaType:   "movie",
+				GenreIDs:    []int{genres[i]},
+				VoteAverage: 9.0 - 0.5*float64(i),
+				VoteCount:   1000,
+			},
+		}
+	}
+
+	orch := NewOrchestrator(&stubCatalog{cands: cands}, stubSignal{}, stubSeen{}, DefaultConfig()).
+		WithTier0(NewTier0())
+
+	full, err := orch.Feed(context.Background(), uuid.New(), 10, 0)
+	if err != nil {
+		t.Fatalf("Feed full: %v", err)
+	}
+	if len(full) != 5 {
+		t.Fatalf("expected 5 items in the full feed, got %d", len(full))
+	}
+
+	for off := 0; off < 6; off += 2 {
+		page, err := orch.Feed(context.Background(), uuid.New(), 2, off)
+		if err != nil {
+			t.Fatalf("Feed offset=%d: %v", off, err)
+		}
+		end := off + 2
+		if end > len(full) {
+			end = len(full)
+		}
+		want := full[off:end]
+		if len(page) != len(want) {
+			t.Fatalf("offset=%d: got %d items, want %d", off, len(page), len(want))
+		}
+		for i := range want {
+			if page[i].MediaID != want[i].MediaID {
+				t.Errorf("offset=%d pos=%d: got media_id=%d, want %d",
+					off, i, page[i].MediaID, want[i].MediaID)
+			}
+		}
+	}
+
+	empty, err := orch.Feed(context.Background(), uuid.New(), 2, 10)
+	if err != nil {
+		t.Fatalf("Feed past-end page: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("expected an empty page for offset past the end, got %d items", len(empty))
 	}
 }
 

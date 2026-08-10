@@ -7,6 +7,20 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	// maxFeedDepth bounds how deep pagination can go — the recommender ranks
+	// at most this many items per user, so an offset past it returns an empty
+	// page. Beyond a few pages personalized ranking is mostly noise, so this
+	// also caps per-request scoring work.
+	maxFeedDepth = 200
+
+	// candidatePoolSize is the fixed number of candidates sampled per feed
+	// request. It is constant (not page-dependent) on purpose: every page
+	// ranks the same pool, so MMR's prefix-stable greedy order lets page 2
+	// continue page 1 without dupes.
+	candidatePoolSize = maxFeedDepth * 6
+)
+
 // CatalogRepository is the read surface the orchestrator uses to pull
 // candidates and feature data from the movies cache. The reco package
 // declares the interface; the concrete movies.Repository (Phase 4
@@ -86,7 +100,21 @@ func (o *Orchestrator) WithTier2(s Scorer) *Orchestrator { o.tier2 = s; return o
 //   - >= N interactions AND Tier 2 ready → Tier 2 (taste profile).
 //
 // Filtering (already-seen) and diversification wrap whichever tier runs.
-func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID) ([]Scored, error) {
+func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Scored, error) {
+	if limit <= 0 {
+		limit = o.cfg.FeedSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= maxFeedDepth {
+		return []Scored{}, nil
+	}
+	want := offset + limit
+	if want > maxFeedDepth {
+		want = maxFeedDepth
+	}
+
 	interactions, err := o.signal.ListByUser(ctx, userID, 0)
 	if err != nil {
 		return nil, err
@@ -108,7 +136,7 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID) ([]Scored, er
 		return nil, err
 	}
 
-	cands, err := o.catalog.SampleMovieCandidates(ctx, o.cfg.FeedSize*10)
+	cands, err := o.catalog.SampleMovieCandidates(ctx, candidatePoolSize)
 	if err != nil {
 		return nil, err
 	}
@@ -130,15 +158,26 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID) ([]Scored, er
 	// MMR rerank trades a little relevance for a noticeably more varied
 	// feed. Tier 0 candidates have nil Features in the synthetic test
 	// path, in which case candidateSimilarity returns 0 and MMRReorder
-	// degenerates to plain score order.
-	ranked := MMRReorder(scored, o.cfg.FeedSize, o.cfg.MMRLambda)
+	// degenerates to plain score order. Rank down to `want` (the deepest
+	// item the requested page needs); MMR's greedy order is prefix-stable,
+	// so ranking deeper never disturbs earlier pages.
+	ranked := MMRReorder(scored, want, o.cfg.MMRLambda)
 
-	// Resolve reason names. Done once over the entire feed instead of
-	// per-candidate so the lookup is a single DB round-trip regardless
-	// of feed size.
-	o.resolveReasonNames(ctx, ranked)
+	// Slice the requested page out of the ranked list.
+	if offset >= len(ranked) {
+		return []Scored{}, nil
+	}
+	end := offset + limit
+	if end > len(ranked) {
+		end = len(ranked)
+	}
+	page := ranked[offset:end]
 
-	return ranked, nil
+	// Resolve reason names for the returned page only — one DB round-trip
+	// regardless of page size, and we never pay for items we don't return.
+	o.resolveReasonNames(ctx, page)
+
+	return page, nil
 }
 
 // resolveReasonNames mutates the scored slice, filling in Reason.Name
