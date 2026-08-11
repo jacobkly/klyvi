@@ -41,6 +41,7 @@ func main() {
 	syntheticUsers := flag.Int("synthetic-users", 0, "if >0, seed N synthetic users with random liked movies before evaluating")
 	syntheticLikes := flag.Int("synthetic-likes", 15, "number of liked items per synthetic user")
 	feedSize := flag.Int("feed-size", 50, "feed K used by the harness; recall@K/MRR computed up to K")
+	maxTrials := flag.Int("max-trials", 60, "cap leave-one-out trials per user; larger histories are evenly subsampled (per-trial MMR is the cost)")
 	cleanSynthetic := flag.Bool("clean-synthetic", false, "delete synthetic harness users (username like 'harness_%') and their interactions, then exit")
 	coherent := flag.Bool("coherent-tastes", false, "seed curated coherent-taste users (slow-burn, animation, cerebral-scifi) before evaluating")
 	// Config overrides for recompile-free weight sweeps (<0 = keep default).
@@ -140,7 +141,7 @@ func main() {
 	)
 
 	for _, uid := range users {
-		hits10, hits50, mrr, trials, err := runUserLOO(ctx, dbConn, catalog, recoCfg, uid)
+		hits10, hits50, mrr, trials, err := runUserLOO(ctx, dbConn, catalog, recoCfg, uid, *maxTrials)
 		if err != nil {
 			log.Printf("user %s LOO: %v", uid, err)
 			continue
@@ -224,7 +225,7 @@ func listUsersWithSignal(ctx context.Context, dbConn *sqlx.DB, minInteractions i
 // runUserLOO runs leave-one-out for one user. For each item the user
 // "liked" (rated >=70 or logged), hide it, run the recommender against
 // the rest, and check if the hidden item came back in the top-K.
-func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, cfg reco.Config, userID uuid.UUID) (recall10, recall50, mrr float64, trials int, err error) {
+func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, cfg reco.Config, userID uuid.UUID, maxTrials int) (recall10, recall50, mrr float64, trials int, err error) {
 	interactions, err := loadInteractions(ctx, dbConn, userID)
 	if err != nil {
 		return 0, 0, 0, 0, err
@@ -249,6 +250,19 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, c
 
 	if len(likes) < 5 {
 		return 0, 0, 0, 0, nil
+	}
+
+	// Cap trials for large histories: each trial runs an MMR rerank (O(k²·n)),
+	// so a several-hundred-film taste is intractable in full. An even sample
+	// gives a fair recall@K estimate; the candidate pool below still uses the
+	// full taste.
+	if maxTrials > 0 && len(likes) > maxTrials {
+		step := len(likes) / maxTrials
+		sampled := make([]liked, 0, maxTrials)
+		for i := 0; i < len(likes) && len(sampled) < maxTrials; i += step {
+			sampled = append(sampled, likes[i])
+		}
+		likes = sampled
 	}
 
 	scorer := reco.NewTier1(cfg)
