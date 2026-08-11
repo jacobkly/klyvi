@@ -232,35 +232,63 @@ func (r *Repository) ListCandidatesForReco(ctx context.Context, limit int) ([]Re
 
 // ListCandidatesByTaste returns up to `limit` feed candidates that share at
 // least one genre or keyword id with the user's taste, above the vote floor.
-// Keyword-overlapping rows are ordered first — keyword overlap is the
-// recommender's differentiator, so those candidates must not be crowded out
-// by high-vote genre-only matches — then by vote_count so the pool favours
-// well-regarded titles. Tier 1 re-ranks precisely; this only assembles the
-// pool. The GIN indexes on genre_ids/keyword_ids back the && overlap filters.
+// Keyword-overlapping rows come first — keyword overlap is the recommender's
+// differentiator, so those candidates must not be crowded out by high-vote
+// genre-only matches — then genre-overlapping rows fill the rest. Both are
+// ordered by vote_count so the pool favours well-regarded titles; Tier 1
+// re-ranks precisely, this only assembles the pool.
+//
+// Two GIN-indexed queries, each with a plain vote_count sort, rather than one
+// query with an `order by (keyword_ids && $arr)` recheck: that recheck runs a
+// large array overlap for every matched row and becomes pathologically slow
+// for a user whose taste carries hundreds of keywords.
 func (r *Repository) ListCandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]RecoCandidateRow, error) {
-	if len(genreIDs) == 0 && len(keywordIDs) == 0 {
-		return nil, nil
-	}
-	// Pass non-nil empty slices so the driver encodes '{}'::int[] (a clean
-	// false against &&) rather than NULL when one signal set is absent.
-	if genreIDs == nil {
-		genreIDs = []int{}
-	}
-	if keywordIDs == nil {
-		keywordIDs = []int{}
+	seen := make(map[int]bool)
+	out := make([]RecoCandidateRow, 0, limit)
+	add := func(rows []RecoCandidateRow) {
+		for _, row := range rows {
+			if len(out) >= limit {
+				return
+			}
+			if !seen[row.MediaID] {
+				seen[row.MediaID] = true
+				out = append(out, row)
+			}
+		}
 	}
 
+	if len(keywordIDs) > 0 {
+		rows, err := r.candidatesByOverlap(ctx, "keyword_ids", keywordIDs, minVotes, limit)
+		if err != nil {
+			return nil, err
+		}
+		add(rows)
+	}
+	if len(out) < limit && len(genreIDs) > 0 {
+		rows, err := r.candidatesByOverlap(ctx, "genre_ids", genreIDs, minVotes, limit)
+		if err != nil {
+			return nil, err
+		}
+		add(rows)
+	}
+	return out, nil
+}
+
+// candidatesByOverlap returns up to `limit` movies whose `column` (an int[]
+// with a GIN index — genre_ids or keyword_ids) overlaps ids, above the vote
+// floor, most-voted first. column is a fixed internal identifier, never user
+// input.
+func (r *Repository) candidatesByOverlap(ctx context.Context, column string, ids []int, minVotes, limit int) ([]RecoCandidateRow, error) {
 	var rows []RecoCandidateRow
 	err := r.db.SelectContext(ctx, &rows, `
 		select m.movie_id, mi.media_id, m.title, m.poster_path, m.backdrop_path,
 		       m.genres, m.keywords, m.release_date, m.vote_average, m.vote_count
 		from movies m
 		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
-		where m.vote_count >= $1
-		  and (m.genre_ids && $2::int[] or m.keyword_ids && $3::int[])
-		order by (m.keyword_ids && $3::int[]) desc, m.vote_count desc
-		limit $4
-	`, minVotes, genreIDs, keywordIDs, limit)
+		where m.vote_count >= $1 and m.`+column+` && $2::int[]
+		order by m.vote_count desc
+		limit $3
+	`, minVotes, ids, limit)
 	return rows, err
 }
 
