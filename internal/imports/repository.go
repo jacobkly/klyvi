@@ -80,3 +80,16 @@ func (r *Repository) SetProgress(ctx context.Context, id uuid.UUID, total, match
 	}
 	return nil
 }
+
+// SetUnmatchedTitles records the titles a job could not resolve. Called once
+// at the end — the full set is only known when processing finishes.
+func (r *Repository) SetUnmatchedTitles(ctx context.Context, id uuid.UUID, titles UnmatchedTitles) error {
+	_, err := r.db.ExecContext(ctx, `
+		update imports set unmatched_titles = $2, updated_at = now()
+		where id = $1
+	`, id, titles)
+	if err != nil {
+		return fmt.Errorf("set import unmatched titles: %w", err)
+	}
+	return nil
+}

@@ -17,7 +17,13 @@ type Repo interface {
 	Get(ctx context.Context, userID, id uuid.UUID) (*Import, error)
 	SetStatus(ctx context.Context, id uuid.UUID, status string, errMsg *string) error
 	SetProgress(ctx context.Context, id uuid.UUID, total, matched, unmatched int) error
+	SetUnmatchedTitles(ctx context.Context, id uuid.UUID, titles UnmatchedTitles) error
 }
+
+// maxUnmatchedTitles caps how many unmatched titles are retained for the
+// client to display. The `unmatched` count is always exact; only the listed
+// titles are bounded, so a pathological import can't bloat the row.
+const maxUnmatchedTitles = 200
 
 // TrackAdder writes an imported title into the tracking list.
 type TrackAdder interface {
@@ -102,12 +108,18 @@ func (s *Service) run(ctx context.Context, id, userID uuid.UUID, source Source, 
 
 	total := len(rows)
 	var matched, unmatched int
+	var unmatchedTitles UnmatchedTitles
 	_ = s.repo.SetProgress(ctx, id, total, 0, 0)
 
 	for i, row := range rows {
 		tmdbID := matchRow(s.client, row)
 		if tmdbID == 0 {
 			unmatched++
+			// A title we could not resolve at all — capture it (bounded) so
+			// the client can surface it and let the user find it manually.
+			if len(unmatchedTitles) < maxUnmatchedTitles {
+				unmatchedTitles = append(unmatchedTitles, UnmatchedTitle{Title: row.Title, Year: row.Year})
+			}
 		} else if s.writeMatch(ctx, userID, tmdbID, row.Score) {
 			matched++
 		} else {
@@ -122,6 +134,7 @@ func (s *Service) run(ctx context.Context, id, userID uuid.UUID, source Source, 
 	}
 
 	_ = s.repo.SetProgress(ctx, id, total, matched, unmatched)
+	_ = s.repo.SetUnmatchedTitles(ctx, id, unmatchedTitles)
 	if err := s.repo.SetStatus(ctx, id, StatusDone, nil); err != nil {
 		log.Printf("import %s: could not mark done: %v", id, err)
 	}

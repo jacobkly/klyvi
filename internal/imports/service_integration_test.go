@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +127,21 @@ func TestImport_LetterboxdEndToEnd(t *testing.T) {
 	}
 	if final.Matched+final.Unmatched != final.Total {
 		t.Errorf("matched(%d)+unmatched(%d) != total(%d)", final.Matched, final.Unmatched, final.Total)
+	}
+
+	// The nonsense title is surfaced, not just counted, so the client can show
+	// it and let the user find it manually.
+	if final.Unmatched < 1 {
+		t.Errorf("unmatched = %d, want at least 1", final.Unmatched)
+	}
+	var foundNonsense bool
+	for _, ut := range final.Titles {
+		if strings.Contains(ut.Title, "Zqxwv") {
+			foundNonsense = true
+		}
+	}
+	if !foundNonsense {
+		t.Errorf("unmatched_titles should include the nonsense title, got %+v", final.Titles)
 	}
 
 	// The matched films actually landed as tracking rows.
