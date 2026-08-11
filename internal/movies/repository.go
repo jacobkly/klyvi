@@ -16,10 +16,21 @@ func NewRepository(db *sqlx.DB) *Repository {
 	return &Repository{db: db}
 }
 
+// movieColumns is the explicit column list for reads that scan into Movie.
+// Explicit rather than `select *` so generated columns added by later
+// migrations — genre_ids, keyword_ids (00027), which the Movie struct does not
+// carry — do not break the struct scan.
+const movieColumns = `movie_id, adult, backdrop_path, belongs_to_collection,
+	budget, genres, homepage, imdb_id, original_language, original_title,
+	overview, popularity, poster_path, production_companies,
+	production_countries, release_date, revenue, runtime, spoken_languages,
+	status, tagline, title, video, vote_average, vote_count, keywords, credits,
+	created_at, updated_at`
+
 func (r *Repository) GetByTMDBID(ctx context.Context, tmdbID int) (*Movie, error) {
 	var movie Movie
 	err := r.db.GetContext(ctx, &movie,
-		`select * from movies where movie_id = $1`, tmdbID)
+		`select `+movieColumns+` from movies where movie_id = $1`, tmdbID)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
