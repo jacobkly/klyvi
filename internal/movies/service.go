@@ -97,6 +97,17 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 	return normalized, nil
 }
 
+// EnsureCached fetches and persists a movie's full detail (title, poster,
+// genres, keywords, credits) via the normal cache-then-fetch path if it is not
+// already cached. Callers that only need the catalog row to exist — e.g. the
+// importer, so a matched film renders in the library and carries reco features
+// instead of landing as an "Untitled", signal-less row — use this instead of
+// GetMovieById to avoid coupling to the Movie type. Idempotent.
+func (s *Service) EnsureCached(ctx context.Context, tmdbID int) error {
+	_, err := s.GetMovieById(ctx, tmdbID, "tmdb")
+	return err
+}
+
 func (s *Service) GetMovieRecommendations(id int) (interface{}, error) {
 	endpoint := fmt.Sprintf("/movie/%d/recommendations?language=en-US&page=1", id)
 	recommendations, err := s.client.TMDBRequest("GET", endpoint, nil)

@@ -30,6 +30,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/joho/godotenv"
 
 	"klyvi-api/config"
@@ -85,6 +86,7 @@ func main() {
 	minVotes := flag.Int("min-votes", 50, "discover vote_count.gte floor (keeps some quality without staying mainstream-only)")
 	maxMovies := flag.Int("max-movies", 10000, "stop collecting ids once this many unique ids are gathered (0 = no cap)")
 	timeout := flag.Duration("timeout", 3*time.Hour, "overall run timeout")
+	backfill := flag.Bool("backfill-uncached", false, "instead of the sweep, cache every media_index movie that has no movies row (repairs imported 'Untitled' rows), then exit")
 	flag.Parse()
 
 	if err := godotenv.Load(".env.dev"); err != nil {
@@ -105,6 +107,13 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
+
+	if *backfill {
+		if err := backfillUncached(ctx, dbConn, svc); err != nil {
+			log.Fatalf("backfill: %v", err)
+		}
+		os.Exit(0)
+	}
 
 	ids, err := collectIDs(client, *popularPages, *topRatedPages, *discoverPages, *minVotes, *maxMovies)
 	if err != nil {
@@ -213,6 +222,41 @@ func collectIDs(client *tmdb.Client, popularPages, topRatedPages, discoverPages,
 	}
 
 	return ids, nil
+}
+
+// backfillUncached caches every movie that has a media_index row but no
+// movies-cache row — the rows the importer created before it started caching
+// matched films, which render as "Untitled" and carry no reco features.
+// Idempotent: GetMovieById is cache-then-fetch.
+func backfillUncached(ctx context.Context, dbConn *sqlx.DB, svc *movies.Service) error {
+	var ids []int
+	err := dbConn.SelectContext(ctx, &ids, `
+		select mi.id
+		from media_index mi
+		left join movies m on m.movie_id = mi.id
+		where mi.media_type = 'movie' and m.movie_id is null
+		order by mi.id
+	`)
+	if err != nil {
+		return fmt.Errorf("query uncached: %w", err)
+	}
+	log.Printf("backfill: %d uncached movies to fetch", len(ids))
+
+	start := time.Now()
+	var done, failed int
+	for i, id := range ids {
+		if _, err := svc.GetMovieById(ctx, id, "tmdb"); err != nil {
+			log.Printf("backfill [%d/%d] id=%d: %v", i+1, len(ids), id, err)
+			failed++
+			continue
+		}
+		done++
+		if (i+1)%50 == 0 {
+			log.Printf("backfill %d/%d (%.0fs elapsed)", i+1, len(ids), time.Since(start).Seconds())
+		}
+	}
+	log.Printf("backfill done: %d cached, %d failed in %s", done, failed, time.Since(start))
+	return nil
 }
 
 func discoverPath(genre int, w decadeWindow, minVotes, page int) string {

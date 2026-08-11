@@ -30,15 +30,24 @@ type SignalRecorder interface {
 	Record(ctx context.Context, userID uuid.UUID, req interactions.RecordRequest) (*interactions.Interaction, error)
 }
 
+// MovieCacher ensures a matched film's catalog detail (title, poster, genres,
+// keywords) is persisted. Without this a film that isn't already in the cache
+// tracks as an "Untitled" row with no reco features. Behaviour-named per repo
+// convention; movies.Service satisfies it.
+type MovieCacher interface {
+	EnsureCached(ctx context.Context, tmdbID int) error
+}
+
 type Service struct {
 	repo     Repo
 	client   TMDBClient
+	movies   MovieCacher
 	tracking TrackAdder
 	signals  SignalRecorder
 }
 
-func NewService(repo Repo, client TMDBClient, tr TrackAdder, sr SignalRecorder) *Service {
-	return &Service{repo: repo, client: client, tracking: tr, signals: sr}
+func NewService(repo Repo, client TMDBClient, mc MovieCacher, tr TrackAdder, sr SignalRecorder) *Service {
+	return &Service{repo: repo, client: client, movies: mc, tracking: tr, signals: sr}
 }
 
 // Start creates a job and kicks off a background worker, returning the pending
@@ -122,6 +131,14 @@ func (s *Service) run(ctx context.Context, id, userID uuid.UUID, source Source, 
 // rated interaction (when the row carried a score) so the recommender learns
 // from the imported history. Reports whether the write succeeded.
 func (s *Service) writeMatch(ctx context.Context, userID uuid.UUID, tmdbID int, score *int) bool {
+	// Ensure the film's catalog detail is cached first, so it renders in the
+	// library and carries genres/keywords for the recommender. Best-effort: a
+	// rare detail-fetch failure should not lose the watched record — the row
+	// still lands and a later backfill can fill the metadata.
+	if err := s.movies.EnsureCached(ctx, tmdbID); err != nil {
+		log.Printf("import: cache movie %d failed (entry will lack metadata until re-fetched): %v", tmdbID, err)
+	}
+
 	completed := tracking.StatusCompleted
 	if _, err := s.tracking.Add(ctx, userID, tracking.AddRequest{
 		TMDBID:    tmdbID,

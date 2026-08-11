@@ -85,7 +85,7 @@ func main() {
 	onboardingService := onboarding.NewService(onboardingRepo, movieService)
 	rankingsService := rankings.NewService(cachedTMDB, rankings.NewRepository(dbConn))
 	importsService := imports.NewService(
-		imports.NewRepository(dbConn), cachedTMDB, trackingService, interactionsService)
+		imports.NewRepository(dbConn), cachedTMDB, movieService, trackingService, interactionsService)
 
 	// Recommender orchestrator. Adapters wrap movies.Repository + raw SQL
 	// against interactions/media_list to feed the orchestrator. Scoring

@@ -14,6 +14,7 @@ import (
 	"klyvi-api/config"
 	"klyvi-api/internal/imports"
 	"klyvi-api/internal/interactions"
+	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/tmdb"
 	"klyvi-api/internal/tracking"
@@ -58,7 +59,8 @@ func setupImports(t *testing.T) (*imports.Service, *sqlx.DB, uuid.UUID) {
 	trackingRepo := tracking.NewRepository(dbConn)
 	trackingSvc := tracking.NewService(trackingRepo)
 	interactionsSvc := interactions.NewService(interactions.NewRepository(dbConn), trackingRepo)
-	svc := imports.NewService(imports.NewRepository(dbConn), tmdbClient, trackingSvc, interactionsSvc)
+	movieSvc := movies.NewService(tmdbClient, movies.NewRepository(dbConn))
+	svc := imports.NewService(imports.NewRepository(dbConn), tmdbClient, movieSvc, trackingSvc, interactionsSvc)
 
 	userID := uuid.New()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
