@@ -15,11 +15,17 @@ import (
 type Tier2 struct {
 	cfg  Config
 	repo ProfileRepository
+	idf  *FeatureIDF
 }
 
 func NewTier2(cfg Config, repo ProfileRepository) *Tier2 {
 	return &Tier2{cfg: cfg, repo: repo}
 }
+
+// WithIDF attaches the same global IDF table Tier 1 uses, so the taste profile
+// this tier builds and persists is damped by catalog ubiquity. A nil idf
+// leaves profile weights as raw pooled sums. Returns the receiver for chaining.
+func (t *Tier2) WithIDF(idf *FeatureIDF) *Tier2 { t.idf = idf; return t }
 
 func (t *Tier2) Name() string { return "tier2" }
 
@@ -28,7 +34,7 @@ func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 		return nil, nil
 	}
 
-	profile := BuildProfile(u.UserID, u.Liked, u.Disliked)
+	profile := BuildProfile(u.UserID, u.Liked, u.Disliked, t.idf)
 	// Best-effort persistence — failing to save the profile does not block
 	// the feed (the frontend just gets a slightly stale "your taste" view).
 	_ = t.repo.UpsertProfile(ctx, profile)

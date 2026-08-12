@@ -50,6 +50,7 @@ func main() {
 	eWeight := flag.Float64("era-weight", -1, "override reco EraWeight")
 	negWeight := flag.Float64("neg-weight", -1, "override reco NegativeSimWeight")
 	qFloor := flag.Int("quality-floor", -1, "override reco QualityFloorVotes")
+	useIDF := flag.Bool("idf", true, "apply global IDF feature weighting (set -idf=false to A/B against the raw-sum baseline)")
 	flag.Parse()
 
 	if err := godotenv.Load(".env.dev"); err != nil {
@@ -105,6 +106,25 @@ func main() {
 		log.Printf("catalog: %d eligible movies (vote_count > 0)", n)
 	}
 
+	// Build the same global IDF table the API loads, once, held fixed across
+	// all users, trials, and weight configs — exactly what a fair comparison of
+	// scorer weights needs. -idf=false runs the raw-sum baseline for A/B.
+	var featureIDF *reco.FeatureIDF
+	if *useIDF {
+		gdf, kdf, corpus, err := movieRepo.LoadFeatureStats(context.Background(), "movie")
+		if err != nil {
+			log.Fatalf("load feature stats: %v", err)
+		}
+		featureIDF = reco.NewFeatureIDF(gdf, kdf, corpus)
+		if featureIDF == nil {
+			log.Println("idf: feature_stats empty — running raw-sum (run seed-catalog -refresh-feature-stats)")
+		} else {
+			log.Printf("idf: active (corpus=%d genres=%d keywords=%d)", corpus, len(gdf), len(kdf))
+		}
+	} else {
+		log.Println("idf: disabled by flag (raw-sum baseline)")
+	}
+
 	if *syntheticUsers > 0 {
 		ids, err := seedSyntheticUsers(context.Background(), dbConn, catalog, *syntheticUsers, *syntheticLikes)
 		if err != nil {
@@ -141,7 +161,7 @@ func main() {
 	)
 
 	for _, uid := range users {
-		hits10, hits50, mrr, trials, err := runUserLOO(ctx, dbConn, catalog, recoCfg, uid, *maxTrials)
+		hits10, hits50, mrr, trials, err := runUserLOO(ctx, dbConn, catalog, featureIDF, recoCfg, uid, *maxTrials)
 		if err != nil {
 			log.Printf("user %s LOO: %v", uid, err)
 			continue
@@ -175,7 +195,7 @@ func main() {
 	if len(users) > 0 {
 		fmt.Println("---")
 		fmt.Println("Sample top-10 feed for user", users[0].String()[:8])
-		printSampleFeed(ctx, dbConn, catalog, recoCfg, users[0], 10)
+		printSampleFeed(ctx, dbConn, catalog, featureIDF, recoCfg, users[0], 10)
 	}
 }
 
@@ -225,7 +245,7 @@ func listUsersWithSignal(ctx context.Context, dbConn *sqlx.DB, minInteractions i
 // runUserLOO runs leave-one-out for one user. For each item the user
 // "liked" (rated >=70 or logged), hide it, run the recommender against
 // the rest, and check if the hidden item came back in the top-K.
-func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, cfg reco.Config, userID uuid.UUID, maxTrials int) (recall10, recall50, mrr float64, trials int, err error) {
+func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.FeatureIDF, cfg reco.Config, userID uuid.UUID, maxTrials int) (recall10, recall50, mrr float64, trials int, err error) {
 	interactions, err := loadInteractions(ctx, dbConn, userID)
 	if err != nil {
 		return 0, 0, 0, 0, err
@@ -265,7 +285,7 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, c
 		likes = sampled
 	}
 
-	scorer := reco.NewTier1(cfg)
+	scorer := reco.NewTier1(cfg).WithIDF(idf)
 
 	// Preload features for every interacted movie, and build the candidate
 	// pool once from the full taste. Both are (near-)constant across the
@@ -394,13 +414,13 @@ func loadInteractions(ctx context.Context, dbConn *sqlx.DB, userID uuid.UUID) ([
 	return out, nil
 }
 
-func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, cfg reco.Config, userID uuid.UUID, k int) {
+func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.FeatureIDF, cfg reco.Config, userID uuid.UUID, k int) {
 	interactions, err := loadInteractions(ctx, dbConn, userID)
 	if err != nil {
 		log.Println("load interactions:", err)
 		return
 	}
-	scorer := reco.NewTier1(cfg)
+	scorer := reco.NewTier1(cfg).WithIDF(idf)
 	signal := reco.AggregateSignal(cfg, interactions)
 	likedMap, _ := reco.SplitLikedDisliked(signal)
 	if len(likedMap) == 0 {

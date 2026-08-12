@@ -87,6 +87,7 @@ func main() {
 	maxMovies := flag.Int("max-movies", 10000, "stop collecting ids once this many unique ids are gathered (0 = no cap)")
 	timeout := flag.Duration("timeout", 3*time.Hour, "overall run timeout")
 	backfill := flag.Bool("backfill-uncached", false, "instead of the sweep, cache every media_index movie that has no movies row (repairs imported 'Untitled' rows), then exit")
+	refreshStats := flag.Bool("refresh-feature-stats", false, "instead of the sweep, recompute the feature_stats / feature_corpus tables (recommender IDF inputs) from the cached catalog, then exit")
 	flag.Parse()
 
 	if err := godotenv.Load(".env.dev"); err != nil {
@@ -111,6 +112,13 @@ func main() {
 	if *backfill {
 		if err := backfillUncached(ctx, dbConn, svc); err != nil {
 			log.Fatalf("backfill: %v", err)
+		}
+		os.Exit(0)
+	}
+
+	if *refreshStats {
+		if err := refreshFeatureStats(ctx, dbConn, repo); err != nil {
+			log.Fatalf("refresh feature stats: %v", err)
 		}
 		os.Exit(0)
 	}
@@ -256,6 +264,35 @@ func backfillUncached(ctx context.Context, dbConn *sqlx.DB, svc *movies.Service)
 		}
 	}
 	log.Printf("backfill done: %d cached, %d failed in %s", done, failed, time.Since(start))
+	return nil
+}
+
+// refreshFeatureStats recomputes the recommender's IDF inputs from the cached
+// catalog and logs a summary so the operator can confirm the tables are
+// populated. Run it after a seed or backfill — the recommender loads these at
+// startup, so a following API restart picks up the new weights.
+func refreshFeatureStats(ctx context.Context, dbConn *sqlx.DB, repo *movies.Repository) error {
+	start := time.Now()
+	if err := repo.RefreshFeatureStats(ctx); err != nil {
+		return err
+	}
+
+	var summary struct {
+		Corpus   int `db:"corpus"`
+		Genres   int `db:"genres"`
+		Keywords int `db:"keywords"`
+	}
+	err := dbConn.GetContext(ctx, &summary, `
+		select
+			coalesce((select doc_count from feature_corpus where media_type = 'movie'), 0) as corpus,
+			(select count(*) from feature_stats where media_type = 'movie' and feature_type = 'genre')   as genres,
+			(select count(*) from feature_stats where media_type = 'movie' and feature_type = 'keyword') as keywords
+	`)
+	if err != nil {
+		return fmt.Errorf("summary: %w", err)
+	}
+	log.Printf("feature stats refreshed in %s: corpus=%d genres=%d keywords=%d",
+		time.Since(start).Truncate(time.Millisecond), summary.Corpus, summary.Genres, summary.Keywords)
 	return nil
 }
 

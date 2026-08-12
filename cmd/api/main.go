@@ -97,14 +97,36 @@ func main() {
 	recoCfg.NegativeSimWeight = cfg.Reco.NegativeSimWeight
 	recoCfg.QualityFloorVotes = cfg.Reco.QualityFloorVotes
 
+	// Global IDF table, gated by RECO_USE_IDF and loaded once at startup: it
+	// damps catalog-ubiquitous features so a diverse taste leans on its
+	// discriminative signal. Off by default (the offline sweep found it a wash);
+	// when on it needs feature_stats populated, else NewFeatureIDF returns nil
+	// (identity) and scoring is unchanged. A catalog reseed needs a restart to
+	// pick up refreshed weights — the lifecycle the rest of the catalog follows.
+	var featureIDF *reco.FeatureIDF
+	if cfg.Reco.UseIDF {
+		genreDF, keywordDF, corpus, err := movieRepo.LoadFeatureStats(context.Background(), "movie")
+		if err != nil {
+			log.Fatalf("load feature stats: %v", err)
+		}
+		featureIDF = reco.NewFeatureIDF(genreDF, keywordDF, corpus)
+		if featureIDF == nil {
+			log.Println("reco: RECO_USE_IDF set but feature_stats empty — run seed-catalog -refresh-feature-stats")
+		} else {
+			log.Printf("reco: IDF weighting active (corpus=%d genres=%d keywords=%d)", corpus, len(genreDF), len(keywordDF))
+		}
+	} else {
+		log.Println("reco: IDF weighting off (set RECO_USE_IDF=true to enable)")
+	}
+
 	recoOrchestrator := reco.NewOrchestrator(
 		newCatalogAdapter(movieRepo),
 		newSignalAdapter(dbConn),
 		newSeenAdapter(dbConn),
 		recoCfg,
 	).WithTier0(reco.NewTier0()).
-		WithTier1(reco.NewTier1(recoCfg)).
-		WithTier2(reco.NewTier2(recoCfg, newProfileAdapter(dbConn)))
+		WithTier1(reco.NewTier1(recoCfg).WithIDF(featureIDF)).
+		WithTier2(reco.NewTier2(recoCfg, newProfileAdapter(dbConn)).WithIDF(featureIDF))
 
 	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
 		JWKSURL:  cfg.Supabase.JWKSURL,

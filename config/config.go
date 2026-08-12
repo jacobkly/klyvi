@@ -26,6 +26,16 @@ type ConfReco struct {
 	EraWeight         float64 `env:"RECO_ERA_WEIGHT,default=0.1"`
 	NegativeSimWeight float64 `env:"RECO_NEGATIVE_WEIGHT,default=0.6"`
 	QualityFloorVotes int     `env:"RECO_QUALITY_FLOOR,default=25"`
+
+	// UseIDF turns on global inverse-document-frequency weighting of taste
+	// features — it damps catalog-ubiquitous genres/keywords so a diverse taste
+	// leans on its discriminative signal. Off by default: the offline
+	// leave-one-out sweep found it roughly neutral (a small recall@10 gain
+	// against a recall@50/MRR cost), so it ships available but not on. Its real
+	// payoff is a less repetitive feed, which the offline metric can't score —
+	// set RECO_USE_IDF=true to A/B it live. Requires feature_stats to be
+	// populated (seed-catalog -refresh-feature-stats).
+	UseIDF bool `env:"RECO_USE_IDF,default=false"`
 }
 
 type ConfServer struct {

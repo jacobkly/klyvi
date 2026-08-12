@@ -30,12 +30,14 @@ type ProfileRepository interface {
 
 // BuildProfile aggregates the per-item liked/disliked signal into pooled
 // feature weight maps. liked and disliked are the SplitLikedDisliked
-// outputs already enriched with MediaFeatures by the orchestrator.
-func BuildProfile(userID uuid.UUID, liked, disliked []SignalItem) *TasteProfile {
+// outputs already enriched with MediaFeatures by the orchestrator. idf damps
+// catalog-ubiquitous features so the persisted profile — and the feed Tier 2
+// scores from it — favours discriminative signal; a nil idf pools raw.
+func BuildProfile(userID uuid.UUID, liked, disliked []SignalItem, idf *FeatureIDF) *TasteProfile {
 	p := &TasteProfile{
 		UserID:         userID,
-		GenreWeights:   pooledFeatureWeights(liked, genreKeyset),
-		KeywordWeights: pooledFeatureWeights(liked, keywordKeyset),
+		GenreWeights:   pooledFeatureWeights(liked, genreKeyset, idf.genreWeight),
+		KeywordWeights: pooledFeatureWeights(liked, keywordKeyset, idf.keywordWeight),
 		EraWeights:     pooledEraWeights(liked),
 		LikedCount:     len(liked),
 		DislikedCount:  len(disliked),

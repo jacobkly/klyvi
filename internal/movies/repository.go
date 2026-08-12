@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
 	"github.com/jmoiron/sqlx"
 )
@@ -290,6 +291,99 @@ func (r *Repository) candidatesByOverlap(ctx context.Context, column string, ids
 		limit $3
 	`, minVotes, ids, limit)
 	return rows, err
+}
+
+// RefreshFeatureStats recomputes the movie feature-frequency tables that back
+// the recommender's inverse-document-frequency weighting. Over the eligible
+// catalog (vote_count > 0) it counts how many movies carry each genre and
+// keyword id — reading the generated genre_ids / keyword_ids arrays (00027) —
+// and records the corpus size N. The whole recompute runs in one transaction
+// so a concurrent reader never sees a half-rebuilt table.
+//
+// Only the media_type='movie' rows are touched; TV rows (when TV reco lands)
+// refresh independently under their own media_type.
+func (r *Repository) RefreshFeatureStats(ctx context.Context) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`delete from feature_stats where media_type = 'movie'`); err != nil {
+		return fmt.Errorf("clear feature_stats: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		insert into feature_stats (media_type, feature_type, feature_id, doc_count)
+		select 'movie', 'genre', g, count(*)
+		from movies, unnest(genre_ids) g
+		where vote_count > 0
+		group by g
+	`); err != nil {
+		return fmt.Errorf("count genres: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		insert into feature_stats (media_type, feature_type, feature_id, doc_count)
+		select 'movie', 'keyword', k, count(*)
+		from movies, unnest(keyword_ids) k
+		where vote_count > 0
+		group by k
+	`); err != nil {
+		return fmt.Errorf("count keywords: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		insert into feature_corpus (media_type, doc_count, updated_at)
+		values ('movie', (select count(*) from movies where vote_count > 0), now())
+		on conflict (media_type) do update
+			set doc_count = excluded.doc_count, updated_at = now()
+	`); err != nil {
+		return fmt.Errorf("count corpus: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// LoadFeatureStats loads the recommender's IDF inputs for a media type: the
+// per-feature document frequencies (genre and keyword) and the corpus size N,
+// as written by RefreshFeatureStats. A zero corpus means the stats have not
+// been refreshed yet, and the caller runs without IDF weighting.
+func (r *Repository) LoadFeatureStats(ctx context.Context, mediaType string) (genreDF, keywordDF map[int]int, corpus int, err error) {
+	var rows []struct {
+		FeatureType string `db:"feature_type"`
+		FeatureID   int    `db:"feature_id"`
+		DocCount    int    `db:"doc_count"`
+	}
+	if err = r.db.SelectContext(ctx, &rows, `
+		select feature_type, feature_id, doc_count
+		from feature_stats
+		where media_type = $1
+	`, mediaType); err != nil {
+		return nil, nil, 0, fmt.Errorf("select feature_stats: %w", err)
+	}
+
+	genreDF = make(map[int]int)
+	keywordDF = make(map[int]int)
+	for _, row := range rows {
+		switch row.FeatureType {
+		case "genre":
+			genreDF[row.FeatureID] = row.DocCount
+		case "keyword":
+			keywordDF[row.FeatureID] = row.DocCount
+		}
+	}
+
+	err = r.db.GetContext(ctx, &corpus,
+		`select doc_count from feature_corpus where media_type = $1`, mediaType)
+	if err == sql.ErrNoRows {
+		return genreDF, keywordDF, 0, nil
+	}
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("select feature_corpus: %w", err)
+	}
+	return genreDF, keywordDF, corpus, nil
 }
 
 func (r *Repository) InsertMovieCollectionBatch(
