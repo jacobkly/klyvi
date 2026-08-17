@@ -414,6 +414,28 @@ func loadInteractions(ctx context.Context, dbConn *sqlx.DB, userID uuid.UUID) ([
 	return out, nil
 }
 
+// seenMediaIDs unions the user's interactions + media_list rows — the same
+// "already-touched" set the live orchestrator's seenAdapter filters on. The
+// sample feed applies it so the printed feed matches what /v1/reco/feed would
+// actually serve (which never recommends something the user has engaged with),
+// rather than padding the list with the user's own logged films.
+func seenMediaIDs(ctx context.Context, dbConn *sqlx.DB, userID uuid.UUID) (map[int]bool, error) {
+	var ids []int
+	err := dbConn.SelectContext(ctx, &ids, `
+		select media_id from interactions where user_id = $1
+		union
+		select media_id from media_list where user_id = $1
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
+}
+
 func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.FeatureIDF, cfg reco.Config, userID uuid.UUID, k int) {
 	interactions, err := loadInteractions(ctx, dbConn, userID)
 	if err != nil {
@@ -446,6 +468,23 @@ func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapt
 
 	cands, _ := reco.BuildCandidatePool(ctx, catalog, user.Liked, cfg)
 
+	// Filter already-seen candidates, exactly as the live orchestrator does, so
+	// the printed feed is what the user would actually be served — new films —
+	// not their own back-catalog re-scored.
+	poolBefore := len(cands)
+	seen, err := seenMediaIDs(ctx, dbConn, userID)
+	if err != nil {
+		log.Println("seen media ids:", err)
+	} else {
+		kept := cands[:0]
+		for _, c := range cands {
+			if !seen[c.MediaID] {
+				kept = append(kept, c)
+			}
+		}
+		cands = kept
+	}
+
 	// Diagnostics: how much signal actually resolved to features, and how big
 	// the candidate pool is. Low feature-resolution means the user's liked
 	// items aren't in the cache (weak signal); a small pool means the feed is
@@ -456,8 +495,8 @@ func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapt
 			resolved++
 		}
 	}
-	fmt.Printf("  [diag] liked=%d features_resolved=%d candidate_pool=%d\n",
-		len(user.Liked), resolved, len(cands))
+	fmt.Printf("  [diag] liked=%d features_resolved=%d candidate_pool=%d (seen-filtered from %d)\n",
+		len(user.Liked), resolved, len(cands), poolBefore)
 
 	scored, _ := scorer.Score(ctx, user, cands)
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
