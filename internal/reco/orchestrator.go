@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -99,6 +100,15 @@ func (o *Orchestrator) WithTier0(s Scorer) *Orchestrator { o.tier0 = s; return o
 func (o *Orchestrator) WithTier1(s Scorer) *Orchestrator { o.tier1 = s; return o }
 func (o *Orchestrator) WithTier2(s Scorer) *Orchestrator { o.tier2 = s; return o }
 
+// Wait blocks until every scorer's background writes finish.
+func (o *Orchestrator) Wait() {
+	for _, s := range []Scorer{o.tier0, o.tier1, o.tier2} {
+		if w, ok := s.(interface{ Wait() }); ok {
+			w.Wait()
+		}
+	}
+}
+
 // Feed returns the top-K recommendations for a user. The orchestrator picks
 // the active scorer based on signal volume:
 //   - 0 interactions → Tier 0 (cold).
@@ -121,20 +131,28 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset
 		want = maxFeedDepth
 	}
 
-	interactions, err := o.signal.ListByUser(ctx, userID, 0)
-	if err != nil {
+	// The history and the seen set are independent reads; load them together
+	// so the feed waits for one round trip, not two.
+	var (
+		interactions []InteractionRow
+		seen         map[int]bool
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		interactions, err = o.signal.ListByUser(gctx, userID, 0)
+		return err
+	})
+	g.Go(func() (err error) {
+		seen, err = o.seen.SeenMediaIDs(gctx, userID)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	signalVolume := len(interactions)
 
-	scorer := o.pickScorer(signalVolume)
+	scorer := o.pickScorer(len(interactions))
 	if scorer == nil {
 		return []Scored{}, nil
-	}
-
-	seen, err := o.seen.SeenMediaIDs(ctx, userID)
-	if err != nil {
-		return nil, err
 	}
 
 	user, err := o.buildUserContext(ctx, userID, interactions, seen)

@@ -3,7 +3,6 @@ package movies
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
@@ -207,18 +206,28 @@ func (r *Repository) GetCollectionByCollectionID(
 // (title, poster_path, backdrop_path) are included so the feed handler
 // can return everything the frontend needs to render a card without an
 // N+1 follow-up lookup.
+//
+// Features come from the generated genre_ids / keyword_ids columns rather
+// than the JSONB they are derived from: a candidate pool is 1,200 rows, and
+// shipping every keyword name with them was most of the feed's DB time.
 type RecoCandidateRow struct {
-	MovieID      int              `db:"movie_id"`
-	MediaID      int              `db:"media_id"`
-	Title        *string          `db:"title"`
-	PosterPath   *string          `db:"poster_path"`
-	BackdropPath *string          `db:"backdrop_path"`
-	Genres       *json.RawMessage `db:"genres"`
-	Keywords     *json.RawMessage `db:"keywords"`
-	ReleaseDate  *sql.NullTime    `db:"release_date"`
-	VoteAverage  float64          `db:"vote_average"`
-	VoteCount    int              `db:"vote_count"`
+	MovieID      int           `db:"movie_id"`
+	MediaID      int           `db:"media_id"`
+	Title        *string       `db:"title"`
+	PosterPath   *string       `db:"poster_path"`
+	BackdropPath *string       `db:"backdrop_path"`
+	GenreIDs     IntArray      `db:"genre_ids"`
+	KeywordIDs   IntArray      `db:"keyword_ids"`
+	ReleaseDate  *sql.NullTime `db:"release_date"`
+	VoteAverage  float64       `db:"vote_average"`
+	VoteCount    int           `db:"vote_count"`
 }
+
+// recoCandidateColumns is the select list every RecoCandidateRow query uses,
+// over `movies m join media_index mi`.
+const recoCandidateColumns = `
+	m.movie_id, mi.media_id, m.title, m.poster_path, m.backdrop_path,
+	m.genre_ids, m.keyword_ids, m.release_date, m.vote_average, m.vote_count`
 
 // CandidatesByMediaIDs returns the feed projection for a specific set of
 // media_index media_ids — used to load features for items in a user's
@@ -229,8 +238,7 @@ func (r *Repository) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) (
 	}
 	var rows []RecoCandidateRow
 	err := r.db.SelectContext(ctx, &rows, `
-		select m.movie_id, mi.media_id, m.title, m.poster_path, m.backdrop_path,
-		       m.genres, m.keywords, m.release_date, m.vote_average, m.vote_count
+		select `+recoCandidateColumns+`
 		from movies m
 		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
 		where mi.media_id = any($1)
@@ -238,31 +246,30 @@ func (r *Repository) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) (
 	return rows, err
 }
 
-// LookupGenreNames returns id→name pairs for the requested genre ids by
-// scanning the JSONB genres column across the movies cache. Ids that
-// don't appear in any cached movie are simply absent from the returned
-// map. Cheap because the query is bounded by len(ids) and most genres
-// recur across the catalog.
+// LookupGenreNames returns id→name pairs for the requested genre ids from
+// the JSONB genres column of the movies cache. Ids that don't appear in any
+// cached movie are simply absent from the returned map.
 func (r *Repository) LookupGenreNames(ctx context.Context, ids []int) (map[int]string, error) {
-	return r.lookupJSONBNames(ctx, "genres", ids)
+	return r.lookupJSONBNames(ctx, "genres", "genre_ids", ids)
 }
 
 // LookupKeywordNames is the keywords twin of LookupGenreNames.
 func (r *Repository) LookupKeywordNames(ctx context.Context, ids []int) (map[int]string, error) {
-	return r.lookupJSONBNames(ctx, "keywords", ids)
+	return r.lookupJSONBNames(ctx, "keywords", "keyword_ids", ids)
 }
 
-// lookupJSONBNames scans `column` (a JSONB array of {id, name} objects)
-// across the movies table and returns name strings for the requested ids.
-// coalesce(column, '[]') handles null arrays without erroring.
-func (r *Repository) lookupJSONBNames(ctx context.Context, column string, ids []int) (map[int]string, error) {
+// lookupJSONBNames reads names out of `column` (a JSONB array of {id, name}
+// objects). The GIN-indexed `idColumn` narrows the scan to movies that carry
+// one of the ids, instead of unpacking every movie's array. Both columns are
+// fixed internal identifiers, never user input.
+func (r *Repository) lookupJSONBNames(ctx context.Context, column, idColumn string, ids []int) (map[int]string, error) {
 	if len(ids) == 0 {
 		return map[int]string{}, nil
 	}
 	query := `
 		select distinct (elem->>'id')::int as id, elem->>'name' as name
-		from movies, jsonb_array_elements(coalesce(` + column + `, '[]'::jsonb)) elem
-		where (elem->>'id')::int = any($1)
+		from movies, jsonb_array_elements(` + column + `) elem
+		where ` + idColumn + ` && $1::int[] and (elem->>'id')::int = any($1)
 	`
 	var rows []struct {
 		ID   int    `db:"id"`
@@ -284,8 +291,7 @@ func (r *Repository) lookupJSONBNames(ctx context.Context, column string, ids []
 func (r *Repository) ListCandidatesForReco(ctx context.Context, limit int) ([]RecoCandidateRow, error) {
 	var rows []RecoCandidateRow
 	err := r.db.SelectContext(ctx, &rows, `
-		select m.movie_id, mi.media_id, m.title, m.poster_path, m.backdrop_path,
-		       m.genres, m.keywords, m.release_date, m.vote_average, m.vote_count
+		select `+recoCandidateColumns+`
 		from movies m
 		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
 		where m.vote_count > 0
@@ -346,8 +352,7 @@ func (r *Repository) ListCandidatesByTaste(ctx context.Context, genreIDs, keywor
 func (r *Repository) candidatesByOverlap(ctx context.Context, column string, ids []int, minVotes, limit int) ([]RecoCandidateRow, error) {
 	var rows []RecoCandidateRow
 	err := r.db.SelectContext(ctx, &rows, `
-		select m.movie_id, mi.media_id, m.title, m.poster_path, m.backdrop_path,
-		       m.genres, m.keywords, m.release_date, m.vote_average, m.vote_count
+		select `+recoCandidateColumns+`
 		from movies m
 		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
 		where m.vote_count >= $1 and m.`+column+` && $2::int[]

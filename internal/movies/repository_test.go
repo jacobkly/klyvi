@@ -3,9 +3,11 @@ package movies_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -219,6 +221,65 @@ func TestInsertMovies_BatchWritesMoviesAndIndex(t *testing.T) {
 	}
 	if kw, _ := readDetailColumns(t, dbConn, c); kw == nil {
 		t.Error("batch insert downgraded an existing rich row")
+	}
+}
+
+// The recommender reads feature ids from the generated int[] columns, in the
+// order TMDB lists them, and a movie with no keywords yields an empty list.
+// Feature ids here are far above TMDB's so real catalog names cannot collide.
+func TestCandidateRows_CarryFeatureIDsAndNamesResolve(t *testing.T) {
+	repo, dbConn := openTestRepo(t)
+	ctx := context.Background()
+	rich := 2_000_000_000 + rand.Intn(100_000_000)
+	skinny := rich + 1
+	cleanupTestMovies(t, dbConn, rich, skinny)
+
+	gA, gB := 2_100_000_001, 2_100_000_002
+	kA, kB := 2_100_000_003, 2_100_000_004
+	m := testMovie(rich, true)
+	genres := json.RawMessage(fmt.Sprintf(`[{"id":%d,"name":"Test Genre B"},{"id":%d,"name":"Test Genre A"}]`, gB, gA))
+	keywords := json.RawMessage(fmt.Sprintf(`[{"id":%d,"name":"test keyword a"},{"id":%d,"name":"test keyword b"}]`, kA, kB))
+	m.Genres, m.Keywords = &genres, &keywords
+	if err := repo.InsertMovies(ctx, []*movies.Movie{m, testMovie(skinny, false)}); err != nil {
+		t.Fatalf("InsertMovies: %v", err)
+	}
+	if err := repo.EnsureMediaIndexes(ctx, []int{rich, skinny}); err != nil {
+		t.Fatalf("EnsureMediaIndexes: %v", err)
+	}
+
+	var mediaIDs []int
+	if err := dbConn.SelectContext(ctx, &mediaIDs,
+		`select media_id from media_index where id = any($1) and media_type = 'movie'`, []int{rich, skinny}); err != nil {
+		t.Fatalf("media ids: %v", err)
+	}
+	rows, err := repo.CandidatesByMediaIDs(ctx, mediaIDs)
+	if err != nil {
+		t.Fatalf("CandidatesByMediaIDs: %v", err)
+	}
+	byMovie := map[int]movies.RecoCandidateRow{}
+	for _, r := range rows {
+		byMovie[r.MovieID] = r
+	}
+
+	if got := byMovie[rich]; !reflect.DeepEqual(got.GenreIDs, movies.IntArray{gB, gA}) ||
+		!reflect.DeepEqual(got.KeywordIDs, movies.IntArray{kA, kB}) {
+		t.Errorf("rich row features = genres %v keywords %v, want [%d %d] and [%d %d]",
+			got.GenreIDs, got.KeywordIDs, gB, gA, kA, kB)
+	}
+	if got := byMovie[skinny]; got.GenreIDs == nil || len(got.GenreIDs) != 0 || len(got.KeywordIDs) != 0 {
+		t.Errorf("skinny row features = genres %#v keywords %#v, want empty", got.GenreIDs, got.KeywordIDs)
+	}
+
+	gNames, err := repo.LookupGenreNames(ctx, []int{gA, gB})
+	if err != nil {
+		t.Fatalf("LookupGenreNames: %v", err)
+	}
+	kNames, err := repo.LookupKeywordNames(ctx, []int{kB})
+	if err != nil {
+		t.Fatalf("LookupKeywordNames: %v", err)
+	}
+	if gNames[gA] != "Test Genre A" || gNames[gB] != "Test Genre B" || len(kNames) != 1 || kNames[kB] != "test keyword b" {
+		t.Errorf("names = genres %v keywords %v", gNames, kNames)
 	}
 }
 

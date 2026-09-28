@@ -2,7 +2,18 @@ package reco
 
 import (
 	"context"
+	"log"
 	"sort"
+	"sync"
+	"time"
+)
+
+const (
+	// maxConcurrentProfileSaves caps background profile writes. A feed that
+	// finds every slot busy skips its save; the next feed request saves an
+	// equivalent profile anyway.
+	maxConcurrentProfileSaves = 4
+	profileSaveTimeout        = 10 * time.Second
 )
 
 // Tier2 scores candidates against a persisted TasteProfile. The argument
@@ -10,16 +21,25 @@ import (
 // against pre-aggregated weights rather than re-deriving them each call.
 // In this implementation the profile is rebuilt from the orchestrator's
 // already-loaded user signal on every request and persisted as a side
-// effect — the speed win lands once the read path is optimized to skip
-// feature-lookup when the profile is fresh.
+// effect, after the feed returns — the speed win lands once the read path is
+// optimized to skip feature-lookup when the profile is fresh.
 type Tier2 struct {
 	cfg  Config
 	repo ProfileRepository
 	idf  *FeatureIDF
+
+	saving  chan struct{}
+	pending sync.WaitGroup
 }
 
 func NewTier2(cfg Config, repo ProfileRepository) *Tier2 {
-	return &Tier2{cfg: cfg, repo: repo}
+	return &Tier2{cfg: cfg, repo: repo, saving: make(chan struct{}, maxConcurrentProfileSaves)}
+}
+
+// Wait blocks until background profile saves finish. Tests call it before
+// reading the table, and the server calls it while shutting down.
+func (t *Tier2) Wait() {
+	t.pending.Wait()
 }
 
 // WithIDF attaches the same global IDF table Tier 1 uses, so the taste profile
@@ -35,9 +55,7 @@ func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 	}
 
 	profile := BuildProfile(u.UserID, u.Liked, u.Disliked, t.idf)
-	// Best-effort persistence — failing to save the profile does not block
-	// the feed (the frontend just gets a slightly stale "your taste" view).
-	_ = t.repo.UpsertProfile(ctx, profile)
+	t.saveProfile(profile)
 
 	out := make([]Scored, 0, len(cands))
 	for _, c := range cands {
@@ -66,4 +84,28 @@ func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out, nil
+}
+
+// saveProfile persists the profile in the background. Best-effort: failing to
+// save does not touch the feed, the frontend just gets a slightly stale "your
+// taste" view. The profile is never mutated after BuildProfile, so the
+// goroutine can read it while Score keeps scoring against it.
+func (t *Tier2) saveProfile(p *TasteProfile) {
+	select {
+	case t.saving <- struct{}{}:
+	default:
+		return
+	}
+
+	t.pending.Add(1)
+	go func() {
+		defer t.pending.Done()
+		defer func() { <-t.saving }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), profileSaveTimeout)
+		defer cancel()
+		if err := t.repo.UpsertProfile(ctx, p); err != nil {
+			log.Printf("best-effort taste profile save for %s failed: %v", p.UserID, err)
+		}
+	}()
 }

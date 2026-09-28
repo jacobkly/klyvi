@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/reco"
@@ -57,8 +56,8 @@ func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 			Features: &reco.MediaFeatures{
 				MediaID:     row.MediaID,
 				MediaType:   "movie",
-				GenreIDs:    parseIDArray(row.Genres),
-				KeywordIDs:  parseIDArray(row.Keywords),
+				GenreIDs:    row.GenreIDs,
+				KeywordIDs:  row.KeywordIDs,
 				Year:        year,
 				VoteAverage: row.VoteAverage,
 				VoteCount:   row.VoteCount,
@@ -66,23 +65,4 @@ func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 		})
 	}
 	return cands
-}
-
-func parseIDArray(raw *json.RawMessage) []int {
-	if raw == nil || len(*raw) == 0 {
-		return nil
-	}
-	var items []struct {
-		ID int `json:"id"`
-	}
-	if err := json.Unmarshal(*raw, &items); err != nil {
-		return nil
-	}
-	out := make([]int, 0, len(items))
-	for _, it := range items {
-		if it.ID != 0 {
-			out = append(out, it.ID)
-		}
-	}
-	return out
 }

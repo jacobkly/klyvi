@@ -2,7 +2,9 @@ package reco
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -278,6 +280,46 @@ func TestFeed_PaginationIsStableAndContiguous(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Errorf("expected an empty page for offset past the end, got %d items", len(empty))
+	}
+}
+
+// rendezvous lets two fakes prove they ran at the same time: each marks
+// itself started, then waits briefly for the other.
+type rendezvous struct {
+	signal, seen chan struct{}
+}
+
+func (r rendezvous) meet(mine, theirs chan struct{}) error {
+	close(mine)
+	select {
+	case <-theirs:
+		return nil
+	case <-time.After(2 * time.Second):
+		return errors.New("the other query never started")
+	}
+}
+
+type rendezvousSignal struct{ r rendezvous }
+
+func (s rendezvousSignal) ListByUser(context.Context, uuid.UUID, int) ([]InteractionRow, error) {
+	return nil, s.r.meet(s.r.signal, s.r.seen)
+}
+
+type rendezvousSeen struct{ r rendezvous }
+
+func (s rendezvousSeen) SeenMediaIDs(context.Context, uuid.UUID) (map[int]bool, error) {
+	return nil, s.r.meet(s.r.seen, s.r.signal)
+}
+
+// The interaction history and the seen set are independent reads, so Feed
+// waits for one round trip instead of two.
+func TestFeed_LoadsSignalAndSeenConcurrently(t *testing.T) {
+	r := rendezvous{signal: make(chan struct{}), seen: make(chan struct{})}
+	orch := NewOrchestrator(&stubCatalog{}, rendezvousSignal{r}, rendezvousSeen{r}, DefaultConfig()).
+		WithTier0(NewTier0())
+
+	if _, err := orch.Feed(context.Background(), uuid.New(), 10, 0); err != nil {
+		t.Fatalf("Feed: %v", err)
 	}
 }
 

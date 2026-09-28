@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"klyvi-api/internal/platform/cache"
 	"klyvi-api/internal/platform/http/middleware"
 )
 
@@ -70,10 +71,23 @@ type Service struct {
 	// WithExportSources. Always present in the assembled server.
 	tracking     TrackingReader
 	interactions InteractionReader
+
+	// ensured remembers users whose row already exists, so the middleware
+	// skips its upsert round trip. The TTL re-checks now and then, in case a
+	// row was removed behind the server's back.
+	ensured *cache.TTL[struct{}]
 }
 
+const (
+	ensuredUsersMax = 10_000
+	ensuredUsersTTL = time.Hour
+)
+
 func NewService(repo UserRepository) *Service {
-	return &Service{repo: repo}
+	return &Service{
+		repo:    repo,
+		ensured: cache.NewTTL[struct{}](ensuredUsersMax, ensuredUsersTTL),
+	}
 }
 
 // WithAvatarStorage wires the storage client the avatar endpoints use.
@@ -219,17 +233,23 @@ func unavailable(name, reason string) *UsernameAvailability {
 	return &UsernameAvailability{Username: name, Available: false, Reason: &reason}
 }
 
-// EnsureUserMiddleware upserts the `users` row on every authenticated request.
+// EnsureUserMiddleware upserts the `users` row on a user's first authenticated
+// request, then skips the round trip while the user stays in the ensured cache.
 // Mount it AFTER the JWT auth middleware on protected routes — it assumes the
 // user UUID is already in context. Failures are logged best-effort and do not
 // reject the request, on the assumption that catalog state is more useful to
-// the user than a 5xx if the upsert briefly fails.
+// the user than a 5xx if the upsert briefly fails. A failed upsert is retried
+// on the next request.
 func (s *Service) EnsureUserMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if id, ok := middleware.UserUUIDFromContext(r.Context()); ok {
-				if err := s.repo.EnsureUser(r.Context(), id); err != nil {
-					log.Printf("best-effort EnsureUser failed for %s: %v", id, err)
+				if _, done := s.ensured.Get(id.String()); !done {
+					if err := s.repo.EnsureUser(r.Context(), id); err != nil {
+						log.Printf("best-effort EnsureUser failed for %s: %v", id, err)
+					} else {
+						s.ensured.Set(id.String(), struct{}{})
+					}
 				}
 			}
 			next.ServeHTTP(w, r)

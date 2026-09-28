@@ -21,6 +21,16 @@ func TestTTL_SetGet(t *testing.T) {
 	}
 }
 
+func TestTTL_Remove(t *testing.T) {
+	c := cache.NewTTL[int](8, time.Minute)
+	c.Set("k", 1)
+	c.Remove("k")
+	if _, ok := c.Get("k"); ok {
+		t.Error("value should be gone after Remove")
+	}
+	c.Remove("never-set") // must not panic
+}
+
 func TestTTL_EvictsLeastRecentlyUsedPastCapacity(t *testing.T) {
 	c := cache.NewTTL[string](2, time.Minute)
 	c.Set("a", "1")

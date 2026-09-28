@@ -30,11 +30,12 @@ func newRecoOrchestrator(dbConn *sqlx.DB, movieRepo *movies.Repository, cfg reco
 // catalogAdapter wraps movies.Repository to satisfy reco.CatalogRepository.
 // Translates the movies cache rows into reco's MediaFeatures shape.
 type catalogAdapter struct {
-	repo *movies.Repository
+	repo  *movies.Repository
+	names *reasonNames
 }
 
 func newCatalogAdapter(repo *movies.Repository) *catalogAdapter {
-	return &catalogAdapter{repo: repo}
+	return &catalogAdapter{repo: repo, names: newReasonNames(repo)}
 }
 
 func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) ([]reco.Candidate, error) {
@@ -61,20 +62,10 @@ func (a *catalogAdapter) CandidatesByTaste(ctx context.Context, genreIDs, keywor
 	return rowsToCandidates(rows), nil
 }
 
-// LookupReasonNames satisfies reco.CatalogRepository — two cheap JSONB
-// scans over the movies cache, one for genres and one for keywords.
-// Each is wrapped in its own context so a failure on one doesn't poison
-// the other.
+// LookupReasonNames satisfies reco.CatalogRepository from the in-process
+// name cache, which only goes to the database for ids it has never seen.
 func (a *catalogAdapter) LookupReasonNames(ctx context.Context, genreIDs, keywordIDs []int) (map[int]string, map[int]string, error) {
-	genres, err := a.repo.LookupGenreNames(ctx, genreIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	keywords, err := a.repo.LookupKeywordNames(ctx, keywordIDs)
-	if err != nil {
-		return nil, nil, err
-	}
-	return genres, keywords, nil
+	return a.names.Lookup(ctx, genreIDs, keywordIDs)
 }
 
 func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
@@ -84,8 +75,8 @@ func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 		feat := &reco.MediaFeatures{
 			MediaID:     row.MediaID,
 			MediaType:   "movie",
-			GenreIDs:    parseIDArray(row.Genres),
-			KeywordIDs:  parseIDArray(row.Keywords),
+			GenreIDs:    row.GenreIDs,
+			KeywordIDs:  row.KeywordIDs,
 			Year:        year,
 			VoteAverage: row.VoteAverage,
 			VoteCount:   row.VoteCount,
@@ -329,27 +320,6 @@ func (a *seenAdapter) SeenMediaIDs(ctx context.Context, userID uuid.UUID) (map[i
 		out[id] = true
 	}
 	return out, nil
-}
-
-// parseIDArray pulls integer ids out of a TMDB-shaped JSONB array of
-// {"id":..., "name":...} objects. Used for both genres and keywords.
-func parseIDArray(raw *json.RawMessage) []int {
-	if raw == nil || len(*raw) == 0 {
-		return nil
-	}
-	var items []struct {
-		ID int `json:"id"`
-	}
-	if err := json.Unmarshal(*raw, &items); err != nil {
-		return nil
-	}
-	out := make([]int, 0, len(items))
-	for _, it := range items {
-		if it.ID != 0 {
-			out = append(out, it.ID)
-		}
-	}
-	return out
 }
 
 // yearOf returns the 4-digit year from a nullable release date, or 0.

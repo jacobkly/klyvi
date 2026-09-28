@@ -24,3 +24,5 @@ func NewTTL[V any](maxEntries int, ttl time.Duration) *TTL[V] {
 func (c *TTL[V]) Get(key string) (V, bool) { return c.lru.Get(key) }
 
 func (c *TTL[V]) Set(key string, v V) { c.lru.Add(key, v) }
+
+func (c *TTL[V]) Remove(key string) { c.lru.Remove(key) }

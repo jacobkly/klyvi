@@ -22,7 +22,7 @@ import (
 // tier2FeedQueryBudget is the most DB round trips one Tier 2 feed request may
 // make. Every query is a full homelab-to-Supabase round trip, so this number
 // is the feed's latency floor.
-const tier2FeedQueryBudget = 8
+const tier2FeedQueryBudget = 4
 
 // TestTier2FeedQueryBudget builds the production recommender for a synthetic
 // Tier 2 user and counts the queries one feed page costs.
@@ -34,6 +34,9 @@ func TestTier2FeedQueryBudget(t *testing.T) {
 	userID := newTier2User(t, dbConn)
 
 	orch := newRecoOrchestrator(dbConn, movies.NewRepository(dbConn), reco.DefaultConfig(), nil)
+	// Cleanups run last-in first-out, so background profile saves land before
+	// the user is deleted and the pool closes.
+	t.Cleanup(orch.Wait)
 
 	// Warm the pool's connections and statement caches first, so the count
 	// and timing below match a server that has been up for a while.
