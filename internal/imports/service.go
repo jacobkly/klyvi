@@ -112,7 +112,7 @@ func (s *Service) run(ctx context.Context, id, userID uuid.UUID, source Source, 
 	_ = s.repo.SetProgress(ctx, id, total, 0, 0)
 
 	for i, row := range rows {
-		tmdbID := matchRow(s.client, row)
+		tmdbID := matchRow(ctx, s.client, row)
 		if tmdbID == 0 {
 			unmatched++
 			// A title we could not resolve at all — capture it (bounded) so

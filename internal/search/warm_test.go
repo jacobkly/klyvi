@@ -13,7 +13,7 @@ import (
 
 type cannedTMDB struct{ resp map[string]any }
 
-func (c cannedTMDB) TMDBRequest(_, _ string, _ any) (map[string]any, error) {
+func (c cannedTMDB) TMDBRequest(_ context.Context, _, _ string, _ any) (map[string]any, error) {
 	return c.resp, nil
 }
 

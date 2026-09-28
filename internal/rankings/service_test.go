@@ -15,7 +15,7 @@ type gatedTMDB struct {
 	release chan struct{}
 }
 
-func (g *gatedTMDB) TMDBRequest(string, string, any) (map[string]any, error) {
+func (g *gatedTMDB) TMDBRequest(context.Context, string, string, any) (map[string]any, error) {
 	g.calls.Add(1)
 	<-g.release
 	return map[string]any{"results": []any{

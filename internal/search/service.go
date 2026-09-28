@@ -15,7 +15,7 @@ import (
 // the concrete transport implementation; it only needs a component that can
 // execute TMDB requests.
 type TMDBClient interface {
-	TMDBRequest(method, endpoint string, body interface{}) (map[string]interface{}, error)
+	TMDBRequest(ctx context.Context, method, endpoint string, body interface{}) (map[string]interface{}, error)
 }
 
 // MovieRepository is the persistence boundary search uses to warm the movies
@@ -67,7 +67,7 @@ func (s *Service) GetSearchResult(ctx context.Context, searchType, query string)
 	}
 
 	endpoint = fmt.Sprintf("%s?query=%s&page=1&language=en-US", endpoint, url.QueryEscape(query))
-	searchResult, err := s.client.TMDBRequest("GET", endpoint, nil)
+	searchResult, err := s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}

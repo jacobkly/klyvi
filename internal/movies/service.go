@@ -13,7 +13,7 @@ import (
 // In production, `internal/platform/tmdb.Client` satisfies this interface.
 // In tests, a fake implementation can be passed in to avoid real HTTP calls.
 type TMDBClient interface {
-	TMDBRequest(method, endpoint string, body interface{}) (map[string]interface{}, error)
+	TMDBRequest(ctx context.Context, method, endpoint string, body interface{}) (map[string]interface{}, error)
 }
 
 // MovieRepository is the persistence boundary for the movies service.
@@ -79,6 +79,7 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 	}
 
 	raw, err := s.client.TMDBRequest(
+		ctx,
 		"GET",
 		fmt.Sprintf("/movie/%d?language=en-US&append_to_response=keywords,credits", movieID),
 		nil,
@@ -114,9 +115,9 @@ func (s *Service) EnsureCached(ctx context.Context, tmdbID int) error {
 	return err
 }
 
-func (s *Service) GetMovieRecommendations(id int) (interface{}, error) {
+func (s *Service) GetMovieRecommendations(ctx context.Context, id int) (interface{}, error) {
 	endpoint := fmt.Sprintf("/movie/%d/recommendations?language=en-US&page=1", id)
-	recommendations, err := s.client.TMDBRequest("GET", endpoint, nil)
+	recommendations, err := s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +139,7 @@ func (s *Service) GetMovieCollection(
 	}
 
 	rawMovie, err := s.client.TMDBRequest(
+		ctx,
 		"GET",
 		fmt.Sprintf("/movie/%d?language=en-US&append_to_response=keywords,credits", movieID),
 		nil,
@@ -154,6 +156,7 @@ func (s *Service) GetMovieCollection(
 	collectionID = int(belongsTo["id"].(float64))
 
 	rawCollection, err := s.client.TMDBRequest(
+		ctx,
 		"GET",
 		fmt.Sprintf("/collection/%d?language=en-US", collectionID),
 		nil,
@@ -171,9 +174,9 @@ func (s *Service) GetMovieCollection(
 	return collection, nil
 }
 
-func (s *Service) GetTrendingMovies() (interface{}, error) {
+func (s *Service) GetTrendingMovies(ctx context.Context) (interface{}, error) {
 	endpoint := "/trending/movie/week?language=en-US"
-	trending, err := s.client.TMDBRequest("GET", endpoint, nil)
+	trending, err := s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -181,9 +184,9 @@ func (s *Service) GetTrendingMovies() (interface{}, error) {
 	return trending, nil
 }
 
-func (s *Service) GetUpcomingMovies() (interface{}, error) {
+func (s *Service) GetUpcomingMovies(ctx context.Context) (interface{}, error) {
 	endpoint := "/movie/upcoming?language=en-US&page=1"
-	upcoming, err := s.client.TMDBRequest("GET", endpoint, nil)
+	upcoming, err := s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -191,9 +194,9 @@ func (s *Service) GetUpcomingMovies() (interface{}, error) {
 	return upcoming, nil
 }
 
-func (s *Service) GetPopularMovies() (interface{}, error) {
+func (s *Service) GetPopularMovies(ctx context.Context) (interface{}, error) {
 	endpoint := "/movie/popular?language=en-US&page=1"
-	upcoming, err := s.client.TMDBRequest("GET", endpoint, nil)
+	upcoming, err := s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -201,9 +204,9 @@ func (s *Service) GetPopularMovies() (interface{}, error) {
 	return upcoming, nil
 }
 
-func (s *Service) GetTopRatedMovies() (interface{}, error) {
+func (s *Service) GetTopRatedMovies(ctx context.Context) (interface{}, error) {
 	endpoint := "/movie/top_rated?language=en-US&page=1"
-	upcoming, err := s.client.TMDBRequest("GET", endpoint, nil)
+	upcoming, err := s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -211,13 +214,13 @@ func (s *Service) GetTopRatedMovies() (interface{}, error) {
 	return upcoming, nil
 }
 
-func (s *Service) GetMovieList(listType string, page int) (interface{}, error) {
+func (s *Service) GetMovieList(ctx context.Context, listType string, page int) (interface{}, error) {
 	endpoint, err := listEndpoint(listType, page)
 	if err != nil {
 		return nil, err
 	}
 
-	return s.client.TMDBRequest("GET", endpoint, nil)
+	return s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 }
 
 // tmdbMaxPage is TMDB's hard upper bound on the page parameter.

@@ -10,7 +10,7 @@ import (
 // Defining the interface here keeps the service coupled to behavior, not to
 // one specific HTTP client implementation.
 type TMDBClient interface {
-	TMDBRequest(method, endpoint string, body interface{}) (map[string]interface{}, error)
+	TMDBRequest(ctx context.Context, method, endpoint string, body interface{}) (map[string]interface{}, error)
 }
 
 // TVRepository is the persistence boundary the TV service depends on. The
@@ -89,6 +89,7 @@ func (s *Service) getSeriesDetail(ctx context.Context, tvID int) (*TVSeries, err
 	}
 
 	raw, err := s.client.TMDBRequest(
+		ctx,
 		"GET",
 		fmt.Sprintf("/tv/%d?language=en-US&append_to_response=keywords,credits", tvID),
 		nil,
@@ -115,6 +116,7 @@ func (s *Service) getSeasonDetail(ctx context.Context, tvID, seasonNum int) (*TV
 	}
 
 	raw, err := s.client.TMDBRequest(
+		ctx,
 		"GET",
 		fmt.Sprintf("/tv/%d/season/%d?language=en-US&append_to_response=credits", tvID, seasonNum),
 		nil,
@@ -142,7 +144,7 @@ func (s *Service) GetTvRecommendations(ctx context.Context, idType string, id in
 	}
 
 	endpoint := fmt.Sprintf("/tv/%d/recommendations?language=en-US&page=1", tvID)
-	return s.client.TMDBRequest("GET", endpoint, nil)
+	return s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 }
 
 func (s *Service) GetTvCollection(ctx context.Context, idType string, id int) (interface{}, error) {
@@ -152,7 +154,7 @@ func (s *Service) GetTvCollection(ctx context.Context, idType string, id int) (i
 	}
 
 	endpoint := fmt.Sprintf("/tv/%d?language=en-US", tvID)
-	tv, err := s.client.TMDBRequest("GET", endpoint, nil)
+	tv, err := s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -165,13 +167,13 @@ func (s *Service) GetTvCollection(ctx context.Context, idType string, id int) (i
 	return seasons, nil
 }
 
-func (s *Service) GetTvList(listType string, page int) (interface{}, error) {
+func (s *Service) GetTvList(ctx context.Context, listType string, page int) (interface{}, error) {
 	endpoint, err := listEndpoint(listType, page)
 	if err != nil {
 		return nil, err
 	}
 
-	return s.client.TMDBRequest("GET", endpoint, nil)
+	return s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 }
 
 // tmdbMaxPage is TMDB's hard upper bound on the page parameter.

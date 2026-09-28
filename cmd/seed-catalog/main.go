@@ -131,7 +131,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	ids, err := collectIDs(client, *popularPages, *topRatedPages, *discoverPages, *minVotes, *maxMovies)
+	ids, err := collectIDs(ctx, client, *popularPages, *topRatedPages, *discoverPages, *minVotes, *maxMovies)
 	if err != nil {
 		log.Fatalf("collect ids: %v", err)
 	}
@@ -161,7 +161,7 @@ func main() {
 // collectIDs returns a deduplicated, ordered list of TMDB movie ids drawn from
 // popular, top_rated, and a genre × decade discover sweep. Collection stops
 // early once maxMovies unique ids are gathered.
-func collectIDs(client *tmdb.Client, popularPages, topRatedPages, discoverPages, minVotes, maxMovies int) ([]int, error) {
+func collectIDs(ctx context.Context, client *tmdb.Client, popularPages, topRatedPages, discoverPages, minVotes, maxMovies int) ([]int, error) {
 	seen := make(map[int]bool)
 	var ids []int
 
@@ -197,7 +197,7 @@ func collectIDs(client *tmdb.Client, popularPages, topRatedPages, discoverPages,
 			if capped() {
 				return nil
 			}
-			raw, err := client.TMDBRequest("GET", build(p), nil)
+			raw, err := client.TMDBRequest(ctx, "GET", build(p), nil)
 			if err != nil {
 				return err
 			}

@@ -1,6 +1,8 @@
 package tmdb
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -22,7 +24,7 @@ func TestTMDBRequest_RetriesOn5xxThenSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	c := newClientForTest("token", srv.URL, 1000, 1000)
-	result, err := c.TMDBRequest("GET", "/movie/1", nil)
+	result, err := c.TMDBRequest(context.Background(), "GET", "/movie/1", nil)
 	if err != nil {
 		t.Fatalf("expected success after retries, got error: %v", err)
 	}
@@ -43,7 +45,7 @@ func TestTMDBRequest_DoesNotRetryOn4xx(t *testing.T) {
 	defer srv.Close()
 
 	c := newClientForTest("token", srv.URL, 1000, 1000)
-	if _, err := c.TMDBRequest("GET", "/movie/0", nil); err == nil {
+	if _, err := c.TMDBRequest(context.Background(), "GET", "/movie/0", nil); err == nil {
 		t.Fatal("expected error on 404, got nil")
 	}
 	if got := atomic.LoadInt32(&attempts); got != 1 {
@@ -60,11 +62,175 @@ func TestTMDBRequest_GivesUpAfterMaxAttempts(t *testing.T) {
 	defer srv.Close()
 
 	c := newClientForTest("token", srv.URL, 1000, 1000)
-	if _, err := c.TMDBRequest("GET", "/movie/1", nil); err == nil {
+	if _, err := c.TMDBRequest(context.Background(), "GET", "/movie/1", nil); err == nil {
 		t.Fatal("expected error after exhausting retries")
 	}
 	if got := atomic.LoadInt32(&attempts); got != tmdbMaxAttempts {
 		t.Errorf("expected exactly %d attempts, got %d", tmdbMaxAttempts, got)
+	}
+}
+
+func TestTMDBRequest_CancelStopsTheUpstreamCall(t *testing.T) {
+	var attempts atomic.Int32
+	hungUp := make(chan struct{}, 1)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		select {
+		case <-r.Context().Done():
+			hungUp <- struct{}{}
+		case <-release:
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	c := newClientForTest("token", srv.URL, 1000, 1000)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	start := time.Now()
+	_, err := c.TMDBRequest(ctx, "GET", "/movie/1", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("returned after %v, want soon after the cancel", elapsed)
+	}
+	select {
+	case <-hungUp:
+	case <-time.After(time.Second):
+		t.Error("the upstream request was never abandoned")
+	}
+	if n := attempts.Load(); n != 1 {
+		t.Errorf("attempts = %d, want 1 (no retry once the caller is gone)", n)
+	}
+}
+
+func TestTMDBRequest_CancelDuringBackoffStopsRetrying(t *testing.T) {
+	var attempts atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		// The caller goes away while this retriable failure is in flight.
+		cancel()
+		http.Error(w, "boom", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	c := newClientForTest("token", srv.URL, 1000, 1000)
+	_, err := c.TMDBRequest(ctx, "GET", "/movie/1", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if n := attempts.Load(); n != 1 {
+		t.Errorf("attempts = %d, want 1", n)
+	}
+}
+
+func TestTMDBRequest_CancelWhileWaitingOnTheLimiter(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	// One token per second: the first call spends it, the second waits.
+	c := newClientForTest("token", srv.URL, 1, 1)
+	if _, err := c.TMDBRequest(context.Background(), "GET", "/x", nil); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	start := time.Now()
+	_, err := c.TMDBRequest(ctx, "GET", "/x", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("returned after %v, want soon after the cancel", elapsed)
+	}
+	if n := attempts.Load(); n != 1 {
+		t.Errorf("attempts = %d, want 1 (the cancelled call never reached TMDB)", n)
+	}
+}
+
+func TestTMDBRequest_HungAttemptIsRetried(t *testing.T) {
+	var attempts atomic.Int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok": true}`))
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	c := newClientForTest("token", srv.URL, 1000, 1000)
+	c.http.Timeout = 50 * time.Millisecond
+	result, err := c.TMDBRequest(context.Background(), "GET", "/movie/1", nil)
+	if err != nil {
+		t.Fatalf("expected the second attempt to succeed, got %v", err)
+	}
+	if result["ok"] != true {
+		t.Errorf("unexpected body: %+v", result)
+	}
+	if n := attempts.Load(); n != 2 {
+		t.Errorf("attempts = %d, want 2", n)
+	}
+}
+
+func TestTMDBRequest_HungUpstreamIsNotTheCallersDeadline(t *testing.T) {
+	var attempts atomic.Int32
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	c := newClientForTest("token", srv.URL, 1000, 1000)
+	c.http.Timeout = 30 * time.Millisecond
+	_, err := c.TMDBRequest(context.Background(), "GET", "/movie/1", nil)
+	if err == nil {
+		t.Fatal("expected an error from a TMDB that never answers")
+	}
+	// Callers that share a fetch retry when the fetch's own caller went away.
+	// A slow TMDB must not look like that, or they would retry into it.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, reads as the caller's context ending", err)
+	}
+	if n := attempts.Load(); n != tmdbMaxAttempts {
+		t.Errorf("attempts = %d, want %d", n, tmdbMaxAttempts)
+	}
+}
+
+func TestRetryChainFitsTheServerWriteTimeout(t *testing.T) {
+	// SERVER_TIMEOUT_WRITE in .env.example. TMDB work past it answers a
+	// response the server has already given up on.
+	const writeTimeout = 5 * time.Second
+
+	worst := tmdbMaxAttempts * tmdbAttemptTimeout
+	for a := 1; a < tmdbMaxAttempts; a++ {
+		worst += backoff(a)
+	}
+	if worst >= writeTimeout {
+		t.Errorf("worst-case retry chain = %v, want under %v", worst, writeTimeout)
+	}
+	if got := NewClient("token").http.Timeout; got != tmdbAttemptTimeout {
+		t.Errorf("per-attempt timeout = %v, want %v", got, tmdbAttemptTimeout)
 	}
 }
 
@@ -83,7 +249,7 @@ func TestTMDBRequest_RateLimiterThrottles(t *testing.T) {
 	const n = 6
 	start := time.Now()
 	for range n {
-		if _, err := c.TMDBRequest("GET", "/x", nil); err != nil {
+		if _, err := c.TMDBRequest(context.Background(), "GET", "/x", nil); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}

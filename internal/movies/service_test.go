@@ -16,7 +16,7 @@ type fakeTMDB struct {
 	calls int
 }
 
-func (f *fakeTMDB) TMDBRequest(_, _ string, _ any) (map[string]any, error) {
+func (f *fakeTMDB) TMDBRequest(_ context.Context, _, _ string, _ any) (map[string]any, error) {
 	f.calls++
 	return f.resp, f.err
 }

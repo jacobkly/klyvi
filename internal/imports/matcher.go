@@ -1,6 +1,7 @@
 package imports
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -10,19 +11,19 @@ import (
 // TMDBClient is the search boundary used to resolve a title+year to a TMDB
 // movie id. Only the behaviour is needed, per repo convention.
 type TMDBClient interface {
-	TMDBRequest(method, endpoint string, body interface{}) (map[string]interface{}, error)
+	TMDBRequest(ctx context.Context, method, endpoint string, body interface{}) (map[string]interface{}, error)
 }
 
 // matchRow resolves one parsed row to a TMDB movie id via search, preferring
 // an exact year match when the row carries a year. Returns 0 when nothing
 // matches — the row is then counted as unmatched, never silently dropped.
-func matchRow(client TMDBClient, row Row) int {
+func matchRow(ctx context.Context, client TMDBClient, row Row) int {
 	endpoint := fmt.Sprintf("/search/movie?query=%s&language=en-US&page=1", url.QueryEscape(row.Title))
 	if row.Year > 0 {
 		endpoint += "&year=" + strconv.Itoa(row.Year)
 	}
 
-	resp, err := client.TMDBRequest("GET", endpoint, nil)
+	resp, err := client.TMDBRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return 0
 	}
@@ -31,7 +32,7 @@ func matchRow(client TMDBClient, row Row) int {
 		// Retry without the year filter — a wrong year in the export should
 		// not lose an otherwise-findable title.
 		if row.Year > 0 {
-			return matchRow(client, Row{Title: row.Title})
+			return matchRow(ctx, client, Row{Title: row.Title})
 		}
 		return 0
 	}

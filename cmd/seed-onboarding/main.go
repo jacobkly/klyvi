@@ -145,7 +145,7 @@ func main() {
 func resolveTMDBID(ctx context.Context, client *tmdb.Client, title string, year int) (int64, error) {
 	endpoint := fmt.Sprintf("/search/movie?query=%s&year=%d&language=en-US",
 		url.QueryEscape(title), year)
-	raw, err := client.TMDBRequest("GET", endpoint, nil)
+	raw, err := client.TMDBRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -163,6 +163,5 @@ func resolveTMDBID(ctx context.Context, client *tmdb.Client, title string, year 
 	if !ok {
 		return 0, fmt.Errorf("first result has no id")
 	}
-	_ = ctx // ctx reserved for future cancellation; client doesn't accept it yet
 	return int64(idF), nil
 }

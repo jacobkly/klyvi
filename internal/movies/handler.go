@@ -51,7 +51,7 @@ func (a *API) GetMovieRecommendations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recommendations, err := a.service.GetMovieRecommendations(id)
+	recommendations, err := a.service.GetMovieRecommendations(r.Context(), id)
 	if err != nil {
 		respondError(w, err)
 		return
@@ -101,7 +101,7 @@ func (a *API) GetMovieCollection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) GetTrendingMovies(w http.ResponseWriter, r *http.Request) {
-	trending, err := a.service.GetTrendingMovies()
+	trending, err := a.service.GetTrendingMovies(r.Context())
 	if err != nil {
 		response.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -117,7 +117,7 @@ func (a *API) GetTrendingMovies(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) GetUpcomingMovies(w http.ResponseWriter, r *http.Request) {
-	trending, err := a.service.GetUpcomingMovies()
+	trending, err := a.service.GetUpcomingMovies(r.Context())
 	if err != nil {
 		response.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -133,7 +133,7 @@ func (a *API) GetUpcomingMovies(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) GetPopularMovies(w http.ResponseWriter, r *http.Request) {
-	trending, err := a.service.GetPopularMovies()
+	trending, err := a.service.GetPopularMovies(r.Context())
 	if err != nil {
 		response.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -149,7 +149,7 @@ func (a *API) GetPopularMovies(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) GetTopRatedMovies(w http.ResponseWriter, r *http.Request) {
-	trending, err := a.service.GetTopRatedMovies()
+	trending, err := a.service.GetTopRatedMovies(r.Context())
 	if err != nil {
 		response.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -171,7 +171,7 @@ func (a *API) GetMovieList(w http.ResponseWriter, r *http.Request) {
 	// Absent or non-numeric page falls back to 1; the service clamps range.
 	page, _ := strconv.Atoi(query.Get("page"))
 
-	data, err := a.service.GetMovieList(listType, page)
+	data, err := a.service.GetMovieList(r.Context(), listType, page)
 	if err != nil {
 		respondError(w, err)
 		return

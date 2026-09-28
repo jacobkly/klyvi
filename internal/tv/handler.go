@@ -127,7 +127,7 @@ func (a *API) GetTvList(w http.ResponseWriter, r *http.Request) {
 	// Absent or non-numeric page falls back to 1; the service clamps range.
 	page, _ := strconv.Atoi(query.Get("page"))
 
-	data, err := a.service.GetTvList(listType, page)
+	data, err := a.service.GetTvList(r.Context(), listType, page)
 	if err != nil {
 		respondError(w, err)
 		return

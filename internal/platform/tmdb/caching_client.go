@@ -1,6 +1,8 @@
 package tmdb
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -12,7 +14,7 @@ import (
 
 // requester is the upstream this decorator wraps. The real *Client satisfies it.
 type requester interface {
-	TMDBRequest(method, endpoint string, body interface{}) (map[string]interface{}, error)
+	TMDBRequest(ctx context.Context, method, endpoint string, body interface{}) (map[string]interface{}, error)
 }
 
 // Cache tuning by content class. Catalog data moves slowly; search is the least
@@ -31,6 +33,8 @@ const (
 //
 // A singleflight group collapses concurrent misses for the same endpoint into a
 // single upstream call, so a cold key under load costs one request, not many.
+// That call carries the context of the caller that started it, so a search the
+// user abandoned stops at TMDB instead of finishing for nobody.
 //
 // Cached values are the decoded response maps, treated as read-only: every hit
 // returns the same map, so callers must not mutate it. Current consumers
@@ -53,9 +57,9 @@ func NewCachingTMDBClient(upstream requester) *CachingTMDBClient {
 	}
 }
 
-func (c *CachingTMDBClient) TMDBRequest(method, endpoint string, body interface{}) (map[string]interface{}, error) {
+func (c *CachingTMDBClient) TMDBRequest(ctx context.Context, method, endpoint string, body interface{}) (map[string]interface{}, error) {
 	if method != http.MethodGet {
-		return c.upstream.TMDBRequest(method, endpoint, body)
+		return c.upstream.TMDBRequest(ctx, method, endpoint, body)
 	}
 
 	bucket := c.bucketFor(endpoint)
@@ -69,7 +73,7 @@ func (c *CachingTMDBClient) TMDBRequest(method, endpoint string, body interface{
 		if hit, ok := bucket.Get(endpoint); ok {
 			return hit, nil
 		}
-		res, err := c.upstream.TMDBRequest(method, endpoint, body)
+		res, err := c.upstream.TMDBRequest(ctx, method, endpoint, body)
 		if err != nil {
 			return nil, err // never cache errors
 		}
@@ -77,9 +81,18 @@ func (c *CachingTMDBClient) TMDBRequest(method, endpoint string, body interface{
 		return res, nil
 	})
 	if err != nil {
+		// The fetch runs on its first caller's context. If that request went
+		// away mid-fetch, this one is still live and starts over.
+		if isContextErr(err) && ctx.Err() == nil {
+			return c.TMDBRequest(ctx, method, endpoint, body)
+		}
 		return nil, err
 	}
 	return v.(map[string]interface{}), nil
+}
+
+func isContextErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // bucketFor routes an endpoint to its cache class. Anything unrecognised falls
