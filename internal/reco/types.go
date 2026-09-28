@@ -26,6 +26,9 @@ type MediaFeatures struct {
 // return everything the frontend needs to render a card without an N+1
 // follow-up lookup. The scorers themselves do not read these fields — they
 // ride through the embedding into Scored unchanged.
+//
+// Overview, Runtime and Genres are filled only on the ranked feed, after
+// scoring (see CardDetails), so the candidate pool never carries them.
 type Candidate struct {
 	MediaID      int            `json:"media_id"`
 	MediaType    string         `json:"media_type"`
@@ -35,7 +38,19 @@ type Candidate struct {
 	BackdropPath string         `json:"backdrop_path"`
 	ReleaseYear  int            `json:"release_year"`
 	VoteAverage  float64        `json:"vote_average"`
+	Overview     string         `json:"overview"`
+	Runtime      int            `json:"runtime"`
+	Genres       []string       `json:"genres"`
 	Features     *MediaFeatures `json:"features"`
+}
+
+// CardDetails is the text a feed card shows beyond its artwork and title:
+// the synopsis, the runtime in minutes (0 when unknown), and the genre names
+// in TMDB's order.
+type CardDetails struct {
+	Overview string
+	Runtime  int
+	Genres   []string
 }
 
 // Scored is a ranked Candidate plus the score and structured reasons

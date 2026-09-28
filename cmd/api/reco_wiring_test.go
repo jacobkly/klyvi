@@ -24,8 +24,9 @@ import (
 
 // tier2FeedQueryBudget is the most DB round trips one Tier 2 feed request may
 // make. Every query is a full homelab-to-Supabase round trip, so this number
-// is the feed's latency floor.
-const tier2FeedQueryBudget = 4
+// is the feed's latency floor. The fifth is the card details lookup, which
+// replaces a /v1/movies/{id} request per card from the client.
+const tier2FeedQueryBudget = 5
 
 // TestTier2FeedQueryBudget builds the production recommender for a synthetic
 // Tier 2 user and counts the queries one feed page costs.
@@ -60,6 +61,17 @@ func TestTier2FeedQueryBudget(t *testing.T) {
 	t.Logf("tier 2 feed page 1: %d queries, %v in the DB", snap.DBQueries, snap.DB)
 	if snap.DBQueries > tier2FeedQueryBudget {
 		t.Fatalf("feed made %d queries, budget is %d", snap.DBQueries, tier2FeedQueryBudget)
+	}
+
+	// The cards arrive complete, so the client never hydrates them.
+	detailed := 0
+	for _, s := range page {
+		if s.Overview != "" && len(s.Genres) > 0 {
+			detailed++
+		}
+	}
+	if detailed == 0 {
+		t.Error("no feed item carries an overview and genres")
 	}
 }
 

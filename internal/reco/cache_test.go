@@ -2,6 +2,7 @@ package reco
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"sync"
@@ -42,6 +43,19 @@ func (r *countedRepos) SampleMovieCandidates(context.Context, int) ([]Candidate,
 func (r *countedRepos) LookupReasonNames(ctx context.Context, genreIDs, keywordIDs []int) (map[int]string, map[int]string, error) {
 	r.loads.Add(1)
 	return r.stubCatalog.LookupReasonNames(ctx, genreIDs, keywordIDs)
+}
+
+func (r *countedRepos) CardDetails(ctx context.Context, mediaIDs []int) (map[int]CardDetails, error) {
+	r.loads.Add(1)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stubCatalog.CardDetails(ctx, mediaIDs)
+}
+
+func (r *countedRepos) failDetails(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.detailsErr = err
 }
 
 func (r *countedRepos) ListByUser(context.Context, uuid.UUID, int) ([]InteractionRow, error) {
@@ -111,6 +125,51 @@ func TestFeed_CachedFeedServesLaterPagesWithoutLoading(t *testing.T) {
 		if s.Reasons[0].Name != "Drama" {
 			t.Fatalf("position %d: reason name %q, want Drama", i, s.Reasons[0].Name)
 		}
+	}
+}
+
+// The cache fill looks details up for the whole ranked list, so every later
+// page carries them without another load.
+func TestFeed_CachedPagesCarryDetails(t *testing.T) {
+	repos := newCountedRepos(30)
+	repos.details = map[int]CardDetails{25: {Overview: "Deep in the feed.", Runtime: 90, Genres: []string{"Drama"}}}
+	orch, _ := newCachedOrchestrator(repos)
+	ctx, user := context.Background(), uuid.New()
+
+	if _, err := orch.Feed(ctx, user, 10, 0); err != nil {
+		t.Fatalf("page 1: %v", err)
+	}
+	loads := repos.loads.Load()
+	page3, err := orch.Feed(ctx, user, 10, 20)
+	if err != nil {
+		t.Fatalf("page 3: %v", err)
+	}
+	if got := repos.loads.Load(); got != loads {
+		t.Errorf("page 3 made %d loads, want 0", got-loads)
+	}
+	if got := page3[4]; got.MediaID != 25 || got.Overview != "Deep in the feed." || got.Runtime != 90 {
+		t.Errorf("position 25 = media %d with %q, %d", got.MediaID, got.Overview, got.Runtime)
+	}
+}
+
+// A feed whose details failed is never cached: the next request retries.
+func TestFeed_DetailsFailureIsNotCached(t *testing.T) {
+	repos := newCountedRepos(5)
+	repos.details = map[int]CardDetails{1: {Overview: "Top pick."}}
+	repos.failDetails(errors.New("details down"))
+	orch, _ := newCachedOrchestrator(repos)
+	ctx, user := context.Background(), uuid.New()
+
+	if _, err := orch.Feed(ctx, user, 5, 0); err == nil {
+		t.Fatal("Feed succeeded with the details lookup down")
+	}
+	repos.failDetails(nil)
+	out, err := orch.Feed(ctx, user, 5, 0)
+	if err != nil {
+		t.Fatalf("Feed after recovery: %v", err)
+	}
+	if out[0].Overview != "Top pick." {
+		t.Errorf("top overview = %q, want the recovered details", out[0].Overview)
 	}
 }
 

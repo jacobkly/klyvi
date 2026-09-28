@@ -16,6 +16,7 @@ func TestScored_MarshalsSnakeCase(t *testing.T) {
 		Candidate: reco.Candidate{
 			MediaID: 1, MediaType: "movie", TMDBID: 550, Title: "Fight Club",
 			PosterPath: "/p.jpg", BackdropPath: "/b.jpg", ReleaseYear: 1999, VoteAverage: 8.4,
+			Overview: "An insomniac starts a club.", Runtime: 139, Genres: []string{"Drama"},
 			Features: &reco.MediaFeatures{MediaID: 1, GenreIDs: []int{18}, KeywordIDs: []int{825}},
 		},
 		Score:   0.9,
@@ -26,7 +27,7 @@ func TestScored_MarshalsSnakeCase(t *testing.T) {
 
 	for _, key := range []string{
 		`"media_id"`, `"media_type"`, `"tmdb_id"`, `"poster_path"`, `"backdrop_path"`,
-		`"release_year"`, `"vote_average"`, `"score"`, `"reasons"`,
+		`"release_year"`, `"vote_average"`, `"overview"`, `"runtime"`, `"genres"`, `"score"`, `"reasons"`,
 		`"genre_ids"`, `"keyword_ids"`,
 	} {
 		if !strings.Contains(got, key) {

@@ -25,6 +25,10 @@ func (m *memTracking) GetEntry(context.Context, uuid.UUID, int) (*tracking.Entry
 	return nil, nil
 }
 
+func (m *memTracking) GetEntryByTMDB(context.Context, uuid.UUID, int, string, *int) (*tracking.Entry, error) {
+	return nil, nil
+}
+
 func (m *memTracking) UpdateEntry(context.Context, uuid.UUID, int, tracking.UpdatePatch) (*tracking.Entry, error) {
 	if m.missing {
 		return nil, nil

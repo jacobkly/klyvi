@@ -68,6 +68,20 @@ func (a *catalogAdapter) LookupReasonNames(ctx context.Context, genreIDs, keywor
 	return a.names.Lookup(ctx, genreIDs, keywordIDs)
 }
 
+// CardDetails satisfies reco.CatalogRepository with one query over the
+// ranked ids.
+func (a *catalogAdapter) CardDetails(ctx context.Context, mediaIDs []int) (map[int]reco.CardDetails, error) {
+	rows, err := a.repo.CardDetailsByMediaIDs(ctx, mediaIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int]reco.CardDetails, len(rows))
+	for _, r := range rows {
+		out[r.MediaID] = reco.CardDetails{Overview: r.Overview, Runtime: r.Runtime, Genres: r.Genres}
+	}
+	return out, nil
+}
+
 func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 	cands := make([]reco.Candidate, 0, len(rows))
 	for _, row := range rows {

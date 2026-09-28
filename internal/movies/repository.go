@@ -3,6 +3,7 @@ package movies
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
@@ -244,6 +245,72 @@ func (r *Repository) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) (
 		where mi.media_id = any($1)
 	`, mediaIDs)
 	return rows, err
+}
+
+// CardDetails is the card text the feed shows for one movie: its synopsis,
+// its runtime in minutes (0 when unknown), and its genre names in TMDB order.
+type CardDetails struct {
+	MediaID  int
+	Overview string
+	Runtime  int
+	Genres   []string
+}
+
+// CardDetailsByMediaIDs returns the card text for a ranked feed. It is kept
+// out of the candidate projection on purpose: the pool is 1,200 rows and only
+// the ranked few need a synopsis.
+func (r *Repository) CardDetailsByMediaIDs(ctx context.Context, mediaIDs []int) ([]CardDetails, error) {
+	if len(mediaIDs) == 0 {
+		return []CardDetails{}, nil
+	}
+	var rows []struct {
+		MediaID  int              `db:"media_id"`
+		Overview string           `db:"overview"`
+		Runtime  int              `db:"runtime"`
+		Genres   *json.RawMessage `db:"genres"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		select mi.media_id, coalesce(m.overview, '') as overview,
+		       coalesce(m.runtime, 0) as runtime, m.genres
+		from movies m
+		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
+		where mi.media_id = any($1)
+	`, mediaIDs); err != nil {
+		return nil, fmt.Errorf("select card details: %w", err)
+	}
+
+	out := make([]CardDetails, len(rows))
+	for i, row := range rows {
+		out[i] = CardDetails{
+			MediaID:  row.MediaID,
+			Overview: row.Overview,
+			Runtime:  row.Runtime,
+			Genres:   genreNames(row.Genres),
+		}
+	}
+	return out, nil
+}
+
+// genreNames reads the names out of a TMDB genres array, in order. A missing
+// or malformed column yields no names: the card goes without genres rather
+// than failing the whole feed over one row.
+func genreNames(raw *json.RawMessage) []string {
+	names := []string{}
+	if raw == nil {
+		return names
+	}
+	var genres []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(*raw, &genres); err != nil {
+		return names
+	}
+	for _, g := range genres {
+		if g.Name != "" {
+			names = append(names, g.Name)
+		}
+	}
+	return names
 }
 
 // LookupGenreNames returns id→name pairs for the requested genre ids from

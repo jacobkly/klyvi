@@ -164,6 +164,45 @@ func (a *API) DeleteList(w http.ResponseWriter, r *http.Request) {
 		map[string]int64{"affected": affected})
 }
 
+// Lookup — GET /v1/tracking/lookup?tmdb_id=&media_type=&season_number=.
+// Returns the user's entry for one title, or 404 when they do not track it.
+func (a *API) Lookup(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserUUIDFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "no user in context")
+		return
+	}
+
+	q := r.URL.Query()
+	tmdbID, err := strconv.Atoi(q.Get("tmdb_id"))
+	if err != nil {
+		response.WriteError(w, http.StatusBadRequest, "invalid tmdb_id")
+		return
+	}
+	req := LookupRequest{TMDBID: tmdbID, MediaType: q.Get("media_type")}
+	if v := q.Get("season_number"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			response.WriteError(w, http.StatusBadRequest, "invalid season_number")
+			return
+		}
+		req.SeasonNumber = &n
+	}
+
+	entry, err := a.service.Lookup(r.Context(), userID, req)
+	if err != nil {
+		respondError(w, err)
+		return
+	}
+	if entry == nil {
+		response.WriteError(w, http.StatusNotFound, "tracking entry not found")
+		return
+	}
+
+	response.WriteSuccess(w, http.StatusOK, "v1",
+		middleware.StatsFromContext(r.Context()), entry)
+}
+
 // List — GET /v1/tracking?media_type=movie&status=completed
 func (a *API) List(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.UserUUIDFromContext(r.Context())

@@ -3,6 +3,7 @@ package reco
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -16,6 +17,8 @@ type stubCatalog struct {
 	cands        []Candidate
 	genreNames   map[int]string
 	keywordNames map[int]string
+	details      map[int]CardDetails
+	detailsErr   error
 }
 
 func (s *stubCatalog) SampleMovieCandidates(ctx context.Context, limit int) ([]Candidate, error) {
@@ -32,6 +35,19 @@ func (s *stubCatalog) CandidatesByMediaIDs(ctx context.Context, ids []int) ([]Ca
 
 func (s *stubCatalog) LookupReasonNames(ctx context.Context, genreIDs, keywordIDs []int) (map[int]string, map[int]string, error) {
 	return s.genreNames, s.keywordNames, nil
+}
+
+func (s *stubCatalog) CardDetails(ctx context.Context, mediaIDs []int) (map[int]CardDetails, error) {
+	if s.detailsErr != nil {
+		return nil, s.detailsErr
+	}
+	out := map[int]CardDetails{}
+	for _, id := range mediaIDs {
+		if d, ok := s.details[id]; ok {
+			out[id] = d
+		}
+	}
+	return out, nil
 }
 
 type stubSignal struct{}
@@ -107,6 +123,79 @@ func TestFeed_PopulatesDisplayFields(t *testing.T) {
 	if s.Features == nil {
 		t.Error("Features should be retained for debug/explainability")
 	}
+}
+
+// A feed card shows the synopsis, runtime and genres, so the feed carries
+// them and the client never hydrates each card from /v1/movies/{id}. An item
+// the catalog holds no details for still encodes genres as [], never null.
+func TestFeed_CarriesCardDetails(t *testing.T) {
+	cands := []Candidate{
+		{MediaID: 1, MediaType: "movie", VoteAverage: 9},
+		{MediaID: 2, MediaType: "movie", VoteAverage: 8},
+	}
+	cat := &stubCatalog{cands: cands, details: map[int]CardDetails{
+		1: {Overview: "A detective hunts a killer.", Runtime: 131, Genres: []string{"Crime", "Drama"}},
+	}}
+	orch := NewOrchestrator(cat, stubSignal{}, stubSeen{}, DefaultConfig()).WithTier0(voteScorer{})
+
+	out, err := orch.Feed(context.Background(), uuid.New(), 10, 0)
+	if err != nil {
+		t.Fatalf("Feed: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("got %d items, want 2", len(out))
+	}
+	got := out[0]
+	if got.Overview != "A detective hunts a killer." || got.Runtime != 131 ||
+		!slices.Equal(got.Genres, []string{"Crime", "Drama"}) {
+		t.Errorf("details = %q, %d, %v", got.Overview, got.Runtime, got.Genres)
+	}
+	if out[1].Genres == nil {
+		t.Error("an item with no details has nil genres, which encodes as null")
+	}
+}
+
+// Without a feed cache only the returned page is ranked out, so only its
+// items are looked up.
+func TestFeed_UncachedLooksUpDetailsForThePageOnly(t *testing.T) {
+	cands := make([]Candidate, 5)
+	for i := range cands {
+		cands[i] = Candidate{MediaID: i + 1, MediaType: "movie", VoteAverage: float64(10 - i)}
+	}
+	cat := &recordingDetails{stubCatalog: &stubCatalog{cands: cands}}
+	orch := NewOrchestrator(cat, stubSignal{}, stubSeen{}, DefaultConfig()).WithTier0(voteScorer{})
+
+	if _, err := orch.Feed(context.Background(), uuid.New(), 2, 2); err != nil {
+		t.Fatalf("Feed: %v", err)
+	}
+	if !slices.Equal(cat.asked, []int{3, 4}) {
+		t.Errorf("looked up details for %v, want [3 4]", cat.asked)
+	}
+}
+
+// A card with a blank synopsis looks broken, so a failed details lookup
+// fails the feed rather than serving it half-filled.
+func TestFeed_DetailsFailureFailsTheFeed(t *testing.T) {
+	cat := &stubCatalog{
+		cands:      []Candidate{{MediaID: 1, MediaType: "movie", VoteAverage: 9}},
+		detailsErr: errors.New("details down"),
+	}
+	orch := NewOrchestrator(cat, stubSignal{}, stubSeen{}, DefaultConfig()).WithTier0(voteScorer{})
+
+	if _, err := orch.Feed(context.Background(), uuid.New(), 10, 0); err == nil {
+		t.Fatal("Feed succeeded with the details lookup down")
+	}
+}
+
+// recordingDetails records which media ids the orchestrator asked details for.
+type recordingDetails struct {
+	*stubCatalog
+	asked []int
+}
+
+func (r *recordingDetails) CardDetails(ctx context.Context, mediaIDs []int) (map[int]CardDetails, error) {
+	r.asked = append(r.asked, mediaIDs...)
+	return r.stubCatalog.CardDetails(ctx, mediaIDs)
 }
 
 // Verifies that Reasons returned from the orchestrator carry resolved

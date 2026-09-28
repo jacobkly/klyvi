@@ -3,6 +3,7 @@ package tracking
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -134,6 +135,25 @@ func (r *Repository) GetEntry(ctx context.Context, userID uuid.UUID, mediaID int
 		return nil, nil
 	}
 	return &e, err
+}
+
+// GetEntryByTMDB finds the user's entry for one catalog item by its TMDB
+// identity, in one query. seasonNumber is nil for a movie. Returns nil when
+// the user does not track the item.
+func (r *Repository) GetEntryByTMDB(ctx context.Context, userID uuid.UUID, tmdbID int, mediaType string, seasonNumber *int) (*Entry, error) {
+	var e Entry
+	err := r.db.GetContext(ctx, &e, `
+		select `+entrySelectClause+entryFromClause+`
+		where ml.user_id = $1 and mi.id = $2 and mi.media_type = $3
+		  and mi.season_number is not distinct from $4::int
+	`, userID, tmdbID, mediaType, seasonNumber)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get entry by tmdb id: %w", err)
+	}
+	return &e, nil
 }
 
 // UpdateEntry applies a partial patch using COALESCE — only non-nil fields

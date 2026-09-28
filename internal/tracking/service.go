@@ -12,6 +12,7 @@ type TrackingRepository interface {
 	EnsureMediaIndexAndGetID(ctx context.Context, tmdbID int, mediaType string, seasonNumber *int) (int, error)
 	AddEntry(ctx context.Context, userID uuid.UUID, mediaID int, p AddParams) (*Entry, error)
 	GetEntry(ctx context.Context, userID uuid.UUID, mediaID int) (*Entry, error)
+	GetEntryByTMDB(ctx context.Context, userID uuid.UUID, tmdbID int, mediaType string, seasonNumber *int) (*Entry, error)
 	UpdateEntry(ctx context.Context, userID uuid.UUID, mediaID int, patch UpdatePatch) (*Entry, error)
 	DeleteEntry(ctx context.Context, userID uuid.UUID, mediaID int) (bool, error)
 	ListByUser(ctx context.Context, userID uuid.UUID, filters ListFilters) ([]Entry, error)
@@ -76,17 +77,8 @@ type UpdateRequest struct {
 // entry is returned unchanged (idempotent — frontend can call POST without
 // first checking).
 func (s *Service) Add(ctx context.Context, userID uuid.UUID, req AddRequest) (*Entry, error) {
-	if err := validateMediaType(req.MediaType); err != nil {
+	if err := validateIdentity(req.TMDBID, req.MediaType, req.SeasonNumber); err != nil {
 		return nil, err
-	}
-	if req.MediaType == MediaTypeSeason && req.SeasonNumber == nil {
-		return nil, invalid("season_number is required for media_type=season")
-	}
-	if req.MediaType == MediaTypeMovie && req.SeasonNumber != nil {
-		return nil, invalid("season_number must be omitted for media_type=movie")
-	}
-	if req.TMDBID <= 0 {
-		return nil, invalid("tmdb_id is required and must be positive")
 	}
 	if err := validateStatus(req.Status); err != nil {
 		return nil, err
@@ -152,6 +144,23 @@ func (s *Service) Delete(ctx context.Context, userID uuid.UUID, mediaID int) (bo
 	return deleted, nil
 }
 
+// LookupRequest names one catalog item by its TMDB identity, the way the
+// client knows it on a detail page.
+type LookupRequest struct {
+	TMDBID       int
+	MediaType    string
+	SeasonNumber *int
+}
+
+// Lookup returns the user's entry for one catalog item, or nil when they do
+// not track it, so a detail page never downloads the whole library.
+func (s *Service) Lookup(ctx context.Context, userID uuid.UUID, req LookupRequest) (*Entry, error) {
+	if err := validateIdentity(req.TMDBID, req.MediaType, req.SeasonNumber); err != nil {
+		return nil, err
+	}
+	return s.repo.GetEntryByTMDB(ctx, userID, req.TMDBID, req.MediaType, req.SeasonNumber)
+}
+
 func (s *Service) List(ctx context.Context, userID uuid.UUID, filters ListFilters) ([]Entry, error) {
 	if filters.MediaType != nil {
 		if err := validateMediaType(*filters.MediaType); err != nil {
@@ -207,6 +216,24 @@ func validateMediaType(mt string) error {
 	default:
 		return invalid("invalid media_type %q (must be 'movie' or 'season')", mt)
 	}
+}
+
+// validateIdentity checks a TMDB identity: a season needs its number and a
+// movie must not carry one.
+func validateIdentity(tmdbID int, mediaType string, seasonNumber *int) error {
+	if err := validateMediaType(mediaType); err != nil {
+		return err
+	}
+	if mediaType == MediaTypeSeason && seasonNumber == nil {
+		return invalid("season_number is required for media_type=season")
+	}
+	if mediaType == MediaTypeMovie && seasonNumber != nil {
+		return invalid("season_number must be omitted for media_type=movie")
+	}
+	if tmdbID <= 0 {
+		return invalid("tmdb_id is required and must be positive")
+	}
+	return nil
 }
 
 func validateStatus(s *string) error {

@@ -2,6 +2,7 @@ package reco
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sort"
 
@@ -47,6 +48,11 @@ type CatalogRepository interface {
 	// names by scanning the JSONB columns on the movies cache. Missing
 	// ids are simply absent from the returned maps — never an error.
 	LookupReasonNames(ctx context.Context, genreIDs, keywordIDs []int) (map[int]string, map[int]string, error)
+
+	// CardDetails returns the card text for the given media ids, keyed by
+	// media id. It runs over the ranked feed, never the candidate pool, so
+	// the pool query stays narrow. Ids it does not hold are simply absent.
+	CardDetails(ctx context.Context, mediaIDs []int) (map[int]CardDetails, error)
 }
 
 // SignalRepository pulls the user's interaction history for the signal
@@ -143,10 +149,14 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset
 		if err != nil {
 			return nil, err
 		}
-		// Resolve reason names for the returned page only — one DB round-trip
-		// regardless of page size, and we never pay for items we don't return.
+		// Resolve names and details for the returned page only — one DB
+		// round-trip each regardless of page size, and we never pay for items
+		// we don't return.
 		page := pageOf(ranked, offset, limit)
 		o.resolveReasonNames(ctx, page)
+		if err := o.fillCardDetails(ctx, page); err != nil {
+			return nil, err
+		}
 		return page, nil
 	}
 
@@ -155,9 +165,12 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset
 		if err != nil {
 			return nil, err
 		}
-		// Every request shares the cached list, so names go in before it is
-		// cached and nothing writes to it afterwards.
+		// Every request shares the cached list, so names and details go in
+		// before it is cached and nothing writes to it afterwards.
 		o.resolveReasonNames(ctx, ranked)
+		if err := o.fillCardDetails(ctx, ranked); err != nil {
+			return nil, err
+		}
 		return ranked, nil
 	})
 	if err != nil {
@@ -290,6 +303,32 @@ func (o *Orchestrator) resolveReasonNames(ctx context.Context, scored []Scored) 
 			}
 		}
 	}
+}
+
+// fillCardDetails sets the synopsis, runtime and genre names on every item.
+// Unlike reason names these are not optional: a card with a blank synopsis
+// looks broken, so a failed lookup fails the feed (and is never cached).
+// Genres is never nil, so it encodes as [] for an item with no details.
+func (o *Orchestrator) fillCardDetails(ctx context.Context, scored []Scored) error {
+	if len(scored) == 0 {
+		return nil
+	}
+	ids := make([]int, len(scored))
+	for i, s := range scored {
+		ids[i] = s.MediaID
+	}
+	details, err := o.catalog.CardDetails(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("card details: %w", err)
+	}
+	for i := range scored {
+		d := details[scored[i].MediaID]
+		scored[i].Overview, scored[i].Runtime, scored[i].Genres = d.Overview, d.Runtime, d.Genres
+		if scored[i].Genres == nil {
+			scored[i].Genres = []string{}
+		}
+	}
+	return nil
 }
 
 // pickScorer applies the tier cascade. Slice 4-7/4-8 will introduce

@@ -165,6 +165,7 @@ func New(services Services) *chi.Mux {
 				// All tracking write bodies are tiny; cap the whole group.
 				r.Use(middleware.MaxBodyBytes(jsonBodyCap))
 				r.Get("/", trackingAPI.List)
+				r.Get("/lookup", trackingAPI.Lookup)
 				r.Post("/", trackingAPI.Add)
 				// Scoped bulk delete of the whole list; the single-entry
 				// delete lives on /{media_id} below and does not collide.

@@ -283,6 +283,56 @@ func TestCandidateRows_CarryFeatureIDsAndNamesResolve(t *testing.T) {
 	}
 }
 
+// The feed's card text comes from one query over the ranked ids: genre names
+// keep TMDB's order, and a skinny row with no genres, synopsis or runtime
+// yields empty values rather than an error.
+func TestCardDetailsByMediaIDs(t *testing.T) {
+	repo, dbConn := openTestRepo(t)
+	ctx := context.Background()
+	rich := 2_000_000_000 + rand.Intn(100_000_000)
+	skinny := rich + 1
+	cleanupTestMovies(t, dbConn, rich, skinny)
+
+	m := testMovie(rich, true)
+	overview := "A test synopsis."
+	genres := json.RawMessage(`[{"id":80,"name":"Crime"},{"id":18,"name":"Drama"}]`)
+	m.Overview, m.Runtime, m.Genres = &overview, 131, &genres
+	if err := repo.InsertMovies(ctx, []*movies.Movie{m, testMovie(skinny, false)}); err != nil {
+		t.Fatalf("InsertMovies: %v", err)
+	}
+	if err := repo.EnsureMediaIndexes(ctx, []int{rich, skinny}); err != nil {
+		t.Fatalf("EnsureMediaIndexes: %v", err)
+	}
+	mediaIDOf := map[int]int{}
+	var pairs []struct {
+		ID      int `db:"id"`
+		MediaID int `db:"media_id"`
+	}
+	if err := dbConn.SelectContext(ctx, &pairs,
+		`select id, media_id from media_index where id = any($1) and media_type = 'movie'`, []int{rich, skinny}); err != nil {
+		t.Fatalf("media ids: %v", err)
+	}
+	for _, p := range pairs {
+		mediaIDOf[p.ID] = p.MediaID
+	}
+
+	got, err := repo.CardDetailsByMediaIDs(ctx, []int{mediaIDOf[rich], mediaIDOf[skinny]})
+	if err != nil {
+		t.Fatalf("CardDetailsByMediaIDs: %v", err)
+	}
+	byMedia := map[int]movies.CardDetails{}
+	for _, d := range got {
+		byMedia[d.MediaID] = d
+	}
+	if d := byMedia[mediaIDOf[rich]]; d.Overview != overview || d.Runtime != 131 ||
+		!reflect.DeepEqual(d.Genres, []string{"Crime", "Drama"}) {
+		t.Errorf("rich details = %+v", d)
+	}
+	if d, ok := byMedia[mediaIDOf[skinny]]; !ok || d.Overview != "" || d.Runtime != 0 || len(d.Genres) != 0 {
+		t.Errorf("skinny details = %+v (present %v), want empty values", d, ok)
+	}
+}
+
 // Verifies the slice-4 wiring end to end: the TMDB detail call uses
 // append_to_response=keywords,credits, normalize unwraps the keywords
 // envelope, and the row persisted to the movies table has both columns
