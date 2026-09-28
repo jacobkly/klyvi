@@ -20,7 +20,8 @@ func NewAPI(service *Service) *API {
 //
 // Public endpoint (no auth). Returns the active onboarding pool enriched
 // with cached movie data so the frontend can render the curated swipe
-// deck without per-film follow-up lookups.
+// deck without per-film follow-up lookups. The service caps limit at
+// MaxPoolLimit.
 func (a *API) Pool(w http.ResponseWriter, r *http.Request) {
 	limit := 20 // default per the task spec
 	if v := r.URL.Query().Get("limit"); v != "" {

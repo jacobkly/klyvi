@@ -14,26 +14,20 @@ func NewRepository(db *sqlx.DB) *Repository {
 	return &Repository{db: db}
 }
 
-// ListActive returns up to `limit` active pool entries ordered by
-// `display_order` ascending. limit <= 0 means "no limit".
-func (r *Repository) ListActive(ctx context.Context, limit int) ([]PoolEntry, error) {
-	var rows []PoolEntry
-	if limit > 0 {
-		err := r.db.SelectContext(ctx, &rows, `
-			select tmdb_id, dimension, display_order, active, added_at
-			from onboarding_pool
-			where active = true
-			order by display_order asc, tmdb_id asc
-			limit $1
-		`, limit)
-		return rows, err
-	}
+// ListActiveWithCatalog returns up to limit active pool entries in
+// display_order, each joined with the display fields of its cached movie, in
+// one round trip.
+func (r *Repository) ListActiveWithCatalog(ctx context.Context, limit int) ([]PoolRow, error) {
+	var rows []PoolRow
 	err := r.db.SelectContext(ctx, &rows, `
-		select tmdb_id, dimension, display_order, active, added_at
-		from onboarding_pool
-		where active = true
-		order by display_order asc, tmdb_id asc
-	`)
+		select p.tmdb_id, p.dimension, m.title, m.poster_path, m.release_date,
+		       m.credits is not null as detailed
+		from onboarding_pool p
+		left join movies m on m.movie_id = p.tmdb_id
+		where p.active = true
+		order by p.display_order asc, p.tmdb_id asc
+		limit $1
+	`, limit)
 	return rows, err
 }
 

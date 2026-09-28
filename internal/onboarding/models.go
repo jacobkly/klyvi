@@ -13,6 +13,19 @@ type PoolEntry struct {
 	AddedAt      time.Time `db:"added_at"      json:"added_at"`
 }
 
+// PoolRow is an active pool entry joined with its cached `movies` row. The
+// catalog fields are nil when the film is not cached. Detailed is true once
+// the cached row has credits, which is what the movies service treats as a
+// full detail fetch rather than a search hit.
+type PoolRow struct {
+	TMDBID      int64      `db:"tmdb_id"`
+	Dimension   string     `db:"dimension"`
+	Title       *string    `db:"title"`
+	PosterPath  *string    `db:"poster_path"`
+	ReleaseDate *time.Time `db:"release_date"`
+	Detailed    bool       `db:"detailed"`
+}
+
 // EnrichedPoolEntry is what `GET /v1/onboarding/pool` returns — a pool row
 // joined with the cached `movies` row so the frontend can render posters
 // without per-item lookups.

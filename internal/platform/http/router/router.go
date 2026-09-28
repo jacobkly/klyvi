@@ -119,9 +119,12 @@ func New(services Services) *chi.Mux {
 		).Get("/search", searchAPI.GetSearchResult)
 
 		// Onboarding pool is public — the frontend hits it before the user
-		// has authenticated (the swipe deck on the welcome screen).
+		// has authenticated (the swipe deck on the welcome screen). It is the
+		// same curated deck for everyone and changes only on a reseed, so it
+		// caches like the catalog.
 		onboardingAPI := onboarding.NewAPI(services.Onboarding)
-		r.Get("/onboarding/pool", onboardingAPI.Pool)
+		r.With(middleware.CacheControl(catalogMaxAge, catalogSWR)).
+			Get("/onboarding/pool", onboardingAPI.Pool)
 
 		// Username availability is public for the same reason: sign-up has
 		// no session yet. It reads the users table, so it carries its own

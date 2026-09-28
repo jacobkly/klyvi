@@ -8,9 +8,14 @@ import (
 	"klyvi-api/internal/movies"
 )
 
+// MaxPoolLimit caps one pool request. The curated pool is about 30 films, so
+// this is the whole deck with room to grow, while an uncached pool can never
+// turn one public request into an unbounded run of TMDB fetches.
+const MaxPoolLimit = 50
+
 // PoolRepository is the persistence boundary for the onboarding service.
 type PoolRepository interface {
-	ListActive(ctx context.Context, limit int) ([]PoolEntry, error)
+	ListActiveWithCatalog(ctx context.Context, limit int) ([]PoolRow, error)
 }
 
 // MovieLookup is the catalog-side surface this service depends on. The
@@ -32,21 +37,39 @@ func NewService(repo PoolRepository, catalog MovieLookup) *Service {
 
 // ListEnriched returns the active onboarding pool joined with catalog
 // data so the frontend has everything it needs to render the swipe deck.
-// A pool entry that isn't yet in the movies cache triggers a TMDB fetch
-// via the standard movies.Service path — subsequent calls hit the cache.
+// limit is capped at MaxPoolLimit, and 0 asks for that many.
+//
+// Films cached with full detail come straight from the pool query. Any other
+// film goes through the standard movies.Service path, which fetches it from
+// TMDB and caches it. That includes a film cached only from a search hit: its
+// row has no keywords, and the rating the user gives it is a reco signal.
 //
 // Catalog failures for a single film are logged best-effort and that
 // film is omitted from the response rather than failing the whole call;
 // the spec explicitly mentions "filter out at /onboarding/start time" if
 // a film is unavailable.
 func (s *Service) ListEnriched(ctx context.Context, limit int) ([]EnrichedPoolEntry, error) {
-	rows, err := s.repo.ListActive(ctx, limit)
+	if limit <= 0 || limit > MaxPoolLimit {
+		limit = MaxPoolLimit
+	}
+	rows, err := s.repo.ListActiveWithCatalog(ctx, limit)
 	if err != nil {
 		return nil, err
 	}
 
 	out := make([]EnrichedPoolEntry, 0, len(rows))
 	for _, row := range rows {
+		if row.Detailed {
+			out = append(out, EnrichedPoolEntry{
+				TMDBID:      row.TMDBID,
+				Title:       derefString(row.Title),
+				PosterPath:  derefString(row.PosterPath),
+				ReleaseYear: yearOf(row.ReleaseDate),
+				Dimension:   row.Dimension,
+			})
+			continue
+		}
+
 		movie, err := s.catalog.GetMovieById(ctx, int(row.TMDBID), "tmdb")
 		if err != nil {
 			log.Printf("onboarding: skip tmdb_id=%d, catalog fetch failed: %v", row.TMDBID, err)

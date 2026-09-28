@@ -11,6 +11,7 @@ import (
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/platform/db"
+	"klyvi-api/internal/platform/timing"
 	"klyvi-api/internal/platform/tmdb"
 
 	"github.com/joho/godotenv"
@@ -129,6 +130,72 @@ func TestOnboarding_ListEnriched_JoinsCatalog(t *testing.T) {
 		if e.TMDBID == 13 {
 			t.Errorf("inactive row (tmdb=13) should have been filtered out")
 		}
+	}
+}
+
+// A pool whose films are all cached with full detail is served from the
+// database in one batched read, not one lookup per film.
+func TestOnboarding_ListEnriched_CachedPoolQueryBudget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB+TMDB integration test in short mode")
+	}
+
+	root := findRepoRoot(t)
+	if err := godotenv.Load(filepath.Join(root, ".env.dev")); err != nil {
+		t.Skipf("could not load .env.dev: %v", err)
+	}
+	if os.Getenv("TMDB_API_KEY") == "" {
+		t.Skip("TMDB_API_KEY not set")
+	}
+
+	dbConn, err := db.New(*config.NewDB())
+	if err != nil {
+		t.Skipf("DB unreachable: %v", err)
+	}
+	defer dbConn.Close()
+
+	movieSvc := movies.NewService(tmdb.NewClient(config.NewTMDB().APIKey), movies.NewRepository(dbConn))
+	repo := onboarding.NewRepository(dbConn)
+	svc := onboarding.NewService(repo, movieSvc)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// None of these are in the curated seed, so cleanup cannot remove a
+	// real pool row.
+	pool := []int64{550, 27205, 155}
+	t.Cleanup(func() {
+		_, _ = dbConn.ExecContext(context.Background(),
+			`delete from onboarding_pool where tmdb_id = any($1)`, pool)
+	})
+	for i, id := range pool {
+		if err := repo.Upsert(ctx, onboarding.PoolEntry{
+			TMDBID: id, Dimension: "auteur", DisplayOrder: i + 1, Active: true,
+		}); err != nil {
+			t.Fatalf("Upsert tmdb_id=%d: %v", id, err)
+		}
+	}
+
+	// The first call fetches and caches any film that lacks detail.
+	if _, err := svc.ListEnriched(ctx, len(pool)); err != nil {
+		t.Fatalf("warm-up ListEnriched: %v", err)
+	}
+
+	timed, rec := timing.NewContext(ctx)
+	got, err := svc.ListEnriched(timed, len(pool))
+	if err != nil {
+		t.Fatalf("ListEnriched: %v", err)
+	}
+	if len(got) != len(pool) {
+		t.Fatalf("got %d entries, want %d", len(got), len(pool))
+	}
+	for i, e := range got {
+		if e.TMDBID != pool[i] || e.Title == "" || e.PosterPath == "" || e.ReleaseYear == 0 {
+			t.Errorf("entry %d = %+v, want tmdb_id %d with title, poster and year", i, e, pool[i])
+		}
+	}
+	if n := rec.Snapshot().DBQueries; n > 2 {
+		t.Errorf("cached pool of %d made %d queries, budget is 2", len(pool), n)
 	}
 }
 
