@@ -13,6 +13,20 @@ import (
 	"klyvi-api/internal/reco"
 )
 
+// newRecoOrchestrator wires the tier cascade to the DB-backed adapters. It is
+// the one place production builds the recommender, so tests that measure the
+// feed measure exactly what the server runs.
+func newRecoOrchestrator(dbConn *sqlx.DB, movieRepo *movies.Repository, cfg reco.Config, idf *reco.FeatureIDF) *reco.Orchestrator {
+	return reco.NewOrchestrator(
+		newCatalogAdapter(movieRepo),
+		newSignalAdapter(dbConn),
+		newSeenAdapter(dbConn),
+		cfg,
+	).WithTier0(reco.NewTier0()).
+		WithTier1(reco.NewTier1(cfg).WithIDF(idf)).
+		WithTier2(reco.NewTier2(cfg, newProfileAdapter(dbConn)).WithIDF(idf))
+}
+
 // catalogAdapter wraps movies.Repository to satisfy reco.CatalogRepository.
 // Translates the movies cache rows into reco's MediaFeatures shape.
 type catalogAdapter struct {

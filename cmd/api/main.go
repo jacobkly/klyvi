@@ -119,14 +119,7 @@ func main() {
 		log.Println("reco: IDF weighting off (set RECO_USE_IDF=true to enable)")
 	}
 
-	recoOrchestrator := reco.NewOrchestrator(
-		newCatalogAdapter(movieRepo),
-		newSignalAdapter(dbConn),
-		newSeenAdapter(dbConn),
-		recoCfg,
-	).WithTier0(reco.NewTier0()).
-		WithTier1(reco.NewTier1(recoCfg).WithIDF(featureIDF)).
-		WithTier2(reco.NewTier2(recoCfg, newProfileAdapter(dbConn)).WithIDF(featureIDF))
+	recoOrchestrator := newRecoOrchestrator(dbConn, movieRepo, recoCfg, featureIDF)
 
 	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
 		JWKSURL:  cfg.Supabase.JWKSURL,
