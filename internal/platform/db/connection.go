@@ -6,7 +6,8 @@ import (
 
 	"klyvi-api/config"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -21,10 +22,12 @@ func New(cfg config.ConfDB) (*sqlx.DB, error) {
 		cfg.SSLMode,
 	)
 
-	db, err := sqlx.Open("pgx", dsn)
+	connCfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse db config: %w", err)
 	}
+	connCfg.Tracer = queryTracer{}
+	db := sqlx.NewDb(stdlib.OpenDB(*connCfg), "pgx")
 
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
