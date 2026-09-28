@@ -38,9 +38,9 @@ Make it easy to find what to watch next, with recommendations that reflect a use
 - ✅ Recommendation engine — Tier 0 (Bayesian quality), Tier 1 (keyword-weighted content), Tier 2 (persisted taste profile), MMR diversification, already-seen filtering
 - ✅ Onboarding curated pool endpoint for cold-start swipe deck
 - ✅ Leave-one-out evaluation harness
-- ⬜ Tier 3 embeddings (pgvector) and explanations — paid tier, post-beta
+- ✅ Deployment (homelab Docker behind a Cloudflare tunnel, image built by CI)
 - ⬜ TV in the recommender (season→series rollup)
-- ⬜ Deployment
+- ⬜ Tier 3 embeddings (pgvector) and explanations, free for everyone
 
 ## Getting Started
 
@@ -99,6 +99,39 @@ go run ./cmd/seed-onboarding
 # Start the API
 go run ./cmd/api
 ```
+
+### Local database (rehearsing migrations)
+
+A disposable local Supabase stack (Postgres 17 with pgvector and the Supabase
+roles) is configured in `supabase/config.toml`. goose owns the schema, so the
+CLI's own migrations and seeding are off. Ports sit in the 544xx range so the
+stack can run beside other local Supabase projects.
+
+Create a `.env.local` with the CLI's fixed local credentials:
+
+```bash
+DB_HOST=127.0.0.1
+DB_PORT=54422
+DB_USER=postgres
+DB_PASS=postgres
+DB_NAME=postgres
+DB_SSLMODE=disable
+DB_DEBUG=true
+```
+
+Then rehearse every new migration here (up, down, up) before running it
+against the hosted project:
+
+```bash
+npx supabase start                             # needs Docker Desktop
+go run ./cmd/migrate -env .env.local up
+go run ./cmd/migrate -env .env.local down      # prove the down works
+go run ./cmd/migrate -env .env.local up
+npx supabase stop                              # or `stop --no-backup` to wipe it
+```
+
+`cmd/migrate` defaults to `.env.dev` (the hosted project). Variables already
+set in the environment win over the file.
 
 Health check:
 

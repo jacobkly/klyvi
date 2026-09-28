@@ -19,16 +19,17 @@ const (
 )
 
 var (
-	flags = flag.NewFlagSet("migrate", flag.ExitOnError)
-	dir   = flags.String("dir", "migrations", "directory with migration files")
+	flags   = flag.NewFlagSet("migrate", flag.ExitOnError)
+	dir     = flags.String("dir", "migrations", "directory with migration files")
+	envFile = flags.String("env", ".env.dev", "env file with DB_* settings (already-set env vars win)")
 )
 
 func main() {
-	// used to run migrations locally w/o docker
-	_ = godotenv.Load(".env.dev")
-
 	flags.Usage = usage
 	flags.Parse(os.Args[1:])
+
+	// used to run migrations locally w/o docker
+	_ = godotenv.Load(*envFile)
 
 	args := flags.Args()
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
@@ -64,9 +65,10 @@ func usage() {
 }
 
 var (
-	usagePrefix = `Usage: migrate COMMAND
+	usagePrefix = `Usage: migrate [-env FILE] COMMAND
 Examples:
     migrate status
+    migrate -env .env.local up    # rehearse against the local Supabase stack
 `
 
 	usageCommands = `
