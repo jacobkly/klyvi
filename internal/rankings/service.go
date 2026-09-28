@@ -3,8 +3,11 @@ package rankings
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // TMDBClient is the external boundary: fetch a list page. Mirrors the small
@@ -38,6 +41,9 @@ type Service struct {
 
 	mu    sync.Mutex
 	cache map[mediaKind]cacheEntry
+
+	// misses collapses concurrent cache misses for one list into one fetch.
+	misses singleflight.Group
 }
 
 func NewService(client TMDBClient, resolver MediaIDResolver) *Service {
@@ -59,6 +65,24 @@ func (s *Service) top(ctx context.Context, kind mediaKind) ([]Ranking, error) {
 		return cached, nil
 	}
 
+	// Concurrent misses share one fetch. The list is cached for every
+	// visitor, so the fetch runs to the end even if the request that started
+	// it goes away.
+	v, err, _ := s.misses.Do(strconv.Itoa(int(kind)), func() (any, error) {
+		// A caller that missed just as a fetch finished finds it here.
+		if cached, ok := s.fresh(kind); ok {
+			return cached, nil
+		}
+		return s.compute(context.WithoutCancel(ctx), kind)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]Ranking), nil
+}
+
+// compute fetches the list from TMDB, resolves media ids and caches it.
+func (s *Service) compute(ctx context.Context, kind mediaKind) ([]Ranking, error) {
 	results, err := s.fetchPages(kind)
 	if err != nil {
 		return nil, err
