@@ -87,6 +87,7 @@ func main() {
 	maxMovies := flag.Int("max-movies", 10000, "stop collecting ids once this many unique ids are gathered (0 = no cap)")
 	timeout := flag.Duration("timeout", 3*time.Hour, "overall run timeout")
 	backfill := flag.Bool("backfill-uncached", false, "instead of the sweep, cache every media_index movie that has no movies row (repairs imported 'Untitled' rows), then exit")
+	backfillSkinnyRows := flag.Bool("backfill-skinny", false, "instead of the sweep, refetch every cached movie that has no credits (rows warmed from search hits), then exit")
 	refreshStats := flag.Bool("refresh-feature-stats", false, "instead of the sweep, recompute the feature_stats / feature_corpus tables (recommender IDF inputs) from the cached catalog, then exit")
 	flag.Parse()
 
@@ -112,6 +113,13 @@ func main() {
 	if *backfill {
 		if err := backfillUncached(ctx, dbConn, svc); err != nil {
 			log.Fatalf("backfill: %v", err)
+		}
+		os.Exit(0)
+	}
+
+	if *backfillSkinnyRows {
+		if err := backfillSkinny(ctx, dbConn, svc); err != nil {
+			log.Fatalf("backfill skinny: %v", err)
 		}
 		os.Exit(0)
 	}
@@ -264,6 +272,35 @@ func backfillUncached(ctx context.Context, dbConn *sqlx.DB, svc *movies.Service)
 		}
 	}
 	log.Printf("backfill done: %d cached, %d failed in %s", done, failed, time.Since(start))
+	return nil
+}
+
+// backfillSkinny refetches every cached movie that has no credits. Those rows
+// came from search hits, which carry neither keywords nor credits, so they are
+// invisible to the recommender. GetMovieById treats them as misses and
+// upgrades them in place. Idempotent.
+func backfillSkinny(ctx context.Context, dbConn *sqlx.DB, svc *movies.Service) error {
+	var ids []int
+	if err := dbConn.SelectContext(ctx, &ids,
+		`select movie_id from movies where credits is null order by movie_id`); err != nil {
+		return fmt.Errorf("query skinny rows: %w", err)
+	}
+	log.Printf("backfill-skinny: %d movies without detail", len(ids))
+
+	start := time.Now()
+	var failed int
+	for i, id := range ids {
+		m, err := svc.GetMovieById(ctx, id, "tmdb")
+		if err == nil && m.Credits == nil {
+			err = fmt.Errorf("still no credits (TMDB unreachable or id gone)")
+		}
+		if err != nil {
+			log.Printf("backfill-skinny [%d/%d] id=%d: %v", i+1, len(ids), id, err)
+			failed++
+		}
+	}
+	log.Printf("backfill-skinny done: %d upgraded, %d failed in %s",
+		len(ids)-failed, failed, time.Since(start).Truncate(time.Millisecond))
 	return nil
 }
 

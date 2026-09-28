@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"sync"
+	"time"
 
 	"klyvi-api/internal/movies"
 )
@@ -17,24 +19,37 @@ type TMDBClient interface {
 }
 
 // MovieRepository is the persistence boundary search uses to warm the movies
-// cache from search hits. Search only needs the two write operations; the
+// cache from search hits. Search only needs the two batch writes; the
 // interface is declared here in the consumer package to match the rest of the
 // repo's convention.
 type MovieRepository interface {
-	InsertMovie(ctx context.Context, movie *movies.Movie) error
-	EnsureMediaIndex(ctx context.Context, movieID int) error
+	InsertMovies(ctx context.Context, batch []*movies.Movie) error
+	EnsureMediaIndexes(ctx context.Context, movieIDs []int) error
 }
 
+const (
+	// maxConcurrentWarms caps background cache writes. A search that arrives
+	// while every slot is busy skips warming, which only costs a cache miss.
+	maxConcurrentWarms = 2
+	warmTimeout        = 10 * time.Second
+)
+
 type Service struct {
-	client TMDBClient
-	repo   MovieRepository
+	client  TMDBClient
+	repo    MovieRepository
+	warming chan struct{}
+	wg      sync.WaitGroup
 }
 
 // NewService wires search to the TMDB boundary and the movie cache. The repo
-// is used best-effort to populate the movies cache from search hits; failures
-// are logged but never block the search response.
+// is used best-effort to populate the movies cache from search hits, after the
+// response and never on the request's clock.
 func NewService(client TMDBClient, repo MovieRepository) *Service {
-	return &Service{client: client, repo: repo}
+	return &Service{
+		client:  client,
+		repo:    repo,
+		warming: make(chan struct{}, maxConcurrentWarms),
+	}
 }
 
 func (s *Service) GetSearchResult(ctx context.Context, searchType, query string) (interface{}, error) {
@@ -60,21 +75,29 @@ func (s *Service) GetSearchResult(ctx context.Context, searchType, query string)
 	// Warm the movie cache from search hits. Only the movie and multi paths
 	// can produce movie items; tv/person searches never do.
 	if searchType == "movie" || searchType == "" {
-		s.warmMovieCache(ctx, searchType, searchResult)
+		s.warmMovieCache(movieHits(searchType, searchResult))
 	}
 
 	return searchResult, nil
 }
 
-// warmMovieCache best-effort persists movie hits from a search response into
-// the movies cache and media_index. Errors are logged, never surfaced — the
-// user is searching, not waiting for a cache fill.
-func (s *Service) warmMovieCache(ctx context.Context, searchType string, raw map[string]interface{}) {
+// Wait blocks until background cache warming finishes. Tests call it before
+// reading the cache, and the server calls it while shutting down.
+func (s *Service) Wait() {
+	s.wg.Wait()
+}
+
+// movieHits normalizes the movie items in a search response, dropping repeats.
+// It runs on the request goroutine so the background write never shares the
+// response map with the JSON encoder.
+func movieHits(searchType string, raw map[string]interface{}) []*movies.Movie {
 	results, ok := raw["results"].([]interface{})
 	if !ok {
-		return
+		return nil
 	}
 
+	seen := make(map[int]bool, len(results))
+	var hits []*movies.Movie
 	for _, r := range results {
 		item, ok := r.(map[string]interface{})
 		if !ok {
@@ -91,16 +114,46 @@ func (s *Service) warmMovieCache(ctx context.Context, searchType string, raw map
 		}
 
 		m := movies.NormalizeTMDBMovie(item)
-		if m.MovieID == 0 {
+		if m.MovieID == 0 || seen[m.MovieID] {
 			continue
 		}
-
-		if err := s.repo.InsertMovie(ctx, m); err != nil {
-			log.Printf("best-effort InsertMovie from search (id=%d) failed: %v", m.MovieID, err)
-			continue
-		}
-		if err := s.repo.EnsureMediaIndex(ctx, m.MovieID); err != nil {
-			log.Printf("best-effort EnsureMediaIndex from search (id=%d) failed: %v", m.MovieID, err)
-		}
+		seen[m.MovieID] = true
+		hits = append(hits, m)
 	}
+	return hits
+}
+
+// warmMovieCache persists search hits into the movies cache and media_index
+// in the background, one statement per table. Errors are logged, never
+// surfaced: the user is searching, not waiting for a cache fill.
+func (s *Service) warmMovieCache(hits []*movies.Movie) {
+	if len(hits) == 0 {
+		return
+	}
+	select {
+	case s.warming <- struct{}{}:
+	default:
+		return
+	}
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() { <-s.warming }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), warmTimeout)
+		defer cancel()
+
+		if err := s.repo.InsertMovies(ctx, hits); err != nil {
+			log.Printf("best-effort InsertMovies from search (%d hits) failed: %v", len(hits), err)
+			return
+		}
+		ids := make([]int, len(hits))
+		for i, m := range hits {
+			ids[i] = m.MovieID
+		}
+		if err := s.repo.EnsureMediaIndexes(ctx, ids); err != nil {
+			log.Printf("best-effort EnsureMediaIndexes from search (%d hits) failed: %v", len(ids), err)
+		}
+	}()
 }

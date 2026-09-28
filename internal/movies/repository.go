@@ -61,30 +61,80 @@ func (r *Repository) GetMovieIDByMediaID(ctx context.Context, mediaID int) (int,
 	return movieID, nil
 }
 
-func (r *Repository) InsertMovie(ctx context.Context, movie *Movie) error {
-	_, err := r.db.NamedExecContext(ctx, `
-		insert into movies (
-			movie_id, adult, backdrop_path, belongs_to_collection,
-			budget, genres, homepage, imdb_id,
-			original_language, original_title, overview,
-			popularity, poster_path, production_companies,
-			production_countries, release_date, revenue,
-			runtime, spoken_languages, status,
-			tagline, title, video, vote_average, vote_count,
-			keywords, credits
-		) values (
-			:movie_id, :adult, :backdrop_path, :belongs_to_collection,
-			:budget, :genres, :homepage, :imdb_id,
-			:original_language, :original_title, :overview,
-			:popularity, :poster_path, :production_companies,
-			:production_countries, :release_date, :revenue,
-			:runtime, :spoken_languages, :status,
-			:tagline, :title, :video, :vote_average, :vote_count,
-			:keywords, :credits
-		)
-		on conflict (movie_id) do nothing
-	`, movie)
+const insertMovieSQL = `
+	insert into movies (
+		movie_id, adult, backdrop_path, belongs_to_collection,
+		budget, genres, homepage, imdb_id,
+		original_language, original_title, overview,
+		popularity, poster_path, production_companies,
+		production_countries, release_date, revenue,
+		runtime, spoken_languages, status,
+		tagline, title, video, vote_average, vote_count,
+		keywords, credits
+	) values (
+		:movie_id, :adult, :backdrop_path, :belongs_to_collection,
+		:budget, :genres, :homepage, :imdb_id,
+		:original_language, :original_title, :overview,
+		:popularity, :poster_path, :production_companies,
+		:production_countries, :release_date, :revenue,
+		:runtime, :spoken_languages, :status,
+		:tagline, :title, :video, :vote_average, :vote_count,
+		:keywords, :credits
+	)
+	on conflict (movie_id) do update set
+		adult = excluded.adult,
+		backdrop_path = excluded.backdrop_path,
+		belongs_to_collection = excluded.belongs_to_collection,
+		budget = excluded.budget,
+		genres = excluded.genres,
+		homepage = excluded.homepage,
+		imdb_id = excluded.imdb_id,
+		original_language = excluded.original_language,
+		original_title = excluded.original_title,
+		overview = excluded.overview,
+		popularity = excluded.popularity,
+		poster_path = excluded.poster_path,
+		production_companies = excluded.production_companies,
+		production_countries = excluded.production_countries,
+		release_date = excluded.release_date,
+		revenue = excluded.revenue,
+		runtime = excluded.runtime,
+		spoken_languages = excluded.spoken_languages,
+		status = excluded.status,
+		tagline = excluded.tagline,
+		title = excluded.title,
+		video = excluded.video,
+		vote_average = excluded.vote_average,
+		vote_count = excluded.vote_count,
+		keywords = excluded.keywords,
+		credits = excluded.credits,
+		updated_at = now()
+	where movies.credits is null and excluded.credits is not null`
 
+// InsertMovie caches a movie. A row cached from a search hit has no keywords
+// or credits, so a full detail record replaces it. A full row is never
+// replaced, least of all by a skinny search hit.
+func (r *Repository) InsertMovie(ctx context.Context, movie *Movie) error {
+	_, err := r.db.NamedExecContext(ctx, insertMovieSQL, movie)
+	return err
+}
+
+// InsertMovies caches a batch in one statement, with the same conflict rules
+// as InsertMovie. Duplicate ids are dropped first, because Postgres refuses to
+// touch one row twice in a single insert.
+func (r *Repository) InsertMovies(ctx context.Context, batch []*Movie) error {
+	seen := make(map[int]bool, len(batch))
+	unique := make([]*Movie, 0, len(batch))
+	for _, m := range batch {
+		if !seen[m.MovieID] {
+			seen[m.MovieID] = true
+			unique = append(unique, m)
+		}
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	_, err := r.db.NamedExecContext(ctx, insertMovieSQL, unique)
 	return err
 }
 
@@ -94,6 +144,20 @@ func (r *Repository) EnsureMediaIndex(ctx context.Context, movieID int) error {
 		values ($1, 'movie')
 		on conflict (id, season_number, media_type) do nothing
 	`, movieID)
+
+	return err
+}
+
+// EnsureMediaIndexes is EnsureMediaIndex for a batch, in one statement.
+func (r *Repository) EnsureMediaIndexes(ctx context.Context, movieIDs []int) error {
+	if len(movieIDs) == 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `
+		insert into media_index (id, media_type)
+		select distinct id, 'movie' from unnest($1::int[]) as id
+		on conflict (id, season_number, media_type) do nothing
+	`, movieIDs)
 
 	return err
 }

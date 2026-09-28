@@ -72,7 +72,9 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 	if err != nil {
 		return nil, err
 	}
-	if movie != nil {
+	// A row cached from a search hit has no credits or keywords. Treat it as
+	// a miss so the detail view fills it in, but keep it as a fallback.
+	if movie != nil && movie.Credits != nil {
 		return movie, nil
 	}
 
@@ -82,6 +84,10 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 		nil,
 	)
 	if err != nil {
+		if movie != nil {
+			log.Printf("serving search-cached movie %d without detail: %v", movieID, err)
+			return movie, nil
+		}
 		return nil, err
 	}
 

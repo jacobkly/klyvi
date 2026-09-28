@@ -174,5 +174,7 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("graceful shutdown failed: %v", err)
 	}
+	// Let in-flight search cache writes land before the pool closes.
+	searchService.Wait()
 	log.Println("server stopped")
 }

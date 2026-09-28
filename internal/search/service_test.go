@@ -37,9 +37,80 @@ func findRepoRoot(t *testing.T) string {
 	}
 }
 
+// A search hit is cached without keywords or credits. The first detail view of
+// that movie must fetch the full record and upgrade the row, or the movie stays
+// invisible to the recommender forever.
+func TestSearch_WarmedMovieGainsDetailOnFirstView(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping TMDB+DB integration test in short mode")
+	}
+	root := findRepoRoot(t)
+	if err := godotenv.Load(filepath.Join(root, ".env.dev")); err != nil {
+		t.Skipf("could not load .env.dev: %v", err)
+	}
+	if os.Getenv("TMDB_API_KEY") == "" {
+		t.Skip("TMDB_API_KEY not set")
+	}
+	dbConn, err := db.New(*config.NewDB())
+	if err != nil {
+		t.Skipf("DB unreachable: %v", err)
+	}
+	defer dbConn.Close()
+
+	tmdbClient := tmdb.NewClient(config.NewTMDB().APIKey)
+	repo := movies.NewRepository(dbConn)
+	searchSvc := search.NewService(tmdbClient, repo)
+	movieSvc := movies.NewService(tmdbClient, repo)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const matrixReloaded = 604
+	// Only the cache row goes; media_index ids are referenced by user data.
+	if _, err := dbConn.ExecContext(ctx, `delete from movies where movie_id = $1`, matrixReloaded); err != nil {
+		t.Fatalf("clear cached row: %v", err)
+	}
+
+	if _, err := searchSvc.GetSearchResult(ctx, "movie", "the matrix reloaded"); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	searchSvc.Wait()
+
+	var warmed struct {
+		Keywords []byte `db:"keywords"`
+		Credits  []byte `db:"credits"`
+	}
+	if err := dbConn.GetContext(ctx, &warmed,
+		`select keywords, credits from movies where movie_id = $1`, matrixReloaded); err != nil {
+		t.Fatalf("search did not warm movie %d: %v", matrixReloaded, err)
+	}
+	if warmed.Credits != nil {
+		t.Fatalf("precondition: a search-warmed row should have no credits, got %d bytes", len(warmed.Credits))
+	}
+
+	movie, err := movieSvc.GetMovieById(ctx, matrixReloaded, "tmdb")
+	if err != nil {
+		t.Fatalf("GetMovieById: %v", err)
+	}
+	if movie.Keywords == nil || movie.Credits == nil {
+		t.Fatalf("detail view returned the skinny row: keywords=%v credits=%v", movie.Keywords != nil, movie.Credits != nil)
+	}
+
+	var upgraded struct {
+		Keywords []byte `db:"keywords"`
+		Credits  []byte `db:"credits"`
+	}
+	if err := dbConn.GetContext(ctx, &upgraded,
+		`select keywords, credits from movies where movie_id = $1`, matrixReloaded); err != nil {
+		t.Fatalf("read upgraded row: %v", err)
+	}
+	if upgraded.Keywords == nil || upgraded.Credits == nil {
+		t.Errorf("row not upgraded: keywords=%d bytes credits=%d bytes", len(upgraded.Keywords), len(upgraded.Credits))
+	}
+}
+
 // Verifies the slice-6 promise: a movie-type search warms the movies cache
 // with the returned hits, and a repeat search is idempotent (no error, no
-// duplicate rows because InsertMovie now has ON CONFLICT DO NOTHING).
+// duplicate rows, because the insert is ON CONFLICT).
 func TestSearch_MovieType_WarmsMoviesCache(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping TMDB+DB integration test in short mode")
@@ -112,9 +183,11 @@ func TestSearch_MovieType_WarmsMoviesCache(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	// Second search: same query, but the cache is now empty for these ids.
+	// Warming runs after the response, so wait for it before counting.
 	if _, err := svc.GetSearchResult(ctx, "movie", q); err != nil {
 		t.Fatalf("second search: %v", err)
 	}
+	svc.Wait()
 
 	// Count of cached rows for the searched ids must equal len(ids).
 	var inserted int
@@ -140,6 +213,7 @@ func TestSearch_MovieType_WarmsMoviesCache(t *testing.T) {
 	if _, err := svc.GetSearchResult(ctx, "movie", q); err != nil {
 		t.Fatalf("third (idempotent) search: %v", err)
 	}
+	svc.Wait()
 
 	var afterRepeat int
 	if err := dbConn.QueryRowContext(ctx,
