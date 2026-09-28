@@ -186,7 +186,7 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset
 
 	// MMR rerank trades a little relevance for a noticeably more varied
 	// feed. Tier 0 candidates have nil Features in the synthetic test
-	// path, in which case candidateSimilarity returns 0 and MMRReorder
+	// path, in which case their similarity is 0 and MMRReorder
 	// degenerates to plain score order. Rank down to `want` (the deepest
 	// item the requested page needs); MMR's greedy order is prefix-stable,
 	// so ranking deeper never disturbs earlier pages.
