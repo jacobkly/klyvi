@@ -51,6 +51,9 @@ func (s *Service) DeleteAccount(ctx context.Context, id uuid.UUID) error {
 	// The users row is gone, so a sign-in with a still-valid token must
 	// recreate it.
 	s.ensured.Remove(id.String())
+	if s.feed != nil {
+		s.feed.Invalidate(id)
+	}
 
 	// Best-effort: the object may never have existed. The supabase client
 	// maps 404 to nil, so only a real transport failure surfaces, and even

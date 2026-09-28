@@ -46,6 +46,11 @@ func (f *fakeAuthDeleter) DeleteAuthUser(_ context.Context, userID string) error
 	return nil
 }
 
+// feedInvalidations records which users had their cached feed dropped.
+type feedInvalidations struct{ users []uuid.UUID }
+
+func (f *feedInvalidations) Invalidate(userID uuid.UUID) { f.users = append(f.users, userID) }
+
 func TestDeleteAccount(t *testing.T) {
 	id := uuid.New()
 
@@ -62,6 +67,21 @@ func TestDeleteAccount(t *testing.T) {
 		}
 		if auth.deletedAuthUser != id.String() {
 			t.Errorf("auth user %q deleted, want %q", auth.deletedAuthUser, id)
+		}
+	})
+
+	t.Run("drops the cached feed built from the deleted data", func(t *testing.T) {
+		repo := &fakeDeleteRepo{fakeUserRepo: fakeUserRepo{user: &users.User{ID: id}}}
+		feed := &feedInvalidations{}
+		svc := users.NewService(repo).
+			WithAccountDeletion(&fakeAuthDeleter{}, "avatars").
+			WithFeedInvalidator(feed)
+
+		if err := svc.DeleteAccount(context.Background(), id); err != nil {
+			t.Fatalf("DeleteAccount: %v", err)
+		}
+		if len(feed.users) != 1 || feed.users[0] != id {
+			t.Errorf("feed invalidations = %v, want exactly %v", feed.users, id)
 		}
 	})
 

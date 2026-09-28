@@ -2,6 +2,7 @@ package reco
 
 import (
 	"context"
+	"slices"
 	"sort"
 
 	"github.com/google/uuid"
@@ -82,6 +83,8 @@ type Orchestrator struct {
 	tier0 Scorer
 	tier1 Scorer
 	tier2 Scorer
+
+	cache *FeedCache // nil ranks every request afresh
 }
 
 func NewOrchestrator(catalog CatalogRepository, signal SignalRepository, seen SeenRepository, cfg Config) *Orchestrator {
@@ -99,6 +102,10 @@ func NewOrchestrator(catalog CatalogRepository, signal SignalRepository, seen Se
 func (o *Orchestrator) WithTier0(s Scorer) *Orchestrator { o.tier0 = s; return o }
 func (o *Orchestrator) WithTier1(s Scorer) *Orchestrator { o.tier1 = s; return o }
 func (o *Orchestrator) WithTier2(s Scorer) *Orchestrator { o.tier2 = s; return o }
+
+// WithFeedCache ranks each user's feed to full depth once and serves every
+// page from the cache until it expires or is invalidated.
+func (o *Orchestrator) WithFeedCache(c *FeedCache) *Orchestrator { o.cache = c; return o }
 
 // Wait blocks until every scorer's background writes finish.
 func (o *Orchestrator) Wait() {
@@ -131,6 +138,46 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset
 		want = maxFeedDepth
 	}
 
+	if o.cache == nil {
+		ranked, err := o.rank(ctx, userID, want)
+		if err != nil {
+			return nil, err
+		}
+		// Resolve reason names for the returned page only — one DB round-trip
+		// regardless of page size, and we never pay for items we don't return.
+		page := pageOf(ranked, offset, limit)
+		o.resolveReasonNames(ctx, page)
+		return page, nil
+	}
+
+	ranked, err := o.cache.ranked(ctx, userID, func(ctx context.Context) ([]Scored, error) {
+		ranked, err := o.rank(ctx, userID, maxFeedDepth)
+		if err != nil {
+			return nil, err
+		}
+		// Every request shares the cached list, so names go in before it is
+		// cached and nothing writes to it afterwards.
+		o.resolveReasonNames(ctx, ranked)
+		return ranked, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// A copy, so the caller cannot overwrite or append into the cached list.
+	return slices.Clone(pageOf(ranked, offset, limit)), nil
+}
+
+// pageOf slices one page out of a ranked list, empty past its end.
+func pageOf(ranked []Scored, offset, limit int) []Scored {
+	if offset >= len(ranked) {
+		return []Scored{}
+	}
+	return ranked[offset:min(offset+limit, len(ranked))]
+}
+
+// rank loads the user's signal, builds and scores the candidate pool, and
+// returns the top depth items in feed order.
+func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, depth int) ([]Scored, error) {
 	// The history and the seen set are independent reads; load them together
 	// so the feed waits for one round trip, not two.
 	var (
@@ -187,26 +234,10 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset
 	// MMR rerank trades a little relevance for a noticeably more varied
 	// feed. Tier 0 candidates have nil Features in the synthetic test
 	// path, in which case their similarity is 0 and MMRReorder
-	// degenerates to plain score order. Rank down to `want` (the deepest
-	// item the requested page needs); MMR's greedy order is prefix-stable,
-	// so ranking deeper never disturbs earlier pages.
-	ranked := MMRReorder(scored, want, o.cfg.MMRLambda)
-
-	// Slice the requested page out of the ranked list.
-	if offset >= len(ranked) {
-		return []Scored{}, nil
-	}
-	end := offset + limit
-	if end > len(ranked) {
-		end = len(ranked)
-	}
-	page := ranked[offset:end]
-
-	// Resolve reason names for the returned page only — one DB round-trip
-	// regardless of page size, and we never pay for items we don't return.
-	o.resolveReasonNames(ctx, page)
-
-	return page, nil
+	// degenerates to plain score order. Rank down to `depth` (the deepest
+	// item the caller needs); MMR's greedy order is prefix-stable, so ranking
+	// deeper never disturbs earlier pages.
+	return MMRReorder(scored, depth, o.cfg.MMRLambda), nil
 }
 
 // resolveReasonNames mutates the scored slice, filling in Reason.Name

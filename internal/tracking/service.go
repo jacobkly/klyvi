@@ -19,12 +19,32 @@ type TrackingRepository interface {
 	DeleteByMediaType(ctx context.Context, userID uuid.UUID, mediaType string) (int64, error)
 }
 
+// FeedInvalidator drops a user's cached recommendations. The reco feed cache
+// satisfies it.
+type FeedInvalidator interface {
+	Invalidate(userID uuid.UUID)
+}
+
 type Service struct {
 	repo TrackingRepository
+	feed FeedInvalidator
 }
 
 func NewService(repo TrackingRepository) *Service {
 	return &Service{repo: repo}
+}
+
+// WithFeedInvalidator drops the user's cached feed after every write that
+// changes their list, since tracked items leave the feed.
+func (s *Service) WithFeedInvalidator(f FeedInvalidator) *Service {
+	s.feed = f
+	return s
+}
+
+func (s *Service) listChanged(userID uuid.UUID) {
+	if s.feed != nil {
+		s.feed.Invalidate(userID)
+	}
 }
 
 // AddRequest is the validated input for POST /v1/tracking. TMDBID +
@@ -80,7 +100,7 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, req AddRequest) (*E
 		return nil, err
 	}
 
-	return s.repo.AddEntry(ctx, userID, mediaID, AddParams{
+	entry, err := s.repo.AddEntry(ctx, userID, mediaID, AddParams{
 		MediaType:       req.MediaType,
 		Status:          req.Status,
 		Score:           req.Score,
@@ -88,6 +108,11 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, req AddRequest) (*E
 		Notes:           req.Notes,
 		Favorite:        req.Favorite,
 	})
+	if err != nil {
+		return nil, err
+	}
+	s.listChanged(userID)
+	return entry, nil
 }
 
 // Update applies a patch to an existing entry. Returns nil if no entry
@@ -100,17 +125,31 @@ func (s *Service) Update(ctx context.Context, userID uuid.UUID, mediaID int, req
 		return nil, err
 	}
 
-	return s.repo.UpdateEntry(ctx, userID, mediaID, UpdatePatch{
+	entry, err := s.repo.UpdateEntry(ctx, userID, mediaID, UpdatePatch{
 		Status:          req.Status,
 		Score:           req.Score,
 		EpisodeProgress: req.EpisodeProgress,
 		Notes:           req.Notes,
 		Favorite:        req.Favorite,
 	})
+	if err != nil {
+		return nil, err
+	}
+	if entry != nil {
+		s.listChanged(userID)
+	}
+	return entry, nil
 }
 
 func (s *Service) Delete(ctx context.Context, userID uuid.UUID, mediaID int) (bool, error) {
-	return s.repo.DeleteEntry(ctx, userID, mediaID)
+	deleted, err := s.repo.DeleteEntry(ctx, userID, mediaID)
+	if err != nil {
+		return false, err
+	}
+	if deleted {
+		s.listChanged(userID)
+	}
+	return deleted, nil
 }
 
 func (s *Service) List(ctx context.Context, userID uuid.UUID, filters ListFilters) ([]Entry, error) {
@@ -135,7 +174,14 @@ func (s *Service) ResetScores(ctx context.Context, userID uuid.UUID, mediaType s
 	if err := validateMediaType(mediaType); err != nil {
 		return 0, err
 	}
-	return s.repo.ResetScoresByMediaType(ctx, userID, mediaType)
+	n, err := s.repo.ResetScoresByMediaType(ctx, userID, mediaType)
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		s.listChanged(userID)
+	}
+	return n, nil
 }
 
 // DeleteList removes every tracking row in one media-type scope.
@@ -144,7 +190,14 @@ func (s *Service) DeleteList(ctx context.Context, userID uuid.UUID, mediaType st
 	if err := validateMediaType(mediaType); err != nil {
 		return 0, err
 	}
-	return s.repo.DeleteByMediaType(ctx, userID, mediaType)
+	n, err := s.repo.DeleteByMediaType(ctx, userID, mediaType)
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		s.listChanged(userID)
+	}
+	return n, nil
 }
 
 func validateMediaType(mt string) error {

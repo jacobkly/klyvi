@@ -72,11 +72,19 @@ func main() {
 		log.Println("supabase service-role client not configured; avatar endpoints disabled")
 	}
 
-	trackingService := tracking.NewService(trackingRepo)
-	interactionsService := interactions.NewService(interactionsRepo, trackingRepo)
+	// Each user's ranked feed is kept for 10 minutes, so later pages and the
+	// other screens that open on it reuse one computation. Writes that change
+	// the user's signal drop it. A cached feed is about 130 KB, so 256 users
+	// bound the cache near 33 MB.
+	feedCache := reco.NewFeedCache(10*time.Minute, 256)
+
+	trackingService := tracking.NewService(trackingRepo).WithFeedInvalidator(feedCache)
+	interactionsService := interactions.NewService(interactionsRepo, trackingRepo).
+		WithFeedInvalidator(feedCache)
 
 	userService := users.NewService(userRepo).
-		WithExportSources(trackingService, interactionsService)
+		WithExportSources(trackingService, interactionsService).
+		WithFeedInvalidator(feedCache)
 	if supabaseClient != nil {
 		userService = userService.
 			WithAvatarStorage(supabaseClient, cfg.Supabase.StorageBucket).
@@ -119,7 +127,8 @@ func main() {
 		log.Println("reco: IDF weighting off (set RECO_USE_IDF=true to enable)")
 	}
 
-	recoOrchestrator := newRecoOrchestrator(dbConn, movieRepo, recoCfg, featureIDF)
+	recoOrchestrator := newRecoOrchestrator(dbConn, movieRepo, recoCfg, featureIDF).
+		WithFeedCache(feedCache)
 
 	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
 		JWKSURL:  cfg.Supabase.JWKSURL,

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -12,10 +13,12 @@ import (
 	"github.com/joho/godotenv"
 
 	"klyvi-api/config"
+	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/timing"
 	"klyvi-api/internal/reco"
+	"klyvi-api/internal/tracking"
 	"klyvi-api/internal/users"
 )
 
@@ -57,6 +60,63 @@ func TestTier2FeedQueryBudget(t *testing.T) {
 	t.Logf("tier 2 feed page 1: %d queries, %v in the DB", snap.DBQueries, snap.DB)
 	if snap.DBQueries > tier2FeedQueryBudget {
 		t.Fatalf("feed made %d queries, budget is %d", snap.DBQueries, tier2FeedQueryBudget)
+	}
+}
+
+// TestCachedFeed_LaterPagesSkipTheDBUntilARating wires the feed cache the way
+// main does. Page 2 must cost no queries, and a rating recorded through the
+// interactions service must force a recompute that drops the rated title.
+func TestCachedFeed_LaterPagesSkipTheDBUntilARating(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-dependent test in -short mode")
+	}
+	dbConn := openTestDB(t)
+	userID := newTier2User(t, dbConn)
+
+	feedCache := reco.NewFeedCache(time.Minute, 8)
+	orch := newRecoOrchestrator(dbConn, movies.NewRepository(dbConn), reco.DefaultConfig(), nil).
+		WithFeedCache(feedCache)
+	t.Cleanup(orch.Wait)
+	interactionsService := interactions.NewService(
+		interactions.NewRepository(dbConn), tracking.NewRepository(dbConn)).
+		WithFeedInvalidator(feedCache)
+
+	first, err := orch.Feed(context.Background(), userID, 30, 0)
+	if err != nil {
+		t.Fatalf("page 1: %v", err)
+	}
+	if len(first) == 0 {
+		t.Fatal("page 1 is empty; the synthetic user should get a Tier 2 feed")
+	}
+
+	ctx, rec := timing.NewContext(context.Background())
+	if _, err := orch.Feed(ctx, userID, 30, 30); err != nil {
+		t.Fatalf("page 2: %v", err)
+	}
+	if n := rec.Snapshot().DBQueries; n != 0 {
+		t.Fatalf("page 2 made %d queries, want 0 from the cache", n)
+	}
+
+	rated := first[0]
+	score := 90
+	if _, err := interactionsService.Record(context.Background(), userID, interactions.RecordRequest{
+		TMDBID: rated.TMDBID, MediaType: "movie", Kind: "rated", Rating: &score,
+	}); err != nil {
+		t.Fatalf("record rating: %v", err)
+	}
+
+	ctx, rec = timing.NewContext(context.Background())
+	after, err := orch.Feed(ctx, userID, 30, 0)
+	if err != nil {
+		t.Fatalf("feed after rating: %v", err)
+	}
+	if rec.Snapshot().DBQueries == 0 {
+		t.Fatal("feed after a rating was served from the cache")
+	}
+	for _, s := range after {
+		if s.MediaID == rated.MediaID {
+			t.Fatalf("%q was just rated but is still in the feed", rated.Title)
+		}
 	}
 }
 

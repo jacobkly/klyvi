@@ -76,6 +76,23 @@ type Service struct {
 	// skips its upsert round trip. The TTL re-checks now and then, in case a
 	// row was removed behind the server's back.
 	ensured *cache.TTL[struct{}]
+
+	// feed is nil unless the recommender's feed cache is wired; account
+	// deletion drops the user's cached feed through it.
+	feed FeedInvalidator
+}
+
+// FeedInvalidator drops a user's cached recommendations. The reco feed cache
+// satisfies it.
+type FeedInvalidator interface {
+	Invalidate(userID uuid.UUID)
+}
+
+// WithFeedInvalidator makes account deletion drop the user's cached feed,
+// which was built from the data being deleted.
+func (s *Service) WithFeedInvalidator(f FeedInvalidator) *Service {
+	s.feed = f
+	return s
 }
 
 const (

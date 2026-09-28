@@ -20,13 +20,27 @@ type MediaIndexResolver interface {
 	EnsureMediaIndexAndGetID(ctx context.Context, tmdbID int, mediaType string, seasonNumber *int) (int, error)
 }
 
+// FeedInvalidator drops a user's cached recommendations. The reco feed cache
+// satisfies it.
+type FeedInvalidator interface {
+	Invalidate(userID uuid.UUID)
+}
+
 type Service struct {
 	repo  InteractionRepository
 	media MediaIndexResolver
+	feed  FeedInvalidator
 }
 
 func NewService(repo InteractionRepository, media MediaIndexResolver) *Service {
 	return &Service{repo: repo, media: media}
+}
+
+// WithFeedInvalidator drops the user's cached feed after every deliberate
+// signal they record.
+func (s *Service) WithFeedInvalidator(f FeedInvalidator) *Service {
+	s.feed = f
+	return s
 }
 
 // RecordRequest is the validated body of POST /v1/interactions. The
@@ -84,6 +98,11 @@ func (s *Service) Record(ctx context.Context, userID uuid.UUID, req RecordReques
 	}
 	if err := s.repo.Record(ctx, e); err != nil {
 		return nil, err
+	}
+	// Impressions and clicks fire while the user browses the feed and barely
+	// move it, so they leave the cached feed alone until it expires.
+	if s.feed != nil && req.Kind != KindImpression && req.Kind != KindClicked {
+		s.feed.Invalidate(userID)
 	}
 	return e, nil
 }
