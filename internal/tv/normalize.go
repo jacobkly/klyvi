@@ -3,6 +3,8 @@ package tv
 import (
 	"encoding/json"
 	"time"
+
+	"klyvi-api/internal/platform/tmdb"
 )
 
 // NormalizeTMDBTVSeries converts a raw TMDB series detail payload (with
@@ -96,7 +98,7 @@ func NormalizeTMDBTVSeries(raw map[string]interface{}) *TVSeries {
 		VoteAverage:         floatVal("vote_average"),
 		VoteCount:           intVal("vote_count"),
 		Keywords:            keywordsField,
-		Credits:             j(raw["credits"]),
+		Credits:             j(tmdb.SlimCredits(raw["credits"])),
 	}
 }
 

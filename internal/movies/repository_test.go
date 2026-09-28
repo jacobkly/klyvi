@@ -184,6 +184,68 @@ func TestInsertMovie_UpgradesSkinnyRowsAndNeverDowngrades(t *testing.T) {
 	}
 }
 
+// fatCredits is a TMDB credits object as rows cached before the trim hold it:
+// every billed actor and every crew job.
+func fatCredits(castSize int) *json.RawMessage {
+	cast := make([]map[string]any, 0, castSize)
+	for i := range castSize {
+		cast = append(cast, map[string]any{"id": i, "name": "Actor", "order": i})
+	}
+	b, _ := json.Marshal(map[string]any{
+		"cast": cast,
+		"crew": []map[string]any{
+			{"id": 7467, "name": "David Fincher", "job": "Director"},
+			{"id": 1, "name": "Grip", "job": "Key Grip"},
+		},
+	})
+	rm := json.RawMessage(b)
+	return &rm
+}
+
+// The -slim-credits backfill rewrites rows cached with full credits, and
+// leaves an already-slim row alone on a second pass.
+func TestSlimStoredCredits_TrimsFullCreditsOnce(t *testing.T) {
+	repo, dbConn := openTestRepo(t)
+	ctx := context.Background()
+	fat := 2_000_000_000 + rand.Intn(100_000_000)
+	skinny := fat + 1
+	cleanupTestMovies(t, dbConn, fat, skinny)
+
+	m := testMovie(fat, true)
+	m.Credits = fatCredits(60)
+	if err := repo.InsertMovies(ctx, []*movies.Movie{m, testMovie(skinny, false)}); err != nil {
+		t.Fatalf("InsertMovies: %v", err)
+	}
+
+	slimmed, err := repo.SlimStoredCredits(ctx, []int{fat, skinny})
+	if err != nil {
+		t.Fatalf("SlimStoredCredits: %v", err)
+	}
+	if slimmed != 1 {
+		t.Errorf("slimmed = %d, want 1 (the skinny row has no credits)", slimmed)
+	}
+
+	_, credits := readDetailColumns(t, dbConn, fat)
+	var got struct {
+		Cast []json.RawMessage `json:"cast"`
+		Crew []json.RawMessage `json:"crew"`
+	}
+	if err := json.Unmarshal(credits, &got); err != nil {
+		t.Fatalf("stored credits: %v", err)
+	}
+	if len(got.Cast) != tmdb.CastLimit || len(got.Crew) != 1 {
+		t.Errorf("stored cast=%d crew=%d, want %d and 1", len(got.Cast), len(got.Crew), tmdb.CastLimit)
+	}
+
+	again, err := repo.SlimStoredCredits(ctx, []int{fat})
+	if err != nil {
+		t.Fatalf("SlimStoredCredits again: %v", err)
+	}
+	if again != 0 {
+		t.Errorf("second pass slimmed %d rows, want 0", again)
+	}
+}
+
 // Search warms every hit in one statement per table, tolerating duplicate ids
 // and rows that already exist.
 func TestInsertMovies_BatchWritesMoviesAndIndex(t *testing.T) {
@@ -424,4 +486,16 @@ func TestService_GetMovieById_PopulatesKeywordsAndCredits(t *testing.T) {
 	if _, ok := cr["crew"]; !ok {
 		t.Error("credits.crew missing")
 	}
+
+	// Full credits made this row ~89 KB, which after an idle gap took about
+	// three round trips to read. Trimmed, the whole row fits well under 20 KB.
+	var rowBytes int
+	if err := dbConn.GetContext(ctx, &rowBytes,
+		`select octet_length(m::text) from movies m where movie_id = $1`, movieID); err != nil {
+		t.Fatalf("row size: %v", err)
+	}
+	if rowBytes >= 20_000 {
+		t.Errorf("movie %d row is %d bytes, want under 20 KB", movieID, rowBytes)
+	}
+	t.Logf("movie %d row is %d bytes", movieID, rowBytes)
 }

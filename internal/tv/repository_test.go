@@ -118,6 +118,70 @@ func TestEnsureMediaIndexSeason_ConcurrentInsertProducesOneRow(t *testing.T) {
 	}
 }
 
+// The -slim-credits backfill rewrites series cached with full credits, and
+// leaves an already-slim row alone on a second pass.
+func TestSlimStoredCredits_TrimsFullSeriesCreditsOnce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB integration test in short mode")
+	}
+
+	_, repo, dbh := setup(t)
+	ctx := context.Background()
+	const testTVID = 2_100_000_002
+
+	cleanup := func() { _, _ = dbh.ExecContext(ctx, `delete from tv_series where tv_id = $1`, testTVID) }
+	cleanup()
+	t.Cleanup(cleanup)
+
+	cast := make([]map[string]any, 0, 60)
+	for i := range 60 {
+		cast = append(cast, map[string]any{"id": i, "name": "Actor", "order": i})
+	}
+	b, _ := json.Marshal(map[string]any{
+		"cast": cast,
+		"crew": []map[string]any{
+			{"id": 66633, "name": "Vince Gilligan", "job": "Producer"},
+			{"id": 1, "name": "Mixer", "job": "Sound Re-Recording Mixer"},
+		},
+	})
+	credits := json.RawMessage(b)
+	name := "Klyvi test series"
+	if err := repo.InsertTVSeries(ctx, &tv.TVSeries{TVID: testTVID, Name: &name, Credits: &credits}); err != nil {
+		t.Fatalf("InsertTVSeries: %v", err)
+	}
+
+	slimmed, err := repo.SlimStoredCredits(ctx, []int{testTVID})
+	if err != nil {
+		t.Fatalf("SlimStoredCredits: %v", err)
+	}
+	if slimmed != 1 {
+		t.Errorf("slimmed = %d, want 1", slimmed)
+	}
+
+	var stored []byte
+	if err := dbh.QueryRowContext(ctx, `select credits from tv_series where tv_id = $1`, testTVID).Scan(&stored); err != nil {
+		t.Fatalf("read credits: %v", err)
+	}
+	var got struct {
+		Cast []json.RawMessage `json:"cast"`
+		Crew []json.RawMessage `json:"crew"`
+	}
+	if err := json.Unmarshal(stored, &got); err != nil {
+		t.Fatalf("stored credits: %v", err)
+	}
+	if len(got.Cast) != tmdb.CastLimit || len(got.Crew) != 1 {
+		t.Errorf("stored cast=%d crew=%d, want %d and 1", len(got.Cast), len(got.Crew), tmdb.CastLimit)
+	}
+
+	again, err := repo.SlimStoredCredits(ctx, []int{testTVID})
+	if err != nil {
+		t.Fatalf("SlimStoredCredits again: %v", err)
+	}
+	if again != 0 {
+		t.Errorf("second pass slimmed %d rows, want 0", again)
+	}
+}
+
 // Verifies the end-to-end series-cache flow: fetching a fresh series persists
 // a tv_series row with keywords (unwrapped from the TV-specific "results"
 // envelope) and credits.

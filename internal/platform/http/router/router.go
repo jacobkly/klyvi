@@ -80,6 +80,9 @@ func New(services Services) *chi.Mux {
 	}))
 	r.Use(middleware.LoggerMiddleware)
 	r.Use(middleware.StatsMiddleware)
+	// Gzip JSON for clients that accept it. Detail and feed payloads are
+	// repetitive JSON, so this cuts their bytes on the wire several times over.
+	r.Use(chimiddleware.Compress(5, "application/json"))
 
 	r.Get("/health", health.Get)
 

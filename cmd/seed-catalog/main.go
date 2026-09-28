@@ -20,6 +20,7 @@
 //
 //	go run ./cmd/seed-catalog                  # default ~10k sweep
 //	go run ./cmd/seed-catalog -max-movies 3000 # smaller run
+//	go run ./cmd/seed-catalog -slim-credits    # trim credits cached before the trim
 package main
 
 import (
@@ -37,6 +38,7 @@ import (
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/tmdb"
+	"klyvi-api/internal/tv"
 )
 
 // discoverGenres are TMDB's movie genre ids. These ids are stable; the sweep
@@ -89,6 +91,7 @@ func main() {
 	backfill := flag.Bool("backfill-uncached", false, "instead of the sweep, cache every media_index movie that has no movies row (repairs imported 'Untitled' rows), then exit")
 	backfillSkinnyRows := flag.Bool("backfill-skinny", false, "instead of the sweep, refetch every cached movie that has no credits (rows warmed from search hits), then exit")
 	refreshStats := flag.Bool("refresh-feature-stats", false, "instead of the sweep, recompute the feature_stats / feature_corpus tables (recommender IDF inputs) from the cached catalog, then exit")
+	slimCredits := flag.Bool("slim-credits", false, "instead of the sweep, trim the stored credits of every cached movie and series to what the detail pages read (rows cached before the trim), then exit")
 	flag.Parse()
 
 	if err := godotenv.Load(".env.dev"); err != nil {
@@ -127,6 +130,13 @@ func main() {
 	if *refreshStats {
 		if err := refreshFeatureStats(ctx, dbConn, repo); err != nil {
 			log.Fatalf("refresh feature stats: %v", err)
+		}
+		os.Exit(0)
+	}
+
+	if *slimCredits {
+		if err := slimStoredCredits(ctx, dbConn, repo, tv.NewRepository(dbConn)); err != nil {
+			log.Fatalf("slim credits: %v", err)
 		}
 		os.Exit(0)
 	}
@@ -301,6 +311,48 @@ func backfillSkinny(ctx context.Context, dbConn *sqlx.DB, svc *movies.Service) e
 	}
 	log.Printf("backfill-skinny done: %d upgraded, %d failed in %s",
 		len(ids)-failed, failed, time.Since(start).Truncate(time.Millisecond))
+	return nil
+}
+
+// slimPage is how many rows slimStoredCredits reads and rewrites at a time.
+// Untrimmed credits average tens of KB, so a page is a few MB over the wire.
+const slimPage = 200
+
+// slimStoredCredits trims the credits of every cached movie and series, a
+// page at a time. Credits are trimmed on write now, but rows cached before
+// that carry TMDB's full cast and crew, and the upsert never replaces a row
+// that already has credits. Idempotent: a trimmed row is left alone.
+func slimStoredCredits(ctx context.Context, dbConn *sqlx.DB, movieRepo *movies.Repository, tvRepo *tv.Repository) error {
+	tables := []struct {
+		name   string
+		idsSQL string
+		slim   func(context.Context, []int) (int, error)
+	}{
+		{"movies", `select movie_id from movies where credits is not null order by movie_id`, movieRepo.SlimStoredCredits},
+		{"tv_series", `select tv_id from tv_series where credits is not null order by tv_id`, tvRepo.SlimStoredCredits},
+	}
+	for _, t := range tables {
+		var ids []int
+		if err := dbConn.SelectContext(ctx, &ids, t.idsSQL); err != nil {
+			return fmt.Errorf("list %s: %w", t.name, err)
+		}
+		log.Printf("slim-credits: %d %s rows with credits", len(ids), t.name)
+
+		start := time.Now()
+		var slimmed int
+		for i := 0; i < len(ids); i += slimPage {
+			page := ids[i:min(i+slimPage, len(ids))]
+			n, err := t.slim(ctx, page)
+			if err != nil {
+				return fmt.Errorf("%s from id %d: %w", t.name, page[0], err)
+			}
+			slimmed += n
+			log.Printf("slim-credits %s: %d/%d checked, %d trimmed (%.0fs elapsed)",
+				t.name, i+len(page), len(ids), slimmed, time.Since(start).Seconds())
+		}
+		log.Printf("slim-credits %s done: %d of %d rows trimmed in %s",
+			t.name, slimmed, len(ids), time.Since(start).Truncate(time.Millisecond))
+	}
 	return nil
 }
 

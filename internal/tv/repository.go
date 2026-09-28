@@ -3,8 +3,11 @@ package tv
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/jmoiron/sqlx"
+
+	"klyvi-api/internal/platform/tmdb"
 )
 
 type Repository struct {
@@ -58,6 +61,47 @@ func (r *Repository) InsertTVSeries(ctx context.Context, series *TVSeries) error
 	`, series)
 
 	return err
+}
+
+// SlimStoredCredits trims the stored credits of the given series with
+// tmdb.SlimCredits, for rows cached before credits were trimmed on write. It
+// rewrites only the rows that lose entries and returns how many that was.
+func (r *Repository) SlimStoredCredits(ctx context.Context, tvIDs []int) (int, error) {
+	var rows []struct {
+		ID      int    `db:"tv_id"`
+		Credits []byte `db:"credits"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		select tv_id, credits from tv_series
+		where tv_id = any($1) and credits is not null
+	`, tvIDs); err != nil {
+		return 0, fmt.Errorf("read credits: %w", err)
+	}
+
+	ids := make([]int, 0, len(rows))
+	slimmed := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out, changed, err := tmdb.SlimCreditsJSON(row.Credits)
+		if err != nil {
+			return 0, fmt.Errorf("series %d: %w", row.ID, err)
+		}
+		if changed {
+			ids = append(ids, row.ID)
+			slimmed = append(slimmed, string(out))
+		}
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	if _, err := r.db.ExecContext(ctx, `
+		update tv_series s set credits = v.credits::jsonb
+		from unnest($1::int[], $2::text[]) as v(id, credits)
+		where s.tv_id = v.id
+	`, ids, slimmed); err != nil {
+		return 0, fmt.Errorf("write credits: %w", err)
+	}
+	return len(ids), nil
 }
 
 func (r *Repository) GetTVSeasonByTVIDAndNumber(ctx context.Context, tvID, seasonNumber int) (*TVSeason, error) {

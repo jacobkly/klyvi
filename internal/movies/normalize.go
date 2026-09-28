@@ -3,6 +3,8 @@ package movies
 import (
 	"encoding/json"
 	"time"
+
+	"klyvi-api/internal/platform/tmdb"
 )
 
 func NormalizeTMDBMovie(raw map[string]interface{}) *Movie {
@@ -91,7 +93,7 @@ func NormalizeTMDBMovie(raw map[string]interface{}) *Movie {
 		VoteAverage:         floatVal("vote_average"),
 		VoteCount:           intVal("vote_count"),
 		Keywords:            keywordsField,
-		Credits:             j(raw["credits"]),
+		Credits:             j(tmdb.SlimCredits(raw["credits"])),
 	}
 }
 
