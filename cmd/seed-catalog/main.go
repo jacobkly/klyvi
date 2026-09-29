@@ -18,8 +18,14 @@
 // already cached are served from the DB and not re-fetched, so re-running to
 // top up (or resuming after an interruption) is cheap.
 //
+// With -media tv the same sweep runs over /tv/popular, /tv/top_rated and
+// /discover/tv by first air date, and every id goes through
+// tv.Service.EnsureSeries: cached with keywords and credits plus its 'tv'
+// media_index row, skipped when already cached.
+//
 //	go run ./cmd/seed-catalog                  # default ~10k sweep
 //	go run ./cmd/seed-catalog -max-movies 3000 # smaller run
+//	go run ./cmd/seed-catalog -media tv        # series sweep
 //	go run ./cmd/seed-catalog -slim-credits    # trim credits cached before the trim
 package main
 
@@ -81,16 +87,94 @@ var decadeWindows = []decadeWindow{
 	{"2020-01-01", "2025-12-31"},
 }
 
+// tvDiscoverGenres are TMDB's TV genre ids, which differ from the movie ids
+// where TV merges genres (Action & Adventure, Sci-Fi & Fantasy, War &
+// Politics). News, Soap and Talk are left out: daily formats, not what anyone
+// puts on tonight.
+var tvDiscoverGenres = []int{
+	10759, // Action & Adventure
+	16,    // Animation
+	35,    // Comedy
+	80,    // Crime
+	99,    // Documentary
+	18,    // Drama
+	10751, // Family
+	10762, // Kids
+	9648,  // Mystery
+	10764, // Reality
+	10765, // Sci-Fi & Fantasy
+	10768, // War & Politics
+	37,    // Western
+}
+
+// tvDecadeWindows are first-air-date ranges. Voted TV skews recent, so the
+// 2010s split in two and everything before 1980 shares one window.
+var tvDecadeWindows = []decadeWindow{
+	{"1950-01-01", "1979-12-31"},
+	{"1980-01-01", "1989-12-31"},
+	{"1990-01-01", "1999-12-31"},
+	{"2000-01-01", "2009-12-31"},
+	{"2010-01-01", "2014-12-31"},
+	{"2015-01-01", "2019-12-31"},
+	{"2020-01-01", "2026-12-31"},
+}
+
+// sweep names the TMDB lists a catalog seed draws ids from, and the discover
+// vote floor used when -min-votes is not given.
+type sweep struct {
+	popular, topRated string // path formats taking a page number
+	genres            []int
+	windows           []decadeWindow
+	discover          func(genre int, w decadeWindow, minVotes, page int) string
+	minVotes          int
+}
+
+var movieSweep = sweep{
+	popular:  "/movie/popular?language=en-US&page=%d",
+	topRated: "/movie/top_rated?language=en-US&page=%d",
+	genres:   discoverGenres,
+	windows:  decadeWindows,
+	discover: discoverPath,
+	minVotes: 50,
+}
+
+var tvSweep = sweep{
+	popular:  "/tv/popular?language=en-US&page=%d",
+	topRated: "/tv/top_rated?language=en-US&page=%d",
+	genres:   tvDiscoverGenres,
+	windows:  tvDecadeWindows,
+	discover: discoverTVPath,
+	// A series with 20 votes is as established as a film with far more: TV
+	// draws fewer votes per title.
+	minVotes: 20,
+}
+
+// sweepLimits bounds a sweep: pages per list and per discover bucket, the
+// discover vote floor (0 = the sweep's own), and a cap on unique ids (0 = no
+// cap).
+type sweepLimits struct {
+	popularPages, topRatedPages, discoverPages int
+	minVotes                                   int
+	max                                        int
+}
+
+// tmdbRequester is the one TMDB call the sweep makes.
+type tmdbRequester interface {
+	TMDBRequest(ctx context.Context, method, endpoint string, body interface{}) (map[string]interface{}, error)
+}
+
 func main() {
 	popularPages := flag.Int("popular-pages", 15, "number of /movie/popular pages to walk")
 	topRatedPages := flag.Int("top-rated-pages", 10, "number of /movie/top_rated pages to walk")
 	discoverPages := flag.Int("discover-pages", 8, "pages per (genre × decade) discover bucket")
-	minVotes := flag.Int("min-votes", 50, "discover vote_count.gte floor (keeps some quality without staying mainstream-only)")
+	minVotes := flag.Int("min-votes", 0, "discover vote_count.gte floor, keeping some quality without staying mainstream-only (0 = 50 for movies, 20 for series)")
 	maxMovies := flag.Int("max-movies", 10000, "stop collecting ids once this many unique ids are gathered (0 = no cap)")
+	media := flag.String("media", "movie", "catalog to sweep: movie or tv")
+	maxSeries := flag.Int("max-series", 8000, "with -media tv, stop collecting ids once this many unique series are gathered (0 = no cap)")
 	timeout := flag.Duration("timeout", 3*time.Hour, "overall run timeout")
 	backfill := flag.Bool("backfill-uncached", false, "instead of the sweep, cache every media_index movie that has no movies row (repairs imported 'Untitled' rows), then exit")
 	backfillSkinnyRows := flag.Bool("backfill-skinny", false, "instead of the sweep, refetch every cached movie that has no credits (rows warmed from search hits), then exit")
-	refreshStats := flag.Bool("refresh-feature-stats", false, "instead of the sweep, recompute the feature_stats / feature_corpus tables (recommender IDF inputs) from the cached catalog, then exit")
+	refreshStats := flag.Bool("refresh-feature-stats", false, "instead of the sweep, recompute the feature_stats / feature_corpus tables (recommender IDF inputs) for movies and series from the cached catalog, then exit")
 	slimCredits := flag.Bool("slim-credits", false, "instead of the sweep, trim the stored credits of every cached movie and series to what the detail pages read (rows cached before the trim), then exit")
 	flag.Parse()
 
@@ -109,6 +193,7 @@ func main() {
 	client := tmdb.NewClient(cfg.TMDB.APIKey)
 	repo := movies.NewRepository(dbConn)
 	svc := movies.NewService(client, repo)
+	tvRepo := tv.NewRepository(dbConn)
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
@@ -128,20 +213,40 @@ func main() {
 	}
 
 	if *refreshStats {
-		if err := refreshFeatureStats(ctx, dbConn, repo); err != nil {
+		if err := refreshFeatureStats(ctx, dbConn, repo, tvRepo); err != nil {
 			log.Fatalf("refresh feature stats: %v", err)
 		}
 		os.Exit(0)
 	}
 
 	if *slimCredits {
-		if err := slimStoredCredits(ctx, dbConn, repo, tv.NewRepository(dbConn)); err != nil {
+		if err := slimStoredCredits(ctx, dbConn, repo, tvRepo); err != nil {
 			log.Fatalf("slim credits: %v", err)
 		}
 		os.Exit(0)
 	}
 
-	ids, err := collectIDs(ctx, client, *popularPages, *topRatedPages, *discoverPages, *minVotes, *maxMovies)
+	limits := sweepLimits{
+		popularPages:  *popularPages,
+		topRatedPages: *topRatedPages,
+		discoverPages: *discoverPages,
+		minVotes:      *minVotes,
+	}
+
+	switch *media {
+	case "movie":
+	case "tv":
+		limits.max = *maxSeries
+		if err := seedSeries(ctx, client, tv.NewService(client, tvRepo), limits); err != nil {
+			log.Fatalf("seed series: %v", err)
+		}
+		os.Exit(0)
+	default:
+		log.Fatalf("unknown -media %q (want movie or tv)", *media)
+	}
+
+	limits.max = *maxMovies
+	ids, err := collectIDs(ctx, client, movieSweep, limits)
 	if err != nil {
 		log.Fatalf("collect ids: %v", err)
 	}
@@ -168,14 +273,44 @@ func main() {
 	os.Exit(0)
 }
 
-// collectIDs returns a deduplicated, ordered list of TMDB movie ids drawn from
-// popular, top_rated, and a genre × decade discover sweep. Collection stops
-// early once maxMovies unique ids are gathered.
-func collectIDs(ctx context.Context, client *tmdb.Client, popularPages, topRatedPages, discoverPages, minVotes, maxMovies int) ([]int, error) {
+// seedSeries sweeps TV ids and caches each series through EnsureSeries, which
+// skips series already cached with keywords and credits, so a re-run tops up
+// or resumes cheaply.
+func seedSeries(ctx context.Context, client tmdbRequester, svc *tv.Service, limits sweepLimits) error {
+	ids, err := collectIDs(ctx, client, tvSweep, limits)
+	if err != nil {
+		return fmt.Errorf("collect ids: %w", err)
+	}
+	log.Printf("collected %d unique series ids (popular+top_rated+discover)", len(ids))
+
+	start := time.Now()
+	var failed int
+	for i, id := range ids {
+		if err := svc.EnsureSeries(ctx, id); err != nil {
+			log.Printf("[%d/%d] tv=%d: %v", i+1, len(ids), id, err)
+			failed++
+		}
+		if (i+1)%100 == 0 {
+			log.Printf("seeded %d/%d series (%.0fs elapsed)", i+1, len(ids), time.Since(start).Seconds())
+		}
+	}
+	log.Printf("done: %d series processed, %d failed in %s", len(ids)-failed, failed, time.Since(start))
+	return nil
+}
+
+// collectIDs returns a deduplicated, ordered list of TMDB ids drawn from a
+// sweep's popular and top rated lists and its genre × decade discover
+// buckets. Collection stops early once limits.max unique ids are gathered.
+func collectIDs(ctx context.Context, client tmdbRequester, sw sweep, limits sweepLimits) ([]int, error) {
 	seen := make(map[int]bool)
 	var ids []int
 
-	capped := func() bool { return maxMovies > 0 && len(ids) >= maxMovies }
+	capped := func() bool { return limits.max > 0 && len(ids) >= limits.max }
+
+	minVotes := limits.minVotes
+	if minVotes == 0 {
+		minVotes = sw.minVotes
+	}
 
 	add := func(raw map[string]interface{}) {
 		results, ok := raw["results"].([]interface{})
@@ -192,7 +327,7 @@ func collectIDs(ctx context.Context, client *tmdb.Client, popularPages, topRated
 				continue
 			}
 			id := int(idF)
-			if seen[id] {
+			if seen[id] || capped() {
 				continue
 			}
 			seen[id] = true
@@ -220,28 +355,28 @@ func collectIDs(ctx context.Context, client *tmdb.Client, popularPages, topRated
 	}
 
 	if err := walk(func(p int) string {
-		return fmt.Sprintf("/movie/popular?language=en-US&page=%d", p)
-	}, popularPages); err != nil {
+		return fmt.Sprintf(sw.popular, p)
+	}, limits.popularPages); err != nil {
 		return nil, fmt.Errorf("popular: %w", err)
 	}
 	if err := walk(func(p int) string {
-		return fmt.Sprintf("/movie/top_rated?language=en-US&page=%d", p)
-	}, topRatedPages); err != nil {
+		return fmt.Sprintf(sw.topRated, p)
+	}, limits.topRatedPages); err != nil {
 		return nil, fmt.Errorf("top_rated: %w", err)
 	}
 
-	for _, g := range discoverGenres {
+	for _, g := range sw.genres {
 		if capped() {
 			break
 		}
-		for _, w := range decadeWindows {
+		for _, w := range sw.windows {
 			if capped() {
 				break
 			}
 			genre, window := g, w
 			if err := walk(func(p int) string {
-				return discoverPath(genre, window, minVotes, p)
-			}, discoverPages); err != nil {
+				return sw.discover(genre, window, minVotes, p)
+			}, limits.discoverPages); err != nil {
 				return nil, fmt.Errorf("discover genre=%d %s..%s: %w", genre, window.gte, window.lte, err)
 			}
 		}
@@ -357,31 +492,41 @@ func slimStoredCredits(ctx context.Context, dbConn *sqlx.DB, movieRepo *movies.R
 }
 
 // refreshFeatureStats recomputes the recommender's IDF inputs from the cached
-// catalog and logs a summary so the operator can confirm the tables are
-// populated. Run it after a seed or backfill — the recommender loads these at
-// startup, so a following API restart picks up the new weights.
-func refreshFeatureStats(ctx context.Context, dbConn *sqlx.DB, repo *movies.Repository) error {
-	start := time.Now()
-	if err := repo.RefreshFeatureStats(ctx); err != nil {
-		return err
+// catalog, movies then series, and logs a summary per media type so the
+// operator can confirm the tables are populated. Run it after a seed or
+// backfill — the recommender loads these at startup, so a following API
+// restart picks up the new weights.
+func refreshFeatureStats(ctx context.Context, dbConn *sqlx.DB, movieRepo *movies.Repository, tvRepo *tv.Repository) error {
+	partitions := []struct {
+		mediaType string
+		refresh   func(context.Context) error
+	}{
+		{"movie", movieRepo.RefreshFeatureStats},
+		{"tv", tvRepo.RefreshFeatureStats},
 	}
+	for _, p := range partitions {
+		start := time.Now()
+		if err := p.refresh(ctx); err != nil {
+			return fmt.Errorf("%s: %w", p.mediaType, err)
+		}
 
-	var summary struct {
-		Corpus   int `db:"corpus"`
-		Genres   int `db:"genres"`
-		Keywords int `db:"keywords"`
+		var summary struct {
+			Corpus   int `db:"corpus"`
+			Genres   int `db:"genres"`
+			Keywords int `db:"keywords"`
+		}
+		err := dbConn.GetContext(ctx, &summary, `
+			select
+				coalesce((select doc_count from feature_corpus where media_type = $1), 0) as corpus,
+				(select count(*) from feature_stats where media_type = $1 and feature_type = 'genre')   as genres,
+				(select count(*) from feature_stats where media_type = $1 and feature_type = 'keyword') as keywords
+		`, p.mediaType)
+		if err != nil {
+			return fmt.Errorf("%s summary: %w", p.mediaType, err)
+		}
+		log.Printf("%s feature stats refreshed in %s: corpus=%d genres=%d keywords=%d", p.mediaType,
+			time.Since(start).Truncate(time.Millisecond), summary.Corpus, summary.Genres, summary.Keywords)
 	}
-	err := dbConn.GetContext(ctx, &summary, `
-		select
-			coalesce((select doc_count from feature_corpus where media_type = 'movie'), 0) as corpus,
-			(select count(*) from feature_stats where media_type = 'movie' and feature_type = 'genre')   as genres,
-			(select count(*) from feature_stats where media_type = 'movie' and feature_type = 'keyword') as keywords
-	`)
-	if err != nil {
-		return fmt.Errorf("summary: %w", err)
-	}
-	log.Printf("feature stats refreshed in %s: corpus=%d genres=%d keywords=%d",
-		time.Since(start).Truncate(time.Millisecond), summary.Corpus, summary.Genres, summary.Keywords)
 	return nil
 }
 
@@ -390,6 +535,15 @@ func discoverPath(genre int, w decadeWindow, minVotes, page int) string {
 		"/discover/movie?language=en-US&include_adult=false&sort_by=vote_count.desc"+
 			"&vote_count.gte=%d&with_genres=%d"+
 			"&primary_release_date.gte=%s&primary_release_date.lte=%s&page=%d",
+		minVotes, genre, w.gte, w.lte, page,
+	)
+}
+
+func discoverTVPath(genre int, w decadeWindow, minVotes, page int) string {
+	return fmt.Sprintf(
+		"/discover/tv?language=en-US&include_adult=false&include_null_first_air_dates=false"+
+			"&sort_by=vote_count.desc&vote_count.gte=%d&with_genres=%d"+
+			"&first_air_date.gte=%s&first_air_date.lte=%s&page=%d",
 		minVotes, genre, w.gte, w.lte, page,
 	)
 }

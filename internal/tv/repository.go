@@ -125,6 +125,55 @@ func (r *Repository) EnsureMediaIndexSeries(ctx context.Context, tvID int) error
 	return err
 }
 
+// RefreshFeatureStats recomputes the 'tv' partition of the recommender's
+// inverse-document-frequency inputs: over voted series (vote_count > 0), how
+// many carry each genre and keyword id, read from the generated arrays
+// (00030), plus the corpus size. One transaction, so a reader never sees a
+// half-rebuilt table. The movie rows are left alone.
+func (r *Repository) RefreshFeatureStats(ctx context.Context) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`delete from feature_stats where media_type = 'tv'`); err != nil {
+		return fmt.Errorf("clear feature_stats: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		insert into feature_stats (media_type, feature_type, feature_id, doc_count)
+		select 'tv', 'genre', g, count(*)
+		from tv_series, unnest(genre_ids) g
+		where vote_count > 0
+		group by g
+	`); err != nil {
+		return fmt.Errorf("count genres: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		insert into feature_stats (media_type, feature_type, feature_id, doc_count)
+		select 'tv', 'keyword', k, count(*)
+		from tv_series, unnest(keyword_ids) k
+		where vote_count > 0
+		group by k
+	`); err != nil {
+		return fmt.Errorf("count keywords: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		insert into feature_corpus (media_type, doc_count, updated_at)
+		values ('tv', (select count(*) from tv_series where vote_count > 0), now())
+		on conflict (media_type) do update
+			set doc_count = excluded.doc_count, updated_at = now()
+	`); err != nil {
+		return fmt.Errorf("count corpus: %w", err)
+	}
+
+	return tx.Commit()
+}
+
 // SlimStoredCredits trims the stored credits of the given series with
 // tmdb.SlimCredits, for rows cached before credits were trimmed on write. It
 // rewrites only the rows that lose entries and returns how many that was.
