@@ -30,12 +30,12 @@ func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 		return nil, nil
 	}
 
-	posGenre := pooledFeatureWeights(u.Liked, genreKeyset, t.idf.genreWeight)
-	posKeyword := pooledFeatureWeights(u.Liked, keywordKeyset, t.idf.keywordWeight)
+	posGenre := pooledFeatureWeights(u.Liked, genreKeyset, t.idf.GenreWeight)
+	posKeyword := pooledFeatureWeights(u.Liked, keywordKeyset, t.idf.KeywordWeight)
 	posEra := pooledEraWeights(u.Liked)
 
-	negGenre := pooledFeatureWeights(u.Disliked, genreKeyset, t.idf.genreWeight)
-	negKeyword := pooledFeatureWeights(u.Disliked, keywordKeyset, t.idf.keywordWeight)
+	negGenre := pooledFeatureWeights(u.Disliked, genreKeyset, t.idf.GenreWeight)
+	negKeyword := pooledFeatureWeights(u.Disliked, keywordKeyset, t.idf.KeywordWeight)
 	negEra := pooledEraWeights(u.Disliked)
 
 	out := make([]Scored, 0, len(cands))
@@ -114,7 +114,7 @@ func eraSimilarity(year int, pooledEra map[int]float64) float64 {
 // feature id of the requested kind, then scales each feature by its IDF
 // multiplier. idf is applied once per distinct feature after summing —
 // algebraically identical to scaling every contribution, but cheaper. Pass an
-// identity idf (e.g. (*FeatureIDF)(nil).genreWeight) to sum without damping.
+// identity idf (e.g. (*FeatureIDF)(nil).GenreWeight) to sum without damping.
 func pooledFeatureWeights(items []SignalItem, keyset func(*MediaFeatures) []int, idf func(id int) float64) map[int]float64 {
 	out := make(map[int]float64)
 	for _, it := range items {

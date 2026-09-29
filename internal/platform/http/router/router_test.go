@@ -11,6 +11,7 @@ import (
 
 	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/platform/http/router"
+	"klyvi-api/internal/similar"
 	"klyvi-api/internal/users"
 )
 
@@ -92,5 +93,50 @@ func TestJSONIsGzippedWhenAccepted(t *testing.T) {
 				t.Error("response has no data field")
 			}
 		})
+	}
+}
+
+// noCatalog has nothing cached, so a similar shelf comes from TMDB's list.
+type noCatalog struct{}
+
+func (noCatalog) Source(context.Context, int) (*similar.Source, error) { return nil, nil }
+
+func (noCatalog) Candidates(context.Context, *similar.Source, int, int) ([]similar.Candidate, error) {
+	return nil, nil
+}
+
+func (noCatalog) Resolve(context.Context, []int) (map[int]similar.Resolved, error) { return nil, nil }
+
+type oneTitleTMDB struct{}
+
+func (oneTitleTMDB) TMDBRequest(context.Context, string, string, interface{}) (map[string]interface{}, error) {
+	return map[string]interface{}{"results": []interface{}{
+		map[string]interface{}{"id": float64(5), "title": "A Film"},
+	}}, nil
+}
+
+// Similar shelves are public catalog: mounted under /movies and /tv and
+// cached like the rest of it.
+func TestSimilarIsPublicAndCacheable(t *testing.T) {
+	ensure := func(context.Context, int) error { return nil }
+	r := router.New(router.Services{
+		Users:         users.NewService(nil),
+		SimilarMovies: similar.NewMovieService(noCatalog{}, ensure, oneTitleTMDB{}, nil, similar.Config{}),
+		SimilarTV:     similar.NewTVService(noCatalog{}, ensure, oneTitleTMDB{}, nil, similar.Config{}),
+		AuthMW: func(http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
+		},
+	})
+
+	for _, path := range []string{"/v1/movies/1/similar", "/v1/tv/1/similar?limit=3"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200 (body %s)", path, rec.Code, rec.Body)
+		}
+		if got, want := rec.Header().Get("Cache-Control"), "public, max-age=3600, stale-while-revalidate=86400"; got != want {
+			t.Errorf("%s: Cache-Control = %q, want %q", path, got, want)
+		}
 	}
 }

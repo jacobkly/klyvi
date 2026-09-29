@@ -23,6 +23,7 @@ import (
 	"klyvi-api/internal/rankings"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/search"
+	"klyvi-api/internal/similar"
 	"klyvi-api/internal/tracking"
 	"klyvi-api/internal/tv"
 	"klyvi-api/internal/users"
@@ -133,6 +134,20 @@ func main() {
 	recoOrchestrator := newRecoOrchestrator(dbConn, movieRepo, recoCfg, featureIDF).
 		WithFeedCache(feedCache)
 
+	// The similar shelves always weigh a feature by how rare it is: a shared
+	// "based on novel" says little about two titles, a shared "class
+	// differences" says a lot. Without feature stats they weigh every
+	// feature the same.
+	similarCfg := similar.Config{
+		KeywordWeight: recoCfg.KeywordWeight,
+		GenreWeight:   recoCfg.GenreWeight,
+		MinVotes:      recoCfg.QualityFloorVotes,
+	}
+	similarMovies := similar.NewMovieService(similar.NewMovieCatalog(dbConn), movieService.EnsureCached,
+		cachedTMDB, loadFeatureIDF(movieRepo, "movie"), similarCfg)
+	similarTV := similar.NewTVService(similar.NewTVCatalog(dbConn), tvService.EnsureSeries,
+		cachedTMDB, loadFeatureIDF(movieRepo, "tv"), similarCfg)
+
 	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
 		JWKSURL:  cfg.Supabase.JWKSURL,
 		Issuer:   cfg.Supabase.Issuer,
@@ -153,6 +168,8 @@ func main() {
 		Onboarding:     onboardingService,
 		Rankings:       rankingsService,
 		Imports:        importsService,
+		SimilarMovies:  similarMovies,
+		SimilarTV:      similarTV,
 		AuthMW:         authMW,
 		AllowedOrigins: cfg.Server.AllowedOrigins,
 		RateLimitRPM:   cfg.Server.RateLimitRPM,
@@ -191,4 +208,21 @@ func main() {
 	searchService.Wait()
 	recoOrchestrator.Wait()
 	log.Println("server stopped")
+}
+
+// loadFeatureIDF reads one media type's feature stats into an IDF table. A
+// failed or empty load returns nil, which weighs every feature the same.
+func loadFeatureIDF(repo *movies.Repository, mediaType string) *reco.FeatureIDF {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	genreDF, keywordDF, corpus, err := repo.LoadFeatureStats(ctx, mediaType)
+	if err != nil {
+		log.Printf("similar: load %s feature stats: %v", mediaType, err)
+		return nil
+	}
+	idf := reco.NewFeatureIDF(genreDF, keywordDF, corpus)
+	if idf == nil {
+		log.Printf("similar: no %s feature stats, run seed-catalog -refresh-feature-stats", mediaType)
+	}
+	return idf
 }

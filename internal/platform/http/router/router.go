@@ -17,6 +17,7 @@ import (
 	"klyvi-api/internal/rankings"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/search"
+	"klyvi-api/internal/similar"
 	"klyvi-api/internal/tracking"
 	"klyvi-api/internal/tv"
 	"klyvi-api/internal/users"
@@ -33,6 +34,10 @@ type Services struct {
 	Onboarding   *onboarding.Service
 	Rankings     *rankings.Service
 	Imports      *imports.Service
+
+	// SimilarMovies and SimilarTV serve the "more like this" shelves.
+	SimilarMovies *similar.Service
+	SimilarTV     *similar.Service
 
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
@@ -101,6 +106,7 @@ func New(services Services) *chi.Mux {
 			r.Get("/{id}", movieAPI.GetMovieById)
 			r.Get("/{id}/recommendations", movieAPI.GetMovieRecommendations)
 			r.Get("/{id}/collection", movieAPI.GetMovieCollection)
+			r.Get("/{id}/similar", similar.NewAPI(services.SimilarMovies).Get)
 			r.Get("/", movieAPI.GetMovieList)
 		})
 
@@ -110,6 +116,7 @@ func New(services Services) *chi.Mux {
 			r.Get("/{id}", tvAPI.GetTvById)
 			r.Get("/{id}/recommendations", tvAPI.GetTvRecommendations)
 			r.Get("/{id}/collection", tvAPI.GetTvCollection)
+			r.Get("/{id}/similar", similar.NewAPI(services.SimilarTV).Get)
 			r.Get("/", tvAPI.GetTvList)
 		})
 

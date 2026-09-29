@@ -47,11 +47,11 @@ func idfMap(df map[int]int, corpus int) map[int]float64 {
 	return out
 }
 
-// genreWeight returns the IDF multiplier for a genre id. A nil receiver and an
+// GenreWeight returns the IDF multiplier for a genre id. A nil receiver and an
 // unknown id both return 1.0: an unknown feature carries no candidate in the
 // pool (candidates are drawn from the same catalog the stats were computed
 // over), so its multiplier never actually reaches a score.
-func (f *FeatureIDF) genreWeight(id int) float64 {
+func (f *FeatureIDF) GenreWeight(id int) float64 {
 	if f == nil {
 		return 1
 	}
@@ -61,8 +61,8 @@ func (f *FeatureIDF) genreWeight(id int) float64 {
 	return 1
 }
 
-// keywordWeight is the keyword twin of genreWeight.
-func (f *FeatureIDF) keywordWeight(id int) float64 {
+// KeywordWeight is the keyword twin of GenreWeight.
+func (f *FeatureIDF) KeywordWeight(id int) float64 {
 	if f == nil {
 		return 1
 	}

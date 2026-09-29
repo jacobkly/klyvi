@@ -18,8 +18,8 @@ func TestFeatureIDF_RareBeatsCommon(t *testing.T) {
 	}
 	idf := NewFeatureIDF(genreDF, nil, corpus)
 
-	drama := idf.genreWeight(18)
-	doc := idf.genreWeight(99)
+	drama := idf.GenreWeight(18)
+	doc := idf.GenreWeight(99)
 
 	if !(doc > drama) {
 		t.Fatalf("rare feature should outweigh common: doc=%.3f drama=%.3f", doc, drama)
@@ -40,8 +40,8 @@ func TestFeatureIDF_RareBeatsCommon(t *testing.T) {
 func TestFeatureIDF_ZeroDFIsFiniteAndMax(t *testing.T) {
 	const corpus = 10000
 	idf := NewFeatureIDF(map[int]int{7: 0, 8: 1}, nil, corpus)
-	zero := idf.genreWeight(7)
-	one := idf.genreWeight(8)
+	zero := idf.GenreWeight(7)
+	one := idf.GenreWeight(8)
 	if math.IsNaN(zero) || math.IsInf(zero, 0) {
 		t.Fatalf("df=0 idf not finite: %v", zero)
 	}
@@ -54,15 +54,15 @@ func TestFeatureIDF_ZeroDFIsFiniteAndMax(t *testing.T) {
 // scoring without stats is exactly the old summing behaviour.
 func TestFeatureIDF_NilAndUnknownAreIdentity(t *testing.T) {
 	var nilIDF *FeatureIDF
-	if got := nilIDF.genreWeight(18); got != 1 {
+	if got := nilIDF.GenreWeight(18); got != 1 {
 		t.Errorf("nil idf genre: got %.3f, want 1", got)
 	}
-	if got := nilIDF.keywordWeight(9826); got != 1 {
+	if got := nilIDF.KeywordWeight(9826); got != 1 {
 		t.Errorf("nil idf keyword: got %.3f, want 1", got)
 	}
 
 	idf := NewFeatureIDF(map[int]int{18: 100}, nil, 1000)
-	if got := idf.genreWeight(4242); got != 1 {
+	if got := idf.GenreWeight(4242); got != 1 {
 		t.Errorf("unknown genre id: got %.3f, want 1", got)
 	}
 }
@@ -83,7 +83,7 @@ func TestPooledFeatureWeights_IdentityMatchesRawSum(t *testing.T) {
 		{MediaID: 2, Weight: 1.5, Features: &MediaFeatures{GenreIDs: []int{18}}},
 	}
 	var nilIDF *FeatureIDF
-	got := pooledFeatureWeights(liked, genreKeyset, nilIDF.genreWeight)
+	got := pooledFeatureWeights(liked, genreKeyset, nilIDF.GenreWeight)
 
 	want := map[int]float64{18: 3.5, 80: 2.0}
 	for id, w := range want {
@@ -107,7 +107,7 @@ func TestPooledFeatureWeights_AppliesIDF(t *testing.T) {
 		{MediaID: 1, Weight: 2.0, Features: &MediaFeatures{GenreIDs: []int{18}}},
 		{MediaID: 2, Weight: 1.0, Features: &MediaFeatures{GenreIDs: []int{18}}},
 	}
-	got := pooledFeatureWeights(liked, genreKeyset, idf.genreWeight)
+	got := pooledFeatureWeights(liked, genreKeyset, idf.GenreWeight)
 
 	mult := math.Log(float64(1+corpus)/float64(1+df)) + 1
 	want := 3.0 * mult // (2.0 + 1.0) summed, then scaled

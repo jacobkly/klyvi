@@ -36,8 +36,8 @@ type ProfileRepository interface {
 func BuildProfile(userID uuid.UUID, liked, disliked []SignalItem, idf *FeatureIDF) *TasteProfile {
 	p := &TasteProfile{
 		UserID:         userID,
-		GenreWeights:   pooledFeatureWeights(liked, genreKeyset, idf.genreWeight),
-		KeywordWeights: pooledFeatureWeights(liked, keywordKeyset, idf.keywordWeight),
+		GenreWeights:   pooledFeatureWeights(liked, genreKeyset, idf.GenreWeight),
+		KeywordWeights: pooledFeatureWeights(liked, keywordKeyset, idf.KeywordWeight),
 		EraWeights:     pooledEraWeights(liked),
 		LikedCount:     len(liked),
 		DislikedCount:  len(disliked),
