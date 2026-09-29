@@ -1,4 +1,4 @@
-package movies
+package db
 
 import (
 	"reflect"

@@ -323,8 +323,8 @@ func TestCandidateRows_CarryFeatureIDsAndNamesResolve(t *testing.T) {
 		byMovie[r.MovieID] = r
 	}
 
-	if got := byMovie[rich]; !reflect.DeepEqual(got.GenreIDs, movies.IntArray{gB, gA}) ||
-		!reflect.DeepEqual(got.KeywordIDs, movies.IntArray{kA, kB}) {
+	if got := byMovie[rich]; !reflect.DeepEqual(got.GenreIDs, db.IntArray{gB, gA}) ||
+		!reflect.DeepEqual(got.KeywordIDs, db.IntArray{kA, kB}) {
 		t.Errorf("rich row features = genres %v keywords %v, want [%d %d] and [%d %d]",
 			got.GenreIDs, got.KeywordIDs, gB, gA, kA, kB)
 	}

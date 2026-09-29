@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/tmdb"
 )
 
@@ -260,8 +261,8 @@ type RecoCandidateRow struct {
 	Title        *string       `db:"title"`
 	PosterPath   *string       `db:"poster_path"`
 	BackdropPath *string       `db:"backdrop_path"`
-	GenreIDs     IntArray      `db:"genre_ids"`
-	KeywordIDs   IntArray      `db:"keyword_ids"`
+	GenreIDs     db.IntArray   `db:"genre_ids"`
+	KeywordIDs   db.IntArray   `db:"keyword_ids"`
 	ReleaseDate  *sql.NullTime `db:"release_date"`
 	VoteAverage  float64       `db:"vote_average"`
 	VoteCount    int           `db:"vote_count"`
