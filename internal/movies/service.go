@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
+
+	"klyvi-api/internal/platform/tmdb"
 )
 
 // TMDBClient is the external data boundary for the movies service.
@@ -30,6 +33,10 @@ type MovieRepository interface {
 	GetCollectionIDByMovieID(ctx context.Context, movieID int) (int, error)
 	GetCollectionByCollectionID(ctx context.Context, collectionID int) ([]MovieCollection, error)
 	InsertMovieCollectionBatch(ctx context.Context, entries []MovieCollection) error
+	ReplaceMovie(ctx context.Context, movie *Movie) error
+	DeleteMovie(ctx context.Context, movieID int) error
+	ReplaceCollection(ctx context.Context, collectionID int, parts []MovieCollection) error
+	DeleteCollection(ctx context.Context, collectionID int) error
 }
 
 type Service struct {
@@ -113,6 +120,56 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 func (s *Service) EnsureCached(ctx context.Context, tmdbID int) error {
 	_, err := s.GetMovieById(ctx, tmdbID, "tmdb")
 	return err
+}
+
+// RefreshMovie refetches a cached movie from TMDB and overwrites the cached
+// row. TMDB's terms cap how long its data may be cached, so a movie TMDB no
+// longer has is deleted rather than kept, and removed reports that.
+func (s *Service) RefreshMovie(ctx context.Context, movieID int) (removed bool, err error) {
+	raw, err := s.client.TMDBRequest(
+		ctx,
+		"GET",
+		fmt.Sprintf("/movie/%d?language=en-US&append_to_response=keywords,credits", movieID),
+		nil,
+	)
+	if tmdb.IsStatus(err, http.StatusNotFound) {
+		if err := s.repo.DeleteMovie(ctx, movieID); err != nil {
+			return false, fmt.Errorf("delete movie %d: %w", movieID, err)
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("fetch movie %d: %w", movieID, err)
+	}
+	if err := s.repo.ReplaceMovie(ctx, NormalizeTMDBMovie(raw)); err != nil {
+		return false, fmt.Errorf("replace movie %d: %w", movieID, err)
+	}
+	return false, nil
+}
+
+// RefreshCollection refetches a cached collection from TMDB and replaces its
+// parts, or deletes it when TMDB no longer has it.
+func (s *Service) RefreshCollection(ctx context.Context, collectionID int) (removed bool, err error) {
+	raw, err := s.client.TMDBRequest(
+		ctx,
+		"GET",
+		fmt.Sprintf("/collection/%d?language=en-US", collectionID),
+		nil,
+	)
+	if tmdb.IsStatus(err, http.StatusNotFound) {
+		if err := s.repo.DeleteCollection(ctx, collectionID); err != nil {
+			return false, fmt.Errorf("delete collection %d: %w", collectionID, err)
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("fetch collection %d: %w", collectionID, err)
+	}
+	parts := NormalizeTMDBMovieCollection(raw, collectionID)
+	if err := s.repo.ReplaceCollection(ctx, collectionID, parts); err != nil {
+		return false, fmt.Errorf("replace collection %d: %w", collectionID, err)
+	}
+	return false, nil
 }
 
 func (s *Service) GetMovieRecommendations(ctx context.Context, id int) (interface{}, error) {

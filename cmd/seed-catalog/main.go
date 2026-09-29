@@ -27,6 +27,11 @@
 //	go run ./cmd/seed-catalog -max-movies 3000 # smaller run
 //	go run ./cmd/seed-catalog -media tv        # series sweep
 //	go run ./cmd/seed-catalog -slim-credits    # trim credits cached before the trim
+//	go run ./cmd/seed-catalog -refresh-older-than 150d -timeout 2h
+//
+// The last form is the nightly job. TMDB's terms cap its cache at six months,
+// so it refetches every cached row older than the cutoff, oldest first, until
+// the time budget runs out, and the next night carries on where it stopped.
 package main
 
 import (
@@ -176,6 +181,9 @@ func main() {
 	backfillSkinnyRows := flag.Bool("backfill-skinny", false, "instead of the sweep, refetch every cached movie that has no credits (rows warmed from search hits), then exit")
 	refreshStats := flag.Bool("refresh-feature-stats", false, "instead of the sweep, recompute the feature_stats / feature_corpus tables (recommender IDF inputs) for movies and series from the cached catalog, then exit")
 	slimCredits := flag.Bool("slim-credits", false, "instead of the sweep, trim the stored credits of every cached movie and series to what the detail pages read (rows cached before the trim), then exit")
+	var refreshAge ageFlag
+	flag.Var(&refreshAge, "refresh-older-than", "instead of the sweep, refetch every cached movie, collection, series and season last written longer ago than this (e.g. 150d, at most 180d under TMDB's cache limit), oldest first until -timeout, then exit")
+	refreshMax := flag.Int("refresh-max", 0, "with -refresh-older-than, refetch at most this many rows (0 = no cap)")
 	flag.Parse()
 
 	if err := godotenv.Load(".env.dev"); err != nil {
@@ -222,6 +230,13 @@ func main() {
 	if *slimCredits {
 		if err := slimStoredCredits(ctx, dbConn, repo, tvRepo); err != nil {
 			log.Fatalf("slim credits: %v", err)
+		}
+		os.Exit(0)
+	}
+
+	if refreshAge.set {
+		if err := refreshCatalog(ctx, dbConn, client, repo, tvRepo, refreshAge.d, *refreshMax); err != nil {
+			log.Fatalf("refresh: %v", err)
 		}
 		os.Exit(0)
 	}

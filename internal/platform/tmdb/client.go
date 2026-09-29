@@ -109,6 +109,22 @@ func (c *Client) TMDBRequest(ctx context.Context, method, endpoint string, body 
 	return nil, lastErr
 }
 
+// StatusError is TMDB answering with something other than 200.
+type StatusError struct {
+	Status int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("TMDb returned status %d", e.Status)
+}
+
+// IsStatus reports whether err, or anything it wraps, is TMDB answering with
+// status.
+func IsStatus(err error, status int) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Status == status
+}
+
 // backoff is the pause after a failed attempt: 100ms, then 200ms.
 func backoff(attempt int) time.Duration {
 	return tmdbBaseBackoff * (1 << (attempt - 1))
@@ -156,10 +172,10 @@ func (c *Client) doOnce(ctx context.Context, method, endpoint string, bodyBytes 
 	defer res.Body.Close()
 
 	if res.StatusCode >= 500 {
-		return nil, true, fmt.Errorf("TMDb returned status %d", res.StatusCode)
+		return nil, true, &StatusError{Status: res.StatusCode}
 	}
 	if res.StatusCode != http.StatusOK {
-		return nil, false, fmt.Errorf("TMDb returned status %d", res.StatusCode)
+		return nil, false, &StatusError{Status: res.StatusCode}
 	}
 
 	var result map[string]interface{}

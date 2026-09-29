@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -64,7 +65,9 @@ func (r *Repository) GetMovieIDByMediaID(ctx context.Context, mediaID int) (int,
 	return movieID, nil
 }
 
-const insertMovieSQL = `
+// upsertMovieSQL writes every column of a movie and stamps updated_at when
+// the row already exists. InsertMovie narrows when it may overwrite.
+const upsertMovieSQL = `
 	insert into movies (
 		movie_id, adult, backdrop_path, belongs_to_collection,
 		budget, genres, homepage, imdb_id,
@@ -111,7 +114,9 @@ const insertMovieSQL = `
 		vote_count = excluded.vote_count,
 		keywords = excluded.keywords,
 		credits = excluded.credits,
-		updated_at = now()
+		updated_at = now()`
+
+const insertMovieSQL = upsertMovieSQL + `
 	where movies.credits is null and excluded.credits is not null`
 
 // InsertMovie caches a movie. A row cached from a search hit has no keywords
@@ -120,6 +125,41 @@ const insertMovieSQL = `
 func (r *Repository) InsertMovie(ctx context.Context, movie *Movie) error {
 	_, err := r.db.NamedExecContext(ctx, insertMovieSQL, movie)
 	return err
+}
+
+// ReplaceMovie overwrites a cached movie with a fresh TMDB record, whatever
+// the cached row holds, and marks it fresh.
+func (r *Repository) ReplaceMovie(ctx context.Context, movie *Movie) error {
+	_, err := r.db.NamedExecContext(ctx, upsertMovieSQL, movie)
+	return err
+}
+
+// DeleteMovie drops a movie from the cache. Its media_index row stays, and
+// with it anything users tracked or rated.
+func (r *Repository) DeleteMovie(ctx context.Context, movieID int) error {
+	_, err := r.db.ExecContext(ctx, `delete from movies where movie_id = $1`, movieID)
+	return err
+}
+
+// StaleRow is a cached TMDB record due for a refresh: its TMDB id and when
+// it was last written. A row never stamped counts as written at the epoch.
+type StaleRow struct {
+	ID        int       `db:"id"`
+	UpdatedAt time.Time `db:"updated_at"`
+}
+
+// ListStaleMovies returns up to limit movies last written before cutoff,
+// oldest first.
+func (r *Repository) ListStaleMovies(ctx context.Context, cutoff time.Time, limit int) ([]StaleRow, error) {
+	rows := []StaleRow{}
+	err := r.db.SelectContext(ctx, &rows, `
+		select movie_id as id, coalesce(updated_at, 'epoch') as updated_at
+		from movies
+		where coalesce(updated_at, 'epoch') < $1
+		order by 2, 1
+		limit $2
+	`, cutoff, limit)
+	return rows, err
 }
 
 // InsertMovies caches a batch in one statement, with the same conflict rules
@@ -594,5 +634,50 @@ func (r *Repository) InsertMovieCollectionBatch(
 		on conflict do nothing
 	`, entries)
 
+	return err
+}
+
+// ListStaleCollections returns up to limit collections whose oldest part was
+// written before cutoff, oldest first.
+func (r *Repository) ListStaleCollections(ctx context.Context, cutoff time.Time, limit int) ([]StaleRow, error) {
+	rows := []StaleRow{}
+	err := r.db.SelectContext(ctx, &rows, `
+		select collection_id as id, min(coalesce(created_at, 'epoch')) as updated_at
+		from movie_collections
+		group by collection_id
+		having min(coalesce(created_at, 'epoch')) < $1
+		order by 2, 1
+		limit $2
+	`, cutoff, limit)
+	return rows, err
+}
+
+// ReplaceCollection swaps a collection's cached parts for fresh ones in one
+// transaction, so parts TMDB no longer lists go and every part is stamped now.
+func (r *Repository) ReplaceCollection(ctx context.Context, collectionID int, parts []MovieCollection) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `delete from movie_collections where collection_id = $1`, collectionID); err != nil {
+		return fmt.Errorf("clear collection %d: %w", collectionID, err)
+	}
+	if len(parts) > 0 {
+		if _, err := tx.NamedExecContext(ctx, `
+			insert into movie_collections (collection_id, movie_id, name, poster_path, vote_average, position)
+			values (:collection_id, :movie_id, :name, :poster_path, :vote_average, :position)
+			on conflict do nothing
+		`, parts); err != nil {
+			return fmt.Errorf("write collection %d: %w", collectionID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// DeleteCollection drops a collection from the cache.
+func (r *Repository) DeleteCollection(ctx context.Context, collectionID int) error {
+	_, err := r.db.ExecContext(ctx, `delete from movie_collections where collection_id = $1`, collectionID)
 	return err
 }

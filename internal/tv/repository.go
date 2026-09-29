@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -40,12 +41,9 @@ func (r *Repository) GetTVSeriesByID(ctx context.Context, tvID int) (*TVSeries, 
 	return &series, err
 }
 
-// InsertTVSeries caches a series. A row cached without keywords or credits
-// is replaced by a full detail record, so a series always ends up with the
-// features the recommender reads. A full row is never replaced by a partial
-// one.
-func (r *Repository) InsertTVSeries(ctx context.Context, series *TVSeries) error {
-	_, err := r.db.NamedExecContext(ctx, `
+// upsertTVSeriesSQL writes every column of a series and stamps updated_at
+// when the row already exists. InsertTVSeries narrows when it may overwrite.
+const upsertTVSeriesSQL = `
 		insert into tv_series (
 			tv_id, adult, backdrop_path, created_by, first_air_date,
 			genres, homepage, in_production, last_air_date, last_episode_to_air,
@@ -92,12 +90,57 @@ func (r *Repository) InsertTVSeries(ctx context.Context, series *TVSeries) error
 			vote_count = excluded.vote_count,
 			keywords = excluded.keywords,
 			credits = excluded.credits,
-			updated_at = now()
+			updated_at = now()`
+
+// InsertTVSeries caches a series. A row cached without keywords or credits
+// is replaced by a full detail record, so a series always ends up with the
+// features the recommender reads. A full row is never replaced by a partial
+// one.
+func (r *Repository) InsertTVSeries(ctx context.Context, series *TVSeries) error {
+	_, err := r.db.NamedExecContext(ctx, upsertTVSeriesSQL+`
 		where (tv_series.keywords is null or tv_series.credits is null)
 		  and excluded.keywords is not null and excluded.credits is not null
 	`, series)
 
 	return err
+}
+
+// ReplaceTVSeries overwrites a cached series with a fresh TMDB record,
+// whatever the cached row holds, and marks it fresh.
+func (r *Repository) ReplaceTVSeries(ctx context.Context, series *TVSeries) error {
+	_, err := r.db.NamedExecContext(ctx, upsertTVSeriesSQL, series)
+	return err
+}
+
+// DeleteSeries drops a series and its seasons from the cache. Their
+// media_index rows stay, and with them anything users tracked or rated.
+func (r *Repository) DeleteSeries(ctx context.Context, tvID int) error {
+	_, err := r.db.ExecContext(ctx, `
+		with seasons as (delete from tv_seasons where tv_id = $1)
+		delete from tv_series where tv_id = $1
+	`, tvID)
+	return err
+}
+
+// StaleSeries is a cached series due for a refresh. A row never stamped
+// counts as written at the epoch.
+type StaleSeries struct {
+	TVID      int       `db:"tv_id"`
+	UpdatedAt time.Time `db:"updated_at"`
+}
+
+// ListStaleSeries returns up to limit series last written before cutoff,
+// oldest first.
+func (r *Repository) ListStaleSeries(ctx context.Context, cutoff time.Time, limit int) ([]StaleSeries, error) {
+	rows := []StaleSeries{}
+	err := r.db.SelectContext(ctx, &rows, `
+		select tv_id, coalesce(updated_at, 'epoch') as updated_at
+		from tv_series
+		where coalesce(updated_at, 'epoch') < $1
+		order by 2, 1
+		limit $2
+	`, cutoff, limit)
+	return rows, err
 }
 
 // HasTVSeriesFeatures reports whether a series is cached with its keywords
@@ -240,6 +283,60 @@ func (r *Repository) InsertTVSeason(ctx context.Context, season *TVSeason) error
 	`, season)
 
 	return err
+}
+
+// ReplaceTVSeason overwrites a cached season with a fresh TMDB record and
+// marks it fresh.
+func (r *Repository) ReplaceTVSeason(ctx context.Context, season *TVSeason) error {
+	_, err := r.db.NamedExecContext(ctx, `
+		insert into tv_seasons (
+			tv_id, season_number, air_date, name, overview,
+			poster_path, vote_average, vote_count, episodes, networks
+		) values (
+			:tv_id, :season_number, :air_date, :name, :overview,
+			:poster_path, :vote_average, :vote_count, :episodes, :networks
+		)
+		on conflict (tv_id, season_number) do update set
+			air_date = excluded.air_date,
+			name = excluded.name,
+			overview = excluded.overview,
+			poster_path = excluded.poster_path,
+			vote_average = excluded.vote_average,
+			vote_count = excluded.vote_count,
+			episodes = excluded.episodes,
+			networks = excluded.networks,
+			updated_at = now()
+	`, season)
+
+	return err
+}
+
+// DeleteSeason drops one season from the cache. Its media_index row stays.
+func (r *Repository) DeleteSeason(ctx context.Context, tvID, seasonNumber int) error {
+	_, err := r.db.ExecContext(ctx,
+		`delete from tv_seasons where tv_id = $1 and season_number = $2`, tvID, seasonNumber)
+	return err
+}
+
+// StaleSeason is a cached season due for a refresh.
+type StaleSeason struct {
+	TVID         int       `db:"tv_id"`
+	SeasonNumber int       `db:"season_number"`
+	UpdatedAt    time.Time `db:"updated_at"`
+}
+
+// ListStaleSeasons returns up to limit seasons last written before cutoff,
+// oldest first.
+func (r *Repository) ListStaleSeasons(ctx context.Context, cutoff time.Time, limit int) ([]StaleSeason, error) {
+	rows := []StaleSeason{}
+	err := r.db.SelectContext(ctx, &rows, `
+		select tv_id, season_number, coalesce(updated_at, 'epoch') as updated_at
+		from tv_seasons
+		where coalesce(updated_at, 'epoch') < $1
+		order by 3, 1, 2
+		limit $2
+	`, cutoff, limit)
+	return rows, err
 }
 
 // EnsureMediaIndexSeason writes a media_index row for the (tv, season) pair.

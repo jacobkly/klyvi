@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
+
+	"klyvi-api/internal/platform/tmdb"
 )
 
 // TMDBClient is the only external dependency the TV service currently has.
@@ -25,6 +28,10 @@ type TVRepository interface {
 	InsertTVSeason(ctx context.Context, season *TVSeason) error
 	EnsureMediaIndexSeason(ctx context.Context, tvID, seasonNumber int) error
 	GetTVIDAndSeasonByMediaID(ctx context.Context, mediaID int) (int, int, error)
+	ReplaceTVSeries(ctx context.Context, series *TVSeries) error
+	DeleteSeries(ctx context.Context, tvID int) error
+	ReplaceTVSeason(ctx context.Context, season *TVSeason) error
+	DeleteSeason(ctx context.Context, tvID, seasonNumber int) error
 }
 
 type Service struct {
@@ -175,6 +182,55 @@ func (s *Service) getSeasonDetail(ctx context.Context, tvID, seasonNum int) (*TV
 	}
 
 	return normalized, nil
+}
+
+// RefreshSeries refetches a cached series from TMDB and overwrites the cached
+// row. TMDB's terms cap how long its data may be cached, so a series TMDB no
+// longer has is deleted with its seasons, and removed reports that.
+func (s *Service) RefreshSeries(ctx context.Context, tvID int) (removed bool, err error) {
+	raw, err := s.client.TMDBRequest(
+		ctx,
+		"GET",
+		fmt.Sprintf("/tv/%d?language=en-US&append_to_response=keywords,credits", tvID),
+		nil,
+	)
+	if tmdb.IsStatus(err, http.StatusNotFound) {
+		if err := s.repo.DeleteSeries(ctx, tvID); err != nil {
+			return false, fmt.Errorf("delete series %d: %w", tvID, err)
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("fetch series %d: %w", tvID, err)
+	}
+	if err := s.repo.ReplaceTVSeries(ctx, NormalizeTMDBTVSeries(raw)); err != nil {
+		return false, fmt.Errorf("replace series %d: %w", tvID, err)
+	}
+	return false, nil
+}
+
+// RefreshSeason refetches a cached season from TMDB and overwrites it, or
+// deletes it when TMDB no longer has it.
+func (s *Service) RefreshSeason(ctx context.Context, tvID, seasonNum int) (removed bool, err error) {
+	raw, err := s.client.TMDBRequest(
+		ctx,
+		"GET",
+		fmt.Sprintf("/tv/%d/season/%d?language=en-US", tvID, seasonNum),
+		nil,
+	)
+	if tmdb.IsStatus(err, http.StatusNotFound) {
+		if err := s.repo.DeleteSeason(ctx, tvID, seasonNum); err != nil {
+			return false, fmt.Errorf("delete season %d of %d: %w", seasonNum, tvID, err)
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("fetch season %d of %d: %w", seasonNum, tvID, err)
+	}
+	if err := s.repo.ReplaceTVSeason(ctx, NormalizeTMDBTVSeason(raw, tvID)); err != nil {
+		return false, fmt.Errorf("replace season %d of %d: %w", seasonNum, tvID, err)
+	}
+	return false, nil
 }
 
 func (s *Service) GetTvRecommendations(ctx context.Context, idType string, id int) (interface{}, error) {

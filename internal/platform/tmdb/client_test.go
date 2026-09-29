@@ -53,6 +53,33 @@ func TestTMDBRequest_DoesNotRetryOn4xx(t *testing.T) {
 	}
 }
 
+// A catalog refresh deletes a title TMDB answers 404 for and backs off on
+// 429, so callers need the status without matching on the message.
+func TestTMDBRequest_ErrorCarriesTheStatus(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "nope", status)
+		}))
+		c := newClientForTest("token", srv.URL, 1000, 1000)
+		_, err := c.TMDBRequest(context.Background(), "GET", "/movie/1", nil)
+		srv.Close()
+
+		if !IsStatus(err, status) {
+			t.Errorf("status %d: IsStatus = false for %v", status, err)
+		}
+		if IsStatus(err, http.StatusOK) {
+			t.Errorf("status %d: IsStatus(200) = true", status)
+		}
+		var se *StatusError
+		if !errors.As(err, &se) || se.Status != status {
+			t.Errorf("status %d: errors.As gave %+v", status, se)
+		}
+	}
+	if IsStatus(errors.New("TMDb returned status 404"), http.StatusNotFound) {
+		t.Error("IsStatus matched a plain error by its text")
+	}
+}
+
 func TestTMDBRequest_GivesUpAfterMaxAttempts(t *testing.T) {
 	var attempts int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -23,8 +23,12 @@ func (f *fakeTMDB) TMDBRequest(_ context.Context, _, _ string, _ any) (map[strin
 
 // fakeMovieRepo keeps one cached row and records what the service writes.
 type fakeMovieRepo struct {
-	cached   *movies.Movie
-	inserted []*movies.Movie
+	cached             *movies.Movie
+	inserted           []*movies.Movie
+	replaced           []*movies.Movie
+	deleted            []int
+	replacedCollection []movies.MovieCollection
+	deletedCollections []int
 }
 
 func (r *fakeMovieRepo) GetByTMDBID(context.Context, int) (*movies.Movie, error) {
@@ -43,6 +47,22 @@ func (r *fakeMovieRepo) GetCollectionByCollectionID(context.Context, int) ([]mov
 	return nil, nil
 }
 func (r *fakeMovieRepo) InsertMovieCollectionBatch(context.Context, []movies.MovieCollection) error {
+	return nil
+}
+func (r *fakeMovieRepo) ReplaceMovie(_ context.Context, m *movies.Movie) error {
+	r.replaced = append(r.replaced, m)
+	return nil
+}
+func (r *fakeMovieRepo) DeleteMovie(_ context.Context, id int) error {
+	r.deleted = append(r.deleted, id)
+	return nil
+}
+func (r *fakeMovieRepo) ReplaceCollection(_ context.Context, _ int, parts []movies.MovieCollection) error {
+	r.replacedCollection = parts
+	return nil
+}
+func (r *fakeMovieRepo) DeleteCollection(_ context.Context, id int) error {
+	r.deletedCollections = append(r.deletedCollections, id)
 	return nil
 }
 
