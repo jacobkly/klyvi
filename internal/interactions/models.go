@@ -25,10 +25,12 @@ const (
 	SourceOnboarding = "onboarding"
 )
 
-// MediaType values (mirror of the tracking and media_index conventions).
+// MediaType values (mirror of the media_index conventions). A series ('tv')
+// takes feed signal, but is never tracked: tracking stays per season.
 const (
 	MediaTypeMovie  = "movie"
 	MediaTypeSeason = "season"
+	MediaTypeTV     = "tv"
 )
 
 // Interaction is a single signal event from a user — a row in the

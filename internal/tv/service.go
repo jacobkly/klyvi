@@ -18,7 +18,9 @@ type TMDBClient interface {
 // (matching movies/service.go).
 type TVRepository interface {
 	GetTVSeriesByID(ctx context.Context, tvID int) (*TVSeries, error)
+	HasTVSeriesFeatures(ctx context.Context, tvID int) (bool, error)
 	InsertTVSeries(ctx context.Context, series *TVSeries) error
+	EnsureMediaIndexSeries(ctx context.Context, tvID int) error
 	GetTVSeasonByTVIDAndNumber(ctx context.Context, tvID, seasonNumber int) (*TVSeason, error)
 	InsertTVSeason(ctx context.Context, season *TVSeason) error
 	EnsureMediaIndexSeason(ctx context.Context, tvID, seasonNumber int) error
@@ -88,6 +90,41 @@ func (s *Service) getSeriesDetail(ctx context.Context, tvID int) (*TVSeries, err
 		return cached, nil
 	}
 
+	series, err := s.fetchSeries(ctx, tvID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.repo.EnsureMediaIndexSeries(ctx, tvID); err != nil {
+		log.Printf("best-effort EnsureMediaIndexSeries failed for tv=%d: %v", tvID, err)
+	}
+
+	return series, nil
+}
+
+// EnsureSeries caches a series with its keywords and credits, unless it
+// already is, and writes its 'tv' media_index row. Signal on a season rolls
+// up to its series, which is only possible once the series' features are
+// cached.
+func (s *Service) EnsureSeries(ctx context.Context, tvID int) error {
+	cached, err := s.repo.HasTVSeriesFeatures(ctx, tvID)
+	if err != nil {
+		return fmt.Errorf("check series %d: %w", tvID, err)
+	}
+	if !cached {
+		if _, err := s.fetchSeries(ctx, tvID); err != nil {
+			return fmt.Errorf("fetch series %d: %w", tvID, err)
+		}
+	}
+	if err := s.repo.EnsureMediaIndexSeries(ctx, tvID); err != nil {
+		return fmt.Errorf("index series %d: %w", tvID, err)
+	}
+	return nil
+}
+
+// fetchSeries fetches a series detail from TMDB with its keywords and
+// credits, and caches it.
+func (s *Service) fetchSeries(ctx context.Context, tvID int) (*TVSeries, error) {
 	raw, err := s.client.TMDBRequest(
 		ctx,
 		"GET",
@@ -102,7 +139,6 @@ func (s *Service) getSeriesDetail(ctx context.Context, tvID int) (*TVSeries, err
 	if err := s.repo.InsertTVSeries(ctx, normalized); err != nil {
 		return nil, err
 	}
-
 	return normalized, nil
 }
 
@@ -132,6 +168,10 @@ func (s *Service) getSeasonDetail(ctx context.Context, tvID, seasonNum int) (*TV
 
 	if err := s.repo.EnsureMediaIndexSeason(ctx, tvID, seasonNum); err != nil {
 		log.Printf("best-effort EnsureMediaIndexSeason failed for tv=%d season=%d: %v", tvID, seasonNum, err)
+	}
+	// A season carries no genres or keywords of its own. Its series does.
+	if err := s.EnsureSeries(ctx, tvID); err != nil {
+		log.Printf("best-effort EnsureSeries failed for tv=%d: %v", tvID, err)
 	}
 
 	return normalized, nil

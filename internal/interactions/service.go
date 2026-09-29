@@ -2,6 +2,7 @@ package interactions
 
 import (
 	"context"
+	"log"
 
 	"github.com/google/uuid"
 )
@@ -26,10 +27,17 @@ type FeedInvalidator interface {
 	Invalidate(userID uuid.UUID)
 }
 
+// SeriesEnsurer caches a series with its keywords and credits, and its 'tv'
+// media_index row. The tv service satisfies it.
+type SeriesEnsurer interface {
+	EnsureSeries(ctx context.Context, tvID int) error
+}
+
 type Service struct {
-	repo  InteractionRepository
-	media MediaIndexResolver
-	feed  FeedInvalidator
+	repo   InteractionRepository
+	media  MediaIndexResolver
+	feed   FeedInvalidator
+	series SeriesEnsurer
 }
 
 func NewService(repo InteractionRepository, media MediaIndexResolver) *Service {
@@ -43,9 +51,17 @@ func (s *Service) WithFeedInvalidator(f FeedInvalidator) *Service {
 	return s
 }
 
+// WithSeriesEnsurer caches the series behind every deliberate signal on a
+// season or a series, so the signal has the show's features to roll up to.
+func (s *Service) WithSeriesEnsurer(e SeriesEnsurer) *Service {
+	s.series = e
+	return s
+}
+
 // RecordRequest is the validated body of POST /v1/interactions. The
 // frontend identifies media by TMDB id + type (+ season_number for
-// 'season'); the service resolves to a media_index media_id.
+// 'season'); the service resolves to a media_index media_id. For 'season'
+// and 'tv' the TMDB id is the series id.
 type RecordRequest struct {
 	TMDBID       int     `json:"tmdb_id"`
 	MediaType    string  `json:"media_type"`
@@ -65,8 +81,8 @@ func (s *Service) Record(ctx context.Context, userID uuid.UUID, req RecordReques
 	if req.MediaType == MediaTypeSeason && req.SeasonNumber == nil {
 		return nil, invalid("season_number is required for media_type=season")
 	}
-	if req.MediaType == MediaTypeMovie && req.SeasonNumber != nil {
-		return nil, invalid("season_number must be omitted for media_type=movie")
+	if req.MediaType != MediaTypeSeason && req.SeasonNumber != nil {
+		return nil, invalid("season_number must be omitted for media_type=%s", req.MediaType)
 	}
 	if err := validateKind(req.Kind); err != nil {
 		return nil, err
@@ -100,9 +116,19 @@ func (s *Service) Record(ctx context.Context, userID uuid.UUID, req RecordReques
 		return nil, err
 	}
 	// Impressions and clicks fire while the user browses the feed and barely
-	// move it, so they leave the cached feed alone until it expires.
-	if s.feed != nil && req.Kind != KindImpression && req.Kind != KindClicked {
+	// move it, so they leave the cached feed alone until it expires. They
+	// also only name candidates the catalog already holds.
+	if req.Kind == KindImpression || req.Kind == KindClicked {
+		return e, nil
+	}
+	if s.feed != nil {
 		s.feed.Invalidate(userID)
+	}
+	// Best effort: the signal is the user's and stands without the catalog.
+	if s.series != nil && (req.MediaType == MediaTypeSeason || req.MediaType == MediaTypeTV) {
+		if err := s.series.EnsureSeries(ctx, req.TMDBID); err != nil {
+			log.Printf("best-effort EnsureSeries failed for tv=%d: %v", req.TMDBID, err)
+		}
 	}
 	return e, nil
 }
@@ -152,7 +178,7 @@ func (s *Service) CountByUser(ctx context.Context, userID uuid.UUID) (int, error
 
 func validateMediaType(mt string) error {
 	switch mt {
-	case MediaTypeMovie, MediaTypeSeason:
+	case MediaTypeMovie, MediaTypeSeason, MediaTypeTV:
 		return nil
 	default:
 		return invalid("invalid media_type %q", mt)

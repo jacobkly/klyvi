@@ -2,6 +2,7 @@ package tracking
 
 import (
 	"context"
+	"log"
 
 	"github.com/google/uuid"
 )
@@ -26,9 +27,16 @@ type FeedInvalidator interface {
 	Invalidate(userID uuid.UUID)
 }
 
+// SeriesEnsurer caches a series with its keywords and credits, and its 'tv'
+// media_index row. The tv service satisfies it.
+type SeriesEnsurer interface {
+	EnsureSeries(ctx context.Context, tvID int) error
+}
+
 type Service struct {
-	repo TrackingRepository
-	feed FeedInvalidator
+	repo   TrackingRepository
+	feed   FeedInvalidator
+	series SeriesEnsurer
 }
 
 func NewService(repo TrackingRepository) *Service {
@@ -39,6 +47,13 @@ func NewService(repo TrackingRepository) *Service {
 // changes their list, since tracked items leave the feed.
 func (s *Service) WithFeedInvalidator(f FeedInvalidator) *Service {
 	s.feed = f
+	return s
+}
+
+// WithSeriesEnsurer caches the parent series of every season the user adds,
+// so what they think of the season can roll up to the show.
+func (s *Service) WithSeriesEnsurer(e SeriesEnsurer) *Service {
+	s.series = e
 	return s
 }
 
@@ -104,6 +119,12 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, req AddRequest) (*E
 		return nil, err
 	}
 	s.listChanged(userID)
+	// Best effort: the entry is the user's and stands without the catalog.
+	if s.series != nil && req.MediaType == MediaTypeSeason {
+		if err := s.series.EnsureSeries(ctx, req.TMDBID); err != nil {
+			log.Printf("best-effort EnsureSeries failed for tv=%d: %v", req.TMDBID, err)
+		}
+	}
 	return entry, nil
 }
 

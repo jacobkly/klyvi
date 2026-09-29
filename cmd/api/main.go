@@ -78,9 +78,12 @@ func main() {
 	// bound the cache near 33 MB.
 	feedCache := reco.NewFeedCache(10*time.Minute, 256)
 
-	trackingService := tracking.NewService(trackingRepo).WithFeedInvalidator(feedCache)
+	trackingService := tracking.NewService(trackingRepo).
+		WithFeedInvalidator(feedCache).
+		WithSeriesEnsurer(tvService)
 	interactionsService := interactions.NewService(interactionsRepo, trackingRepo).
-		WithFeedInvalidator(feedCache)
+		WithFeedInvalidator(feedCache).
+		WithSeriesEnsurer(tvService)
 
 	userService := users.NewService(userRepo).
 		WithExportSources(trackingService, interactionsService).

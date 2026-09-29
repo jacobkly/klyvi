@@ -40,6 +40,10 @@ func (r *Repository) GetTVSeriesByID(ctx context.Context, tvID int) (*TVSeries, 
 	return &series, err
 }
 
+// InsertTVSeries caches a series. A row cached without keywords or credits
+// is replaced by a full detail record, so a series always ends up with the
+// features the recommender reads. A full row is never replaced by a partial
+// one.
 func (r *Repository) InsertTVSeries(ctx context.Context, series *TVSeries) error {
 	_, err := r.db.NamedExecContext(ctx, `
 		insert into tv_series (
@@ -57,8 +61,66 @@ func (r *Repository) InsertTVSeries(ctx context.Context, series *TVSeries) error
 			:production_companies, :production_countries, :seasons, :spoken_languages,
 			:status, :tagline, :type, :vote_average, :vote_count, :keywords, :credits
 		)
-		on conflict (tv_id) do nothing
+		on conflict (tv_id) do update set
+			adult = excluded.adult,
+			backdrop_path = excluded.backdrop_path,
+			created_by = excluded.created_by,
+			first_air_date = excluded.first_air_date,
+			genres = excluded.genres,
+			homepage = excluded.homepage,
+			in_production = excluded.in_production,
+			last_air_date = excluded.last_air_date,
+			last_episode_to_air = excluded.last_episode_to_air,
+			next_episode_to_air = excluded.next_episode_to_air,
+			networks = excluded.networks,
+			number_of_episodes = excluded.number_of_episodes,
+			number_of_seasons = excluded.number_of_seasons,
+			name = excluded.name,
+			original_language = excluded.original_language,
+			original_name = excluded.original_name,
+			overview = excluded.overview,
+			popularity = excluded.popularity,
+			poster_path = excluded.poster_path,
+			production_companies = excluded.production_companies,
+			production_countries = excluded.production_countries,
+			seasons = excluded.seasons,
+			spoken_languages = excluded.spoken_languages,
+			status = excluded.status,
+			tagline = excluded.tagline,
+			type = excluded.type,
+			vote_average = excluded.vote_average,
+			vote_count = excluded.vote_count,
+			keywords = excluded.keywords,
+			credits = excluded.credits,
+			updated_at = now()
+		where (tv_series.keywords is null or tv_series.credits is null)
+		  and excluded.keywords is not null and excluded.credits is not null
 	`, series)
+
+	return err
+}
+
+// HasTVSeriesFeatures reports whether a series is cached with its keywords
+// and credits.
+func (r *Repository) HasTVSeriesFeatures(ctx context.Context, tvID int) (bool, error) {
+	var ok bool
+	err := r.db.GetContext(ctx, &ok, `
+		select exists (
+			select 1 from tv_series
+			where tv_id = $1 and keywords is not null and credits is not null
+		)
+	`, tvID)
+	return ok, err
+}
+
+// EnsureMediaIndexSeries writes the series' own media_index row: type 'tv',
+// keyed by tv_id with no season number.
+func (r *Repository) EnsureMediaIndexSeries(ctx context.Context, tvID int) error {
+	_, err := r.db.ExecContext(ctx, `
+		insert into media_index (id, media_type)
+		values ($1, 'tv')
+		on conflict (id, season_number, media_type) do nothing
+	`, tvID)
 
 	return err
 }
