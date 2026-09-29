@@ -157,6 +157,31 @@ func NormalizeTMDBTVSeason(raw map[string]interface{}, tvID int) *TVSeason {
 		Overview:     str("overview"),
 		PosterPath:   str("poster_path"),
 		VoteAverage:  floatVal("vote_average"),
-		Episodes:     j(raw["episodes"]),
+		Episodes:     j(slimEpisodes(raw["episodes"])),
 	}
+}
+
+// slimEpisodes drops each episode's crew and guest stars. Nothing reads them,
+// and they are most of a season payload.
+func slimEpisodes(v interface{}) interface{} {
+	episodes, ok := v.([]interface{})
+	if !ok {
+		return v
+	}
+	out := make([]interface{}, 0, len(episodes))
+	for _, e := range episodes {
+		ep, ok := e.(map[string]interface{})
+		if !ok {
+			out = append(out, e)
+			continue
+		}
+		slim := make(map[string]interface{}, len(ep))
+		for k, val := range ep {
+			if k != "crew" && k != "guest_stars" {
+				slim[k] = val
+			}
+		}
+		out = append(out, slim)
+	}
+	return out
 }

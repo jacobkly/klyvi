@@ -154,7 +154,7 @@ func (s *Service) getSeasonDetail(ctx context.Context, tvID, seasonNum int) (*TV
 	raw, err := s.client.TMDBRequest(
 		ctx,
 		"GET",
-		fmt.Sprintf("/tv/%d/season/%d?language=en-US&append_to_response=credits", tvID, seasonNum),
+		fmt.Sprintf("/tv/%d/season/%d?language=en-US", tvID, seasonNum),
 		nil,
 	)
 	if err != nil {
