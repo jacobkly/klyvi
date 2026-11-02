@@ -15,7 +15,10 @@ import (
 // unchanged, JSON null clears, a value sets. The existing COALESCE fields
 // cannot express "clear", which is why this one gets its own semantics.
 func TestUpdateMe_Birthday(t *testing.T) {
-	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	// A fixed clock, so the future-date cases mean the same thing at any
+	// hour. At 20:00 UTC on June 15 it is already June 16 in Tokyo (UTC+9)
+	// and in Kiribati (UTC+14), the furthest-ahead zone.
+	clock := func() time.Time { return time.Date(2026, time.June, 15, 20, 0, 0, 0, time.UTC) }
 
 	tests := []struct {
 		name    string
@@ -30,7 +33,11 @@ func TestUpdateMe_Birthday(t *testing.T) {
 		{"null clears it", `{"birthday":null}`, nil, "cleared"},
 		{"oldest allowed year", `{"birthday":"1900-01-01"}`, nil, "1900-01-01"},
 
-		{"future date rejected", `{"birthday":"` + tomorrow + `"}`, users.ErrBirthdayInvalid, ""},
+		{"today in UTC accepted", `{"birthday":"2026-06-15"}`, nil, "2026-06-15"},
+		{"today east of UTC accepted", `{"birthday":"2026-06-16"}`, nil, "2026-06-16"},
+
+		{"future date rejected", `{"birthday":"2026-06-17"}`, users.ErrBirthdayInvalid, ""},
+		{"far future date rejected", `{"birthday":"2030-01-01"}`, users.ErrBirthdayInvalid, ""},
 		{"before 1900 rejected", `{"birthday":"1899-12-31"}`, users.ErrBirthdayInvalid, ""},
 		{"malformed date rejected", `{"birthday":"12/04/1999"}`, users.ErrBirthdayInvalid, ""},
 		{"non-string rejected", `{"birthday":19990412}`, users.ErrBirthdayInvalid, ""},
@@ -40,7 +47,7 @@ func TestUpdateMe_Birthday(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &fakeUserRepo{user: &users.User{ID: uuid.New(), Username: "jacob"}}
-			svc := users.NewService(repo)
+			svc := users.NewService(repo).WithClock(clock)
 
 			req, err := users.DecodeUpdateProfileRequest([]byte(tt.body))
 			if err != nil {

@@ -49,6 +49,18 @@ func (d *DateOnly) Scan(src any) error {
 // as a typo, not a user.
 var birthdayMin = time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
 
+// furthestAhead is UTC+14 (Kiribati), the zone whose date flips first.
+// Measuring "the future" from there lets a user anywhere enter their own
+// today, without knowing their timezone.
+var furthestAhead = time.FixedZone("UTC+14", 14*60*60)
+
+// latestBirthday is the newest accepted birthday at instant now: today's
+// date in the furthest-ahead zone, as a UTC midnight like parsed dates.
+func latestBirthday(now time.Time) time.Time {
+	y, m, d := now.In(furthestAhead).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
 // OptionalDate is a tri-state PATCH field: Set=false means the client did
 // not mention it (leave unchanged); Set=true with a nil Value means clear;
 // Set=true with a Value means write it. The COALESCE fields on the profile
@@ -71,7 +83,7 @@ func DecodeUpdateProfileRequest(body []byte) (UpdateProfileRequest, error) {
 
 // parseBirthday turns the raw JSON birthday field into the tri-state patch
 // value. raw == nil means the key was absent.
-func parseBirthday(raw json.RawMessage) (OptionalDate, error) {
+func parseBirthday(raw json.RawMessage, now time.Time) (OptionalDate, error) {
 	if raw == nil {
 		return OptionalDate{}, nil
 	}
@@ -87,7 +99,7 @@ func parseBirthday(raw json.RawMessage) (OptionalDate, error) {
 	if err != nil {
 		return OptionalDate{}, ErrBirthdayInvalid
 	}
-	if d.Before(birthdayMin) || d.After(time.Now().UTC()) {
+	if d.Before(birthdayMin) || d.After(latestBirthday(now)) {
 		return OptionalDate{}, ErrBirthdayInvalid
 	}
 	return OptionalDate{Set: true, Value: &d}, nil

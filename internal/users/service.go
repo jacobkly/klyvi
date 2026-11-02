@@ -80,6 +80,9 @@ type Service struct {
 	// feed is nil unless the recommender's feed cache is wired; account
 	// deletion drops the user's cached feed through it.
 	feed FeedInvalidator
+
+	// now is the service's clock. time.Now in production; tests pin it.
+	now func() time.Time
 }
 
 // FeedInvalidator drops a user's cached recommendations. The reco feed cache
@@ -104,7 +107,16 @@ func NewService(repo UserRepository) *Service {
 	return &Service{
 		repo:    repo,
 		ensured: cache.NewTTL[struct{}](ensuredUsersMax, ensuredUsersTTL),
+		now:     time.Now,
 	}
+}
+
+// WithClock replaces the service's clock, so date rules (the birthday
+// ceiling, the username cooldown, stats windows) can be tested at a fixed
+// instant.
+func (s *Service) WithClock(now func() time.Time) *Service {
+	s.now = now
+	return s
 }
 
 // WithAvatarStorage wires the storage client the avatar endpoints use.
@@ -158,7 +170,7 @@ func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileR
 			return nil, err
 		}
 	}
-	birthday, err := parseBirthday(req.Birthday)
+	birthday, err := parseBirthday(req.Birthday, s.now())
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +195,7 @@ func (s *Service) GetStats(ctx context.Context, id uuid.UUID) (*Stats, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ComputeStats(rows, events, time.Now()), nil
+	return ComputeStats(rows, events, s.now()), nil
 }
 
 // checkUsernameCooldown refuses a rename that lands inside the cooldown
@@ -208,7 +220,7 @@ func (s *Service) checkUsernameCooldown(ctx context.Context, id uuid.UUID, next 
 		return nil
 	}
 
-	if retryAt := current.UsernameChangedAt.Add(UsernameChangeCooldown); time.Now().Before(retryAt) {
+	if retryAt := current.UsernameChangedAt.Add(UsernameChangeCooldown); s.now().Before(retryAt) {
 		return &UsernameCooldownError{RetryAt: retryAt}
 	}
 	return nil
