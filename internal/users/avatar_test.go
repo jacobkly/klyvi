@@ -3,10 +3,13 @@ package users_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"image"
 	"image/jpeg"
 	"image/png"
+	"math/rand"
 	"testing"
 
 	"github.com/google/uuid"
@@ -44,8 +47,42 @@ func makeJPEG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// The avatar pipeline is the server-side half of the 2 MB / square-crop
-// contract: whatever comes in, what goes out is a 512×512 JPEG with no
+// makeNoisyJPEG renders w×h of random pixels, the worst case for JPEG
+// size, so the quality rounds have something to work against.
+func makeNoisyJPEG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	rng := rand.New(rand.NewSource(1))
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	rng.Read(img.Pix)
+	for i := 3; i < len(img.Pix); i += 4 {
+		img.Pix[i] = 255
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatalf("encode jpeg: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// pngHeaderClaiming is a PNG signature and IHDR chunk with the given
+// dimensions and no pixel data: a few dozen bytes that would make a naive
+// decoder allocate w×h×4 bytes.
+func pngHeaderClaiming(w, h uint32) []byte {
+	ihdr := make([]byte, 13)
+	binary.BigEndian.PutUint32(ihdr[0:], w)
+	binary.BigEndian.PutUint32(ihdr[4:], h)
+	ihdr[8], ihdr[9] = 8, 6 // 8-bit RGBA
+
+	var buf bytes.Buffer
+	buf.WriteString("\x89PNG\r\n\x1a\n")
+	_ = binary.Write(&buf, binary.BigEndian, uint32(len(ihdr)))
+	chunk := append([]byte("IHDR"), ihdr...)
+	buf.Write(chunk)
+	_ = binary.Write(&buf, binary.BigEndian, crc32.ChecksumIEEE(chunk))
+	return buf.Bytes()
+}
+
+// The avatar pipeline is the server-side half of the upload contract: whatever comes in, what goes out is a 512×512 JPEG with no
 // metadata (re-encoding drops EXIF by construction).
 func TestProcessAvatar(t *testing.T) {
 	tests := []struct {
@@ -110,9 +147,9 @@ func TestUpdateAvatar(t *testing.T) {
 		}
 	})
 
-	t.Run("oversized upload is rejected before processing", func(t *testing.T) {
+	t.Run("upload over 1 MB is rejected before processing", func(t *testing.T) {
 		svc := users.NewService(repo).WithAvatarStorage(&fakeStorage{}, "avatars")
-		_, err := svc.UpdateAvatar(context.Background(), userID, make([]byte, users.MaxAvatarBytes+1))
+		_, err := svc.UpdateAvatar(context.Background(), userID, make([]byte, 1<<20+1))
 		if !errors.Is(err, users.ErrImageTooLarge) {
 			t.Errorf("error = %v, want ErrImageTooLarge", err)
 		}
@@ -167,6 +204,54 @@ func TestUpdateAvatar(t *testing.T) {
 			t.Errorf("expected cleared avatar_url, got %+v", user)
 		}
 	})
+}
+
+// The source size is read from the header before any pixel is decoded, so a
+// file claiming huge dimensions is refused without the allocation.
+func TestProcessAvatar_SourceDimensions(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   []byte
+		wantErr error
+	}{
+		{"header claiming 100000x100000 is refused", pngHeaderClaiming(100000, 100000), users.ErrImageTooLarge},
+		{"one side over 4096 is refused", pngHeaderClaiming(4097, 16), users.ErrImageTooLarge},
+		{"4096 on a side is accepted", makePNG(t, 4096, 64), nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := users.ProcessAvatar(tt.input)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// Stored avatars stay small even for the worst input: quality steps down in
+// rounds until the JPEG fits. Noise at the output size is the hard case,
+// since a large source is averaged smooth on the way down.
+func TestProcessAvatar_StoredSizeCap(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+	}{
+		{"noise at the output size", makeNoisyJPEG(t, 512, 512)},
+		{"noise at the largest source size", makeNoisyJPEG(t, 4096, 4096)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := users.ProcessAvatar(tt.input)
+			if err != nil {
+				t.Fatalf("ProcessAvatar: %v", err)
+			}
+			if len(out) > 150*1024 {
+				t.Errorf("stored avatar = %d bytes, want at most %d", len(out), 150*1024)
+			}
+		})
+	}
 }
 
 func TestProcessAvatar_RejectsNonImages(t *testing.T) {

@@ -20,15 +20,26 @@ import (
 )
 
 const (
-	// MaxAvatarBytes matches the client-side cap in the settings UI.
-	MaxAvatarBytes = 2 * 1024 * 1024
+	// MaxAvatarBytes is the upload cap. The settings UI shrinks photos to
+	// under 400 KB before sending, so this is headroom, not a target.
+	MaxAvatarBytes = 1 << 20
+
+	// maxAvatarSourceEdge caps the source's width and height. It is read
+	// from the header before any pixel is decoded, so a tiny file claiming
+	// huge dimensions can't make the decoder allocate gigabytes.
+	maxAvatarSourceEdge = 4096
 
 	// avatarSize is the square edge the stored avatar is normalised to.
 	avatarSize = 512
 
-	// avatarJPEGQuality balances quality against storage for a 512px square.
-	avatarJPEGQuality = 85
+	// maxStoredAvatarBytes is what the stored JPEG aims to fit in. Photos
+	// fit at the first quality; noisy images step down.
+	maxStoredAvatarBytes = 150 * 1024
 )
+
+// avatarJPEGQualities are tried in order until the output fits
+// maxStoredAvatarBytes. The last one is kept even if it doesn't fit.
+var avatarJPEGQualities = []int{85, 75, 65, 55, 45}
 
 var (
 	ErrNotAnImage           = errors.New("not an image")
@@ -91,6 +102,15 @@ func (s *Service) DeleteAvatar(ctx context.Context, userID uuid.UUID) (*User, er
 // (including GPS position, which is the one worth being paranoid about)
 // never survives because only pixels are read from the source.
 func ProcessAvatar(data []byte) ([]byte, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNotAnImage, err)
+	}
+	if cfg.Width > maxAvatarSourceEdge || cfg.Height > maxAvatarSourceEdge {
+		return nil, fmt.Errorf("%w: %dx%d is over %d px on a side",
+			ErrImageTooLarge, cfg.Width, cfg.Height, maxAvatarSourceEdge)
+	}
+
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotAnImage, err)
@@ -108,9 +128,21 @@ func ProcessAvatar(data []byte) ([]byte, error) {
 	dst := image.NewRGBA(image.Rect(0, 0, avatarSize, avatarSize))
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, crop, xdraw.Over, nil)
 
+	return encodeAvatar(dst)
+}
+
+// encodeAvatar steps JPEG quality down until the output fits
+// maxStoredAvatarBytes.
+func encodeAvatar(img image.Image) ([]byte, error) {
 	var out bytes.Buffer
-	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: avatarJPEGQuality}); err != nil {
-		return nil, fmt.Errorf("encode avatar: %w", err)
+	for _, q := range avatarJPEGQualities {
+		out.Reset()
+		if err := jpeg.Encode(&out, img, &jpeg.Options{Quality: q}); err != nil {
+			return nil, fmt.Errorf("encode avatar: %w", err)
+		}
+		if out.Len() <= maxStoredAvatarBytes {
+			break
+		}
 	}
 	return out.Bytes(), nil
 }
