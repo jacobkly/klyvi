@@ -114,7 +114,13 @@ func (s *Service) run(ctx context.Context, id, userID uuid.UUID, rows []Row) {
 	_ = s.repo.SetProgress(ctx, id, total, 0, 0)
 
 	for i, row := range rows {
-		tmdbID := matchRow(ctx, s.client, row)
+		// Shows, seasons and episodes are not films. Searching TMDB's films
+		// for them would track whatever film shares the name, so they count
+		// as unmatched until TV rows import.
+		tmdbID := 0
+		if row.isFilm() {
+			tmdbID = matchRow(ctx, s.client, row)
+		}
 		if tmdbID == 0 {
 			unmatched++
 			// A title we could not resolve at all — capture it (bounded) so

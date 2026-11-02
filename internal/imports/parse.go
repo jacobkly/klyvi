@@ -31,11 +31,24 @@ func ValidSource(s string) bool {
 
 // Row is a parsed import line, format-agnostic. Score is nil when the source
 // row had no rating (still imported as watched). Score is already on the
-// tracker's 0–100 scale.
+// tracker's 0–100 scale. Type is the row's lower-cased type column ("movie",
+// "show", "episode"...), empty when the file has none.
 type Row struct {
 	Title string
 	Year  int
 	Score *int
+	Type  string
+}
+
+// isFilm reports whether the row names a film. Files without a type column
+// are film lists, so an untyped row is a film.
+func (r Row) isFilm() bool {
+	switch r.Type {
+	case "", "movie", "film":
+		return true
+	default:
+		return false
+	}
 }
 
 // parseImport turns a source file into normalised rows. It is CSV-based for
@@ -81,8 +94,9 @@ func parseImport(source Source, data []byte) ([]Row, error) {
 
 		rows = append(rows, Row{
 			Title: title,
-			Year:  atoiSafe(field(rec, cols["year"])),
-			Score: parseScore(source, field(rec, cols["rating"])),
+			Year:  atoiSafe(field(rec, column(cols, "year"))),
+			Score: parseScore(source, field(rec, column(cols, "rating"))),
+			Type:  strings.ToLower(strings.TrimSpace(field(rec, column(cols, "type")))),
 		})
 	}
 	return rows, nil
@@ -95,6 +109,14 @@ func indexColumns(header []string) map[string]int {
 		m[strings.ToLower(strings.TrimSpace(h))] = i
 	}
 	return m
+}
+
+// column is the position of a header name, or -1 when the file lacks it.
+func column(cols map[string]int, name string) int {
+	if i, ok := cols[name]; ok {
+		return i
+	}
+	return -1
 }
 
 func field(rec []string, idx int) string {

@@ -94,7 +94,8 @@ const entrySelectClause = `
 		extract(year from tvs.first_air_date)::int
 	) as release_year,
 	tvse.season_number as season_number,
-	tvse.name as season_name
+	tvse.name as season_name,
+	case when jsonb_typeof(tvse.episodes) = 'array' then jsonb_array_length(tvse.episodes) end as episode_count
 `
 
 // entryFromClause is the LEFT JOIN chain that produces a row per

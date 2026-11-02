@@ -60,4 +60,5 @@ type Entry struct {
 	ReleaseYear  *int    `db:"release_year" json:"release_year"`
 	SeasonNumber *int    `db:"season_number" json:"season_number"`
 	SeasonName   *string `db:"season_name" json:"season_name"`
+	EpisodeCount *int    `db:"episode_count" json:"episode_count"`
 }

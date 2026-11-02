@@ -202,3 +202,50 @@ func TestStart_ExtraJobWaitsForAWorker(t *testing.T) {
 		waitForStatus(t, repo, id, StatusDone)
 	}
 }
+
+// recordingTMDB remembers every search it is sent and finds nothing.
+type recordingTMDB struct {
+	mu      sync.Mutex
+	queries []string
+}
+
+func (r *recordingTMDB) TMDBRequest(_ context.Context, _, endpoint string, _ interface{}) (map[string]interface{}, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.queries = append(r.queries, endpoint)
+	return map[string]interface{}{"results": []any{}}, nil
+}
+
+// A show, season or episode row is counted as unmatched without a film
+// search. Guessing it as a film would track whatever film shares its name.
+func TestRun_NonFilmRowsAreUnmatchedWithoutSearching(t *testing.T) {
+	repo := newFakeRepo()
+	tmdb := &recordingTMDB{}
+	svc := NewService(repo, tmdb, nil, nil, nil)
+
+	file := "type,title,year\n" +
+		"movie,Dune,2021\n" +
+		"show,Severance,2022\n" +
+		"episode,Severance,2022\n"
+	imp, err := svc.Start(context.Background(), uuid.New(), string(SourceTrakt), []byte(file))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForStatus(t, repo, imp.ID, StatusDone)
+
+	got, _ := repo.Get(context.Background(), uuid.Nil, imp.ID)
+	if got.Total != 3 || got.Unmatched != 3 || got.Matched != 0 {
+		t.Errorf("counts total=%d matched=%d unmatched=%d, want 3/0/3",
+			got.Total, got.Matched, got.Unmatched)
+	}
+	tmdb.mu.Lock()
+	defer tmdb.mu.Unlock()
+	for _, q := range tmdb.queries {
+		if strings.Contains(q, "Severance") {
+			t.Errorf("searched films for a TV row: %s", q)
+		}
+	}
+	if len(tmdb.queries) == 0 {
+		t.Error("the film row was never searched")
+	}
+}

@@ -89,7 +89,11 @@ func (r *Repository) StatsRowsByUser(ctx context.Context, id uuid.UUID) ([]Stats
 		select
 			ml.media_type, ml.status, ml.score, ml.episode_progress, ml.total_rewatches,
 			m.runtime as runtime_minutes,
-			(tvs.episode_run_time)[1] as episode_runtime_minutes,
+			(
+				select round(avg((e->>'runtime')::numeric))::int
+				from jsonb_array_elements(tvse.episodes) e
+				where jsonb_typeof(e->'runtime') = 'number'
+			) as episode_runtime_minutes,
 			case when tvse.episodes is not null then jsonb_array_length(tvse.episodes) end as episode_count,
 			coalesce(
 				extract(year from m.release_date)::int,
@@ -97,10 +101,7 @@ func (r *Repository) StatsRowsByUser(ctx context.Context, id uuid.UUID) ([]Stats
 				extract(year from tvs.first_air_date)::int
 			) as release_year,
 			coalesce(m.genres, tvs.genres) as genres_raw,
-			case
-				when ml.media_type = 'movie' then m.production_countries
-				else to_jsonb(tvs.origin_country)
-			end as countries_raw
+			coalesce(m.production_countries, tvs.production_countries) as countries_raw
 		from media_list ml
 		left join media_index mi on mi.media_id = ml.media_id
 		left join movies m on ml.media_type = 'movie' and m.movie_id = mi.id
@@ -206,8 +207,8 @@ func decodeGenreNames(raw []byte) []string {
 	return out
 }
 
-// decodeCountryLabels handles both catalog country shapes: movies carry
-// [{iso_3166_1, name}], TV carries a plain ISO-code array.
+// decodeCountryLabels reads production_countries, which movies and series
+// both carry as [{iso_3166_1, name}]. A plain ISO-code array still decodes.
 func decodeCountryLabels(raw []byte) []string {
 	if len(raw) == 0 {
 		return nil

@@ -321,6 +321,20 @@ func TestTracking_List_EnrichesEntries(t *testing.T) {
 	if seasonEntry.ReleaseYear == nil {
 		t.Error("season ReleaseYear: got nil, want a year from season air_date or series first_air_date")
 	}
+
+	// The season's episode total, so the client can show "3 of 7" without
+	// a catalog lookup per row. Movies have none.
+	var wantEpisodes int
+	if err := env.db.GetContext(ctx, &wantEpisodes,
+		`select jsonb_array_length(episodes) from tv_seasons where tv_id = 1396 and season_number = 1`); err != nil {
+		t.Fatalf("count cached episodes: %v", err)
+	}
+	if seasonEntry.EpisodeCount == nil || *seasonEntry.EpisodeCount != wantEpisodes {
+		t.Errorf("season EpisodeCount: got %v, want %d", seasonEntry.EpisodeCount, wantEpisodes)
+	}
+	if movieEntry.EpisodeCount != nil {
+		t.Errorf("movie EpisodeCount should be nil, got %v", *movieEntry.EpisodeCount)
+	}
 }
 
 // Verifies the JSON contract: GET /v1/tracking for a user with no entries

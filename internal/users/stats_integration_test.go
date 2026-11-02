@@ -97,3 +97,84 @@ func TestStatsQueries_ScanAgainstRealSchema(t *testing.T) {
 		t.Errorf("zero payload malformed: activity=%d bands=%d", len(stats.Activity), len(stats.ScoreDistribution))
 	}
 }
+
+// A tracked season's watch time comes from its own cached episodes, and
+// its countries from the series' production_countries. The older columns
+// these read (episode_run_time, origin_country) are never written by the
+// TV cache, so every season counted zero minutes and no country.
+func TestStatsRowsByUser_SeasonUsesEpisodeRuntimesAndSeriesCountries(t *testing.T) {
+	repo, dbConn, ctx := usernameTestRepo(t)
+	id := newTestUser(t, repo, dbConn, ctx)
+
+	// A synthetic series far outside TMDB's id range, so it never collides
+	// with the seeded catalog.
+	const tvID = 990000101
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = dbConn.ExecContext(bg, `delete from media_list where user_id = $1`, id)
+		_, _ = dbConn.ExecContext(bg, `delete from media_index where id = $1 and media_type = 'season'`, tvID)
+		_, _ = dbConn.ExecContext(bg, `delete from tv_seasons where tv_id = $1`, tvID)
+		_, _ = dbConn.ExecContext(bg, `delete from tv_series where tv_id = $1`, tvID)
+	})
+
+	if _, err := dbConn.ExecContext(ctx, `
+		insert into tv_series (tv_id, name, genres, production_countries)
+		values ($1, 'Stats Fixture', '[{"id":18,"name":"Drama"}]',
+			'[{"iso_3166_1":"GB","name":"United Kingdom"}]')
+	`, tvID); err != nil {
+		t.Fatalf("seed tv_series: %v", err)
+	}
+	// Ten episodes: nine of 50 minutes and one TMDB has no runtime for,
+	// which must not drag the average down.
+	if _, err := dbConn.ExecContext(ctx, `
+		insert into tv_seasons (tv_id, season_number, air_date, episodes)
+		select $1, 1, date '2020-01-01', jsonb_agg(
+			jsonb_build_object('episode_number', n, 'runtime', case when n = 10 then null else 50 end)
+			order by n)
+		from generate_series(1, 10) n
+	`, tvID); err != nil {
+		t.Fatalf("seed tv_seasons: %v", err)
+	}
+	var mediaID int
+	if err := dbConn.GetContext(ctx, &mediaID, `
+		insert into media_index (id, season_number, media_type) values ($1, 1, 'season')
+		on conflict (id, season_number, media_type) do update set media_type = excluded.media_type
+		returning media_id
+	`, tvID); err != nil {
+		t.Fatalf("seed media_index: %v", err)
+	}
+	if _, err := dbConn.ExecContext(ctx, `
+		insert into media_list (user_id, media_id, media_type, status, episode_progress)
+		values ($1, $2, 'season', 'completed', 10)
+	`, id, mediaID); err != nil {
+		t.Fatalf("seed media_list: %v", err)
+	}
+
+	rows, err := repo.StatsRowsByUser(ctx, id)
+	if err != nil {
+		t.Fatalf("StatsRowsByUser: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d stats rows, want 1", len(rows))
+	}
+	r := rows[0]
+	if r.EpisodeCount == nil || *r.EpisodeCount != 10 {
+		t.Errorf("episode count = %v, want 10", r.EpisodeCount)
+	}
+	if r.EpisodeRuntimeMinutes == nil || *r.EpisodeRuntimeMinutes != 50 {
+		t.Errorf("episode runtime = %v, want 50 (the mean of the non-null runtimes)", r.EpisodeRuntimeMinutes)
+	}
+	if got := deref(r.EpisodeCount) * deref(r.EpisodeRuntimeMinutes); got != 500 {
+		t.Errorf("season watch time = %d minutes, want 500", got)
+	}
+	if len(r.Countries) != 1 || r.Countries[0] != "GB" {
+		t.Errorf("countries = %v, want [GB] from production_countries", r.Countries)
+	}
+}
+
+func deref(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
+}

@@ -93,3 +93,63 @@ func TestParse_SkipsRowsMissingTitle(t *testing.T) {
 		t.Errorf("rows = %+v, want just Parasite (untitled row skipped)", rows)
 	}
 }
+
+// Trakt and generic exports can mix films and TV, labelled by a type column.
+// The type is carried through so the worker can tell a film from a show
+// instead of searching TMDB's films for "Severance".
+func TestParse_TypeColumn(t *testing.T) {
+	csv := "type,title,year,rating\n" +
+		"movie,Dune,2021,9\n" +
+		"Show,Severance,2022,10\n" +
+		"episode,Severance,2022,8\n" +
+		"season,Severance,2022,\n"
+
+	rows, err := parseImport(SourceTrakt, []byte(csv))
+	if err != nil {
+		t.Fatalf("parseImport: %v", err)
+	}
+	want := []struct {
+		typ  string
+		film bool
+	}{
+		{"movie", true},
+		{"show", false},
+		{"episode", false},
+		{"season", false},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("rows = %d, want %d", len(rows), len(want))
+	}
+	for i, w := range want {
+		if rows[i].Type != w.typ || rows[i].isFilm() != w.film {
+			t.Errorf("row %d type = %q film = %v, want %q film = %v",
+				i, rows[i].Type, rows[i].isFilm(), w.typ, w.film)
+		}
+	}
+}
+
+// Without a type column every row is a film, as before.
+func TestParse_NoTypeColumnMeansFilm(t *testing.T) {
+	rows, err := parseImport(SourceCSV, []byte("title,year\nWhiplash,2014\n"))
+	if err != nil {
+		t.Fatalf("parseImport: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Type != "" || !rows[0].isFilm() {
+		t.Errorf("rows = %+v, want one untyped film", rows)
+	}
+}
+
+// An absent column reads as empty, not as the first column. Before, a file
+// with no rating column scored a film titled "1917" from its own title.
+func TestParse_AbsentColumnsReadEmpty(t *testing.T) {
+	rows, err := parseImport(SourceCSV, []byte("title\n1917\n"))
+	if err != nil {
+		t.Fatalf("parseImport: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if rows[0].Score != nil || rows[0].Year != 0 || rows[0].Type != "" {
+		t.Errorf("row = %+v, want no score, year or type", rows[0])
+	}
+}
