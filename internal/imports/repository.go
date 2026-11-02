@@ -8,8 +8,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 )
+
+const uniqueViolation = "23505"
+
+// staleMessage is the reason recorded on a job whose worker stopped.
+const staleMessage = "import did not complete (worker stopped)"
 
 type Repository struct {
 	db *sqlx.DB
@@ -19,8 +25,21 @@ func NewRepository(db *sqlx.DB) *Repository {
 	return &Repository{db: db}
 }
 
-// Create inserts a pending job and returns it.
+// activeImportIndex is the partial unique index that allows one pending or
+// running import per user.
+const activeImportIndex = "imports_one_active_per_user"
+
+// Create inserts a pending job and returns it, or ErrImportActive when the
+// user already has one pending or running. A running job Get would report as
+// stale is failed first, so the retry Get invites is not refused by it.
 func (r *Repository) Create(ctx context.Context, userID uuid.UUID, source string) (*Import, error) {
+	if _, err := r.db.ExecContext(ctx, `
+		update imports set status = 'failed', error = $2, updated_at = now()
+		where user_id = $1 and status = 'running' and updated_at < $3
+	`, userID, staleMessage, time.Now().Add(-staleAfter)); err != nil {
+		return nil, fmt.Errorf("fail stale import: %w", err)
+	}
+
 	var imp Import
 	err := r.db.GetContext(ctx, &imp, `
 		insert into imports (id, user_id, source, status)
@@ -28,9 +47,28 @@ func (r *Repository) Create(ctx context.Context, userID uuid.UUID, source string
 		returning *
 	`, userID, source)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation && pgErr.ConstraintName == activeImportIndex {
+			return nil, ErrImportActive
+		}
 		return nil, fmt.Errorf("create import: %w", err)
 	}
 	return &imp, nil
+}
+
+// FailUnfinished fails every pending or running job. Workers run inside the
+// API process, so at startup any such job belongs to a process that has
+// stopped and will never move. This assumes one API instance, which is how
+// it is deployed.
+func (r *Repository) FailUnfinished(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `
+		update imports set status = 'failed', error = $1, updated_at = now()
+		where status in ('pending', 'running')
+	`, staleMessage)
+	if err != nil {
+		return fmt.Errorf("fail unfinished imports: %w", err)
+	}
+	return nil
 }
 
 // Get returns a job scoped to its owner. A 'running' job whose updated_at has
@@ -50,7 +88,7 @@ func (r *Repository) Get(ctx context.Context, userID, id uuid.UUID) (*Import, er
 
 	if imp.Status == StatusRunning && time.Since(imp.UpdatedAt) > staleAfter {
 		imp.Status = StatusFailed
-		msg := "import did not complete (worker stopped)"
+		msg := staleMessage
 		imp.Error = &msg
 	}
 	return &imp, nil

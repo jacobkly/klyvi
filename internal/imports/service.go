@@ -50,21 +50,32 @@ type Service struct {
 	movies   MovieCacher
 	tracking TrackAdder
 	signals  SignalRecorder
+
+	// workers holds one slot per running import (importWorkers in all).
+	workers chan struct{}
 }
 
 func NewService(repo Repo, client TMDBClient, mc MovieCacher, tr TrackAdder, sr SignalRecorder) *Service {
-	return &Service{repo: repo, client: client, movies: mc, tracking: tr, signals: sr}
+	return &Service{
+		repo: repo, client: client, movies: mc, tracking: tr, signals: sr,
+		workers: make(chan struct{}, importWorkers),
+	}
 }
 
-// Start creates a job and kicks off a background worker, returning the pending
-// record immediately. The file is already read into memory by the handler
-// (capped at maxImportBytes), so the worker owns only parsing and matching.
+// Start parses the file, creates a job and hands it to the worker pool,
+// returning the pending record immediately. The file is already read into
+// memory by the handler (capped at maxImportBytes). Parsing here, not in the
+// worker, lets a broken or oversized file be refused before any job exists.
 func (s *Service) Start(ctx context.Context, userID uuid.UUID, source string, data []byte) (*Import, error) {
 	if !ValidSource(source) {
 		return nil, fmt.Errorf("unsupported source %q", source)
 	}
-	if len(data) == 0 {
-		return nil, fmt.Errorf("import file is empty")
+	rows, err := parseImport(Source(source), data)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse import file: %w", err)
+	}
+	if len(rows) > maxImportRows {
+		return nil, ErrTooManyRows
 	}
 
 	imp, err := s.repo.Create(ctx, userID, source)
@@ -74,7 +85,7 @@ func (s *Service) Start(ctx context.Context, userID uuid.UUID, source string, da
 
 	// Detach from the request context — it is cancelled when the response
 	// returns, and the worker must outlive it.
-	go s.run(context.Background(), imp.ID, userID, Source(source), data)
+	go s.run(context.Background(), imp.ID, userID, rows)
 
 	return imp, nil
 }
@@ -84,25 +95,16 @@ func (s *Service) Get(ctx context.Context, userID, id uuid.UUID) (*Import, error
 	return s.repo.Get(ctx, userID, id)
 }
 
-// run is the worker: parse → match each row → write tracking + a rated
-// interaction → record counts. Unmatched rows are counted, never dropped
-// silently. A parse failure fails the whole job; a single unmatched or
-// unwritable row does not.
-func (s *Service) run(ctx context.Context, id, userID uuid.UUID, source Source, data []byte) {
-	fail := func(msg string) {
-		if err := s.repo.SetStatus(ctx, id, StatusFailed, &msg); err != nil {
-			log.Printf("import %s: failed to record failure: %v", id, err)
-		}
-	}
+// run is the worker: wait for a free slot → match each row → write tracking
+// + a rated interaction → record counts. The job stays pending while it
+// waits. Unmatched rows are counted, never dropped silently, and a single
+// unmatched or unwritable row does not fail the job.
+func (s *Service) run(ctx context.Context, id, userID uuid.UUID, rows []Row) {
+	s.workers <- struct{}{}
+	defer func() { <-s.workers }()
 
 	if err := s.repo.SetStatus(ctx, id, StatusRunning, nil); err != nil {
 		log.Printf("import %s: could not mark running: %v", id, err)
-		return
-	}
-
-	rows, err := parseImport(source, data)
-	if err != nil {
-		fail("could not parse import file: " + err.Error())
 		return
 	}
 

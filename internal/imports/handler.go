@@ -1,6 +1,7 @@
 package imports
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -58,7 +59,14 @@ func (a *API) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	imp, err := a.service.Start(r.Context(), userID, source, data)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrImportActive):
+		response.WriteError(w, http.StatusConflict, err.Error())
+		return
+	case errors.Is(err, ErrTooManyRows):
+		response.WriteError(w, http.StatusRequestEntityTooLarge, err.Error())
+		return
+	case err != nil:
 		response.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}

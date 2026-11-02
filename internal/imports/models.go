@@ -3,6 +3,7 @@ package imports
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -74,6 +75,22 @@ type Import struct {
 
 // maxImportBytes caps the upload. Well above a lifetime Letterboxd export.
 const maxImportBytes = 10 * 1024 * 1024
+
+// maxImportRows caps the titles in one import. A heavy real export is a few
+// thousand rows, so this only stops a file built to hold TMDB for hours.
+const maxImportRows = 10_000
+
+// importWorkers is how many imports run at once. Any more wait as pending
+// for a free worker, so a burst of uploads queues instead of fanning out.
+const importWorkers = 2
+
+var (
+	// ErrTooManyRows refuses a file with more than maxImportRows titles.
+	ErrTooManyRows = fmt.Errorf("import has more than %d titles", maxImportRows)
+	// ErrImportActive refuses a new import while the user's last one is
+	// still pending or running.
+	ErrImportActive = errors.New("an import is already running")
+)
 
 // staleAfter is how long a 'running' job may go without an update before a
 // reader reports it failed. A job dies with the server (in-process worker),

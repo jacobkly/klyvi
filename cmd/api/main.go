@@ -96,8 +96,17 @@ func main() {
 	}
 	onboardingService := onboarding.NewService(onboardingRepo, movieService)
 	rankingsService := rankings.NewService(cachedTMDB, rankings.NewRepository(dbConn))
-	importsService := imports.NewService(
-		imports.NewRepository(dbConn), cachedTMDB, movieService, trackingService, interactionsService)
+	// Imports are background work: their TMDB calls, including the detail
+	// fetches behind EnsureCached, take a capped share so page requests
+	// come first. Jobs a previous process left pending or running are dead,
+	// so they are failed at startup and their owners can import again.
+	importsTMDB := tmdb.NewBackgroundClient(cachedTMDB)
+	importsRepo := imports.NewRepository(dbConn)
+	if err := importsRepo.FailUnfinished(context.Background()); err != nil {
+		log.Printf("imports: could not fail unfinished jobs: %v", err)
+	}
+	importsService := imports.NewService(importsRepo, importsTMDB,
+		movies.NewService(importsTMDB, movieRepo), trackingService, interactionsService)
 
 	// Recommender orchestrator. Adapters wrap movies.Repository + raw SQL
 	// against interactions/media_list to feed the orchestrator. Scoring
