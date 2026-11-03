@@ -79,3 +79,41 @@ func TestReasonNames_QueriesEachIDOnce(t *testing.T) {
 		t.Errorf("DB asked genres %v keywords %v, want %v and %v", db.askedGenres, db.askedKwords, wantGenres, wantKwords)
 	}
 }
+
+// Series carry genres no film does (Kids, Reality, Talk) and keywords no
+// cached film names. Those resolve from the series cache, which is only asked
+// about the ids the film cache could not name.
+func TestReasonNames_FallsBackToTheSeriesCache(t *testing.T) {
+	films := &countingNames{
+		genres:   map[int]string{878: "Science Fiction"},
+		keywords: map[int]string{825: "support group"},
+	}
+	series := &countingNames{
+		genres:   map[int]string{10762: "Kids"},
+		keywords: map[int]string{7000: "anthology"},
+	}
+	names := newReasonNames(films, series)
+	ctx := context.Background()
+
+	g, k, err := names.Lookup(ctx, []int{878, 10762}, []int{825, 7000, 404})
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if !reflect.DeepEqual(g, map[int]string{878: "Science Fiction", 10762: "Kids"}) {
+		t.Errorf("genres = %v", g)
+	}
+	if !reflect.DeepEqual(k, map[int]string{825: "support group", 7000: "anthology"}) {
+		t.Errorf("keywords = %v", k)
+	}
+	if !reflect.DeepEqual(series.askedGenres, [][]int{{10762}}) || !reflect.DeepEqual(series.askedKwords, [][]int{{404, 7000}}) {
+		t.Errorf("series cache asked genres %v keywords %v, want only the ids films lack", series.askedGenres, series.askedKwords)
+	}
+
+	// Ids neither cache names are remembered too.
+	if _, _, err := names.Lookup(ctx, []int{10762}, []int{404}); err != nil {
+		t.Fatalf("repeat Lookup: %v", err)
+	}
+	if len(films.askedKwords) != 1 || len(series.askedKwords) != 1 {
+		t.Errorf("repeat Lookup reached the database: films %v, series %v", films.askedKwords, series.askedKwords)
+	}
+}

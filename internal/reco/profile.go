@@ -33,11 +33,11 @@ type ProfileRepository interface {
 // outputs already enriched with MediaFeatures by the orchestrator. idf damps
 // catalog-ubiquitous features so the persisted profile — and the feed Tier 2
 // scores from it — favours discriminative signal; a nil idf pools raw.
-func BuildProfile(userID uuid.UUID, liked, disliked []SignalItem, idf *FeatureIDF) *TasteProfile {
+func BuildProfile(userID uuid.UUID, liked, disliked []SignalItem, idf *MediaIDF) *TasteProfile {
 	p := &TasteProfile{
 		UserID:         userID,
-		GenreWeights:   pooledFeatureWeights(liked, genreKeyset, idf.GenreWeight),
-		KeywordWeights: pooledFeatureWeights(liked, keywordKeyset, idf.KeywordWeight),
+		GenreWeights:   pooledFeatureWeights(liked, genreKeyset, (*FeatureIDF).GenreWeight, idf),
+		KeywordWeights: pooledFeatureWeights(liked, keywordKeyset, (*FeatureIDF).KeywordWeight, idf),
 		EraWeights:     pooledEraWeights(liked),
 		LikedCount:     len(liked),
 		DislikedCount:  len(disliked),

@@ -109,14 +109,14 @@ func main() {
 	// Build the same global IDF table the API loads, once, held fixed across
 	// all users, trials, and weight configs — exactly what a fair comparison of
 	// scorer weights needs. -idf=false runs the raw-sum baseline for A/B.
-	var featureIDF *reco.FeatureIDF
+	var featureIDF *reco.MediaIDF
 	if *useIDF {
 		gdf, kdf, corpus, err := movieRepo.LoadFeatureStats(context.Background(), "movie")
 		if err != nil {
 			log.Fatalf("load feature stats: %v", err)
 		}
-		featureIDF = reco.NewFeatureIDF(gdf, kdf, corpus)
-		if featureIDF == nil {
+		featureIDF = &reco.MediaIDF{Movie: reco.NewFeatureIDF(gdf, kdf, corpus)}
+		if featureIDF.Movie == nil {
 			log.Println("idf: feature_stats empty — running raw-sum (run seed-catalog -refresh-feature-stats)")
 		} else {
 			log.Printf("idf: active (corpus=%d genres=%d keywords=%d)", corpus, len(gdf), len(kdf))
@@ -245,7 +245,7 @@ func listUsersWithSignal(ctx context.Context, dbConn *sqlx.DB, minInteractions i
 // runUserLOO runs leave-one-out for one user. For each item the user
 // "liked" (rated >=70 or logged), hide it, run the recommender against
 // the rest, and check if the hidden item came back in the top-K.
-func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.FeatureIDF, cfg reco.Config, userID uuid.UUID, maxTrials int) (recall10, recall50, mrr float64, trials int, err error) {
+func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.MediaIDF, cfg reco.Config, userID uuid.UUID, maxTrials int) (recall10, recall50, mrr float64, trials int, err error) {
 	interactions, err := loadInteractions(ctx, dbConn, userID)
 	if err != nil {
 		return 0, 0, 0, 0, err
@@ -436,7 +436,7 @@ func seenMediaIDs(ctx context.Context, dbConn *sqlx.DB, userID uuid.UUID) (map[i
 	return out, nil
 }
 
-func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.FeatureIDF, cfg reco.Config, userID uuid.UUID, k int) {
+func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.MediaIDF, cfg reco.Config, userID uuid.UUID, k int) {
 	interactions, err := loadInteractions(ctx, dbConn, userID)
 	if err != nil {
 		log.Println("load interactions:", err)

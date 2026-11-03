@@ -11,14 +11,15 @@ import (
 
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/reco"
+	"klyvi-api/internal/tv"
 )
 
 // newRecoOrchestrator wires the tier cascade to the DB-backed adapters. It is
 // the one place production builds the recommender, so tests that measure the
 // feed measure exactly what the server runs.
-func newRecoOrchestrator(dbConn *sqlx.DB, movieRepo *movies.Repository, cfg reco.Config, idf *reco.FeatureIDF) *reco.Orchestrator {
+func newRecoOrchestrator(dbConn *sqlx.DB, movieRepo *movies.Repository, tvRepo *tv.Repository, cfg reco.Config, idf *reco.MediaIDF) *reco.Orchestrator {
 	return reco.NewOrchestrator(
-		newCatalogAdapter(movieRepo),
+		newCatalogAdapter(movieRepo, tvRepo),
 		newSignalAdapter(dbConn),
 		newSeenAdapter(dbConn),
 		cfg,
@@ -28,14 +29,16 @@ func newRecoOrchestrator(dbConn *sqlx.DB, movieRepo *movies.Repository, cfg reco
 }
 
 // catalogAdapter wraps movies.Repository to satisfy reco.CatalogRepository.
-// Translates the movies cache rows into reco's MediaFeatures shape.
+// Translates the movies cache rows into reco's MediaFeatures shape. Reason
+// names fall back to the series cache for the genres and keywords only
+// series carry.
 type catalogAdapter struct {
 	repo  *movies.Repository
 	names *reasonNames
 }
 
-func newCatalogAdapter(repo *movies.Repository) *catalogAdapter {
-	return &catalogAdapter{repo: repo, names: newReasonNames(repo)}
+func newCatalogAdapter(repo *movies.Repository, tvRepo *tv.Repository) *catalogAdapter {
+	return &catalogAdapter{repo: repo, names: newReasonNames(repo, tvRepo)}
 }
 
 func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) ([]reco.Candidate, error) {

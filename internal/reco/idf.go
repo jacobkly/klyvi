@@ -71,3 +71,25 @@ func (f *FeatureIDF) KeywordWeight(id int) float64 {
 	}
 	return 1
 }
+
+// MediaIDF holds one FeatureIDF per media type. Films and series are counted
+// over their own catalogs, because a keyword's rarity among films says little
+// about its rarity among series. A nil MediaIDF, or a nil table for one type,
+// weighs that type's features the same.
+type MediaIDF struct {
+	Movie *FeatureIDF
+	// TV is read in the film genre space (see NewTVFeatureIDF).
+	TV *FeatureIDF
+}
+
+// For returns the table for a media type: TV's for "tv", the film table for
+// anything else.
+func (m *MediaIDF) For(mediaType string) *FeatureIDF {
+	if m == nil {
+		return nil
+	}
+	if mediaType == "tv" {
+		return m.TV
+	}
+	return m.Movie
+}

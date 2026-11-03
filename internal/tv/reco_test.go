@@ -259,3 +259,31 @@ func TestLookupKeywordNames_ReadsSeriesKeywords(t *testing.T) {
 		t.Errorf("names = %v, want %v", names, want)
 	}
 }
+
+// TV has genres no film carries (Kids, News, Reality, Soap, Talk). A reason
+// built on one needs its name from the series cache.
+func TestLookupGenreNames_ReadsSeriesGenres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB integration test in short mode")
+	}
+	_, repo, dbh := setup(t)
+	requireMigration(t, dbh, 30)
+
+	const (
+		seriesGenre  = 2_100_000_915
+		unknownGenre = 2_100_000_916
+	)
+	seedRecoSeries(t, dbh, []recoSeries{
+		{2_100_000_040, "Series Genre", 10, `[{"id": 2100000915, "name": "series-only genre"}]`, `[]`, true},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	names, err := repo.LookupGenreNames(ctx, []int{seriesGenre, unknownGenre})
+	if err != nil {
+		t.Fatalf("LookupGenreNames: %v", err)
+	}
+	if len(names) != 1 || names[seriesGenre] != "series-only genre" {
+		t.Errorf("names = %v, want only %d named", names, seriesGenre)
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"klyvi-api/internal/platform/timing"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/tracking"
+	"klyvi-api/internal/tv"
 	"klyvi-api/internal/users"
 )
 
@@ -37,7 +38,7 @@ func TestTier2FeedQueryBudget(t *testing.T) {
 	dbConn := openTestDB(t)
 	userID := newTier2User(t, dbConn)
 
-	orch := newRecoOrchestrator(dbConn, movies.NewRepository(dbConn), reco.DefaultConfig(), nil)
+	orch := newRecoOrchestrator(dbConn, movies.NewRepository(dbConn), tv.NewRepository(dbConn), reco.DefaultConfig(), nil)
 	// Cleanups run last-in first-out, so background profile saves land before
 	// the user is deleted and the pool closes.
 	t.Cleanup(orch.Wait)
@@ -86,7 +87,7 @@ func TestCachedFeed_LaterPagesSkipTheDBUntilARating(t *testing.T) {
 	userID := newTier2User(t, dbConn)
 
 	feedCache := reco.NewFeedCache(time.Minute, 8)
-	orch := newRecoOrchestrator(dbConn, movies.NewRepository(dbConn), reco.DefaultConfig(), nil).
+	orch := newRecoOrchestrator(dbConn, movies.NewRepository(dbConn), tv.NewRepository(dbConn), reco.DefaultConfig(), nil).
 		WithFeedCache(feedCache)
 	t.Cleanup(orch.Wait)
 	interactionsService := interactions.NewService(

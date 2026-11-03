@@ -82,8 +82,7 @@ func TestPooledFeatureWeights_IdentityMatchesRawSum(t *testing.T) {
 		{MediaID: 1, Weight: 2.0, Features: &MediaFeatures{GenreIDs: []int{18, 80}}},
 		{MediaID: 2, Weight: 1.5, Features: &MediaFeatures{GenreIDs: []int{18}}},
 	}
-	var nilIDF *FeatureIDF
-	got := pooledFeatureWeights(liked, genreKeyset, nilIDF.GenreWeight)
+	got := pooledFeatureWeights(liked, genreKeyset, (*FeatureIDF).GenreWeight, nil)
 
 	want := map[int]float64{18: 3.5, 80: 2.0}
 	for id, w := range want {
@@ -107,7 +106,7 @@ func TestPooledFeatureWeights_AppliesIDF(t *testing.T) {
 		{MediaID: 1, Weight: 2.0, Features: &MediaFeatures{GenreIDs: []int{18}}},
 		{MediaID: 2, Weight: 1.0, Features: &MediaFeatures{GenreIDs: []int{18}}},
 	}
-	got := pooledFeatureWeights(liked, genreKeyset, idf.GenreWeight)
+	got := pooledFeatureWeights(liked, genreKeyset, (*FeatureIDF).GenreWeight, &MediaIDF{Movie: idf})
 
 	mult := math.Log(float64(1+corpus)/float64(1+df)) + 1
 	want := 3.0 * mult // (2.0 + 1.0) summed, then scaled
@@ -128,5 +127,40 @@ func TestBuildProfile_IdentityIDFUnchanged(t *testing.T) {
 	}
 	if math.Abs(p.KeywordWeights[500]-1.0) > 1e-9 {
 		t.Errorf("keyword weight: got %.3f, want 1.0", p.KeywordWeights[500])
+	}
+}
+
+// A keyword's rarity among films says little about its rarity among series,
+// so each liked item is weighed by its own type's table.
+func TestPooledFeatureWeights_WeighsEachTypeByItsOwnTable(t *testing.T) {
+	const corpus = 1000
+	movieIDF := NewFeatureIDF(nil, map[int]int{101: 500}, corpus)
+	tvIDF := NewFeatureIDF(nil, map[int]int{101: 2}, corpus)
+
+	liked := []SignalItem{
+		{MediaID: 1, Weight: 1.0, Features: &MediaFeatures{MediaType: "movie", KeywordIDs: []int{101}}},
+		{MediaID: 2, Weight: 2.0, Features: &MediaFeatures{MediaType: "tv", KeywordIDs: []int{101}}},
+	}
+	got := pooledFeatureWeights(liked, keywordKeyset, (*FeatureIDF).KeywordWeight, &MediaIDF{Movie: movieIDF, TV: tvIDF})
+
+	want := 1.0*movieIDF.KeywordWeight(101) + 2.0*tvIDF.KeywordWeight(101)
+	if math.Abs(got[101]-want) > 1e-9 {
+		t.Errorf("pooled keyword 101 = %.6f, want %.6f", got[101], want)
+	}
+}
+
+// Without series stats, a series' features weigh the same as raw, and films
+// still use theirs.
+func TestPooledFeatureWeights_MissingTypeTableIsIdentity(t *testing.T) {
+	movieIDF := NewFeatureIDF(nil, map[int]int{101: 500}, 1000)
+	liked := []SignalItem{
+		{MediaID: 1, Weight: 1.0, Features: &MediaFeatures{MediaType: "movie", KeywordIDs: []int{101}}},
+		{MediaID: 2, Weight: 2.0, Features: &MediaFeatures{MediaType: "tv", KeywordIDs: []int{101}}},
+	}
+	got := pooledFeatureWeights(liked, keywordKeyset, (*FeatureIDF).KeywordWeight, &MediaIDF{Movie: movieIDF})
+
+	want := movieIDF.KeywordWeight(101) + 2.0
+	if math.Abs(got[101]-want) > 1e-9 {
+		t.Errorf("pooled keyword 101 = %.6f, want %.6f", got[101], want)
 	}
 }

@@ -12,15 +12,15 @@ import (
 // incumbents already do.
 type Tier1 struct {
 	cfg Config
-	idf *FeatureIDF
+	idf *MediaIDF
 }
 
 func NewTier1(cfg Config) *Tier1 { return &Tier1{cfg: cfg} }
 
-// WithIDF attaches a global inverse-document-frequency table so pooled feature
-// weights are damped by catalog ubiquity. A nil idf (the zero value) leaves
-// scoring unchanged. Returns the receiver for chaining at wiring time.
-func (t *Tier1) WithIDF(idf *FeatureIDF) *Tier1 { t.idf = idf; return t }
+// WithIDF attaches the per-type inverse-document-frequency tables so pooled
+// feature weights are damped by catalog ubiquity. A nil idf (the zero value)
+// leaves scoring unchanged. Returns the receiver for chaining at wiring time.
+func (t *Tier1) WithIDF(idf *MediaIDF) *Tier1 { t.idf = idf; return t }
 
 func (t *Tier1) Name() string { return "tier1" }
 
@@ -30,12 +30,12 @@ func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 		return nil, nil
 	}
 
-	posGenre := pooledFeatureWeights(u.Liked, genreKeyset, t.idf.GenreWeight)
-	posKeyword := pooledFeatureWeights(u.Liked, keywordKeyset, t.idf.KeywordWeight)
+	posGenre := pooledFeatureWeights(u.Liked, genreKeyset, (*FeatureIDF).GenreWeight, t.idf)
+	posKeyword := pooledFeatureWeights(u.Liked, keywordKeyset, (*FeatureIDF).KeywordWeight, t.idf)
 	posEra := pooledEraWeights(u.Liked)
 
-	negGenre := pooledFeatureWeights(u.Disliked, genreKeyset, t.idf.GenreWeight)
-	negKeyword := pooledFeatureWeights(u.Disliked, keywordKeyset, t.idf.KeywordWeight)
+	negGenre := pooledFeatureWeights(u.Disliked, genreKeyset, (*FeatureIDF).GenreWeight, t.idf)
+	negKeyword := pooledFeatureWeights(u.Disliked, keywordKeyset, (*FeatureIDF).KeywordWeight, t.idf)
 	negEra := pooledEraWeights(u.Disliked)
 
 	out := make([]Scored, 0, len(cands))
@@ -111,22 +111,21 @@ func eraSimilarity(year int, pooledEra map[int]float64) float64 {
 }
 
 // pooledFeatureWeights sums signal weights across the items for each distinct
-// feature id of the requested kind, then scales each feature by its IDF
-// multiplier. idf is applied once per distinct feature after summing —
-// algebraically identical to scaling every contribution, but cheaper. Pass an
-// identity idf (e.g. (*FeatureIDF)(nil).GenreWeight) to sum without damping.
-func pooledFeatureWeights(items []SignalItem, keyset func(*MediaFeatures) []int, idf func(id int) float64) map[int]float64 {
+// feature id of the requested kind, each contribution scaled by the IDF
+// multiplier from its own item's media type. weight is the multiplier lookup,
+// (*FeatureIDF).GenreWeight or (*FeatureIDF).KeywordWeight. A nil idf sums
+// without damping.
+func pooledFeatureWeights(items []SignalItem, keyset func(*MediaFeatures) []int,
+	weight func(*FeatureIDF, int) float64, idf *MediaIDF) map[int]float64 {
 	out := make(map[int]float64)
 	for _, it := range items {
 		if it.Features == nil {
 			continue
 		}
+		table := idf.For(it.Features.MediaType)
 		for _, id := range keyset(it.Features) {
-			out[id] += it.Weight
+			out[id] += it.Weight * weight(table, id)
 		}
-	}
-	for id := range out {
-		out[id] *= idf(id)
 	}
 	return out
 }

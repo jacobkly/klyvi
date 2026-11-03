@@ -119,6 +119,32 @@ func (r *Repository) candidatesByOverlap(ctx context.Context, column string, ids
 	return rows, err
 }
 
+// LookupGenreNames returns id→name pairs for the requested genre ids from
+// the series cache. The feed reads TV genres in the film genre space, so
+// this only adds the genres films lack (Kids, News, Reality, Soap, Talk).
+// Ids no series carries are absent from the map.
+func (r *Repository) LookupGenreNames(ctx context.Context, ids []int) (map[int]string, error) {
+	if len(ids) == 0 {
+		return map[int]string{}, nil
+	}
+	var rows []struct {
+		ID   int    `db:"id"`
+		Name string `db:"name"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		select distinct (elem->>'id')::int as id, elem->>'name' as name
+		from tv_series, jsonb_array_elements(genres) elem
+		where genre_ids && $1::int[] and (elem->>'id')::int = any($1)
+	`, ids); err != nil {
+		return nil, err
+	}
+	out := make(map[int]string, len(rows))
+	for _, row := range rows {
+		out[row.ID] = row.Name
+	}
+	return out, nil
+}
+
 // LookupKeywordNames returns id→name pairs for the requested keyword ids
 // from the series cache. Keyword ids are shared with movies, so this only
 // adds the names of keywords no cached movie carries. Ids no series carries

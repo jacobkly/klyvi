@@ -26,7 +26,7 @@ const (
 type Tier2 struct {
 	cfg  Config
 	repo ProfileRepository
-	idf  *FeatureIDF
+	idf  *MediaIDF
 
 	saving  chan struct{}
 	pending sync.WaitGroup
@@ -42,10 +42,11 @@ func (t *Tier2) Wait() {
 	t.pending.Wait()
 }
 
-// WithIDF attaches the same global IDF table Tier 1 uses, so the taste profile
-// this tier builds and persists is damped by catalog ubiquity. A nil idf
-// leaves profile weights as raw pooled sums. Returns the receiver for chaining.
-func (t *Tier2) WithIDF(idf *FeatureIDF) *Tier2 { t.idf = idf; return t }
+// WithIDF attaches the same per-type IDF tables Tier 1 uses, so the taste
+// profile this tier builds and persists is damped by catalog ubiquity. A nil
+// idf leaves profile weights as raw pooled sums. Returns the receiver for
+// chaining.
+func (t *Tier2) WithIDF(idf *MediaIDF) *Tier2 { t.idf = idf; return t }
 
 func (t *Tier2) Name() string { return "tier2" }
 
