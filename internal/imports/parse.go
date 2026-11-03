@@ -3,6 +3,7 @@ package imports
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -33,11 +34,19 @@ func ValidSource(s string) bool {
 // row had no rating (still imported as watched). Score is already on the
 // tracker's 0–100 scale. Type is the row's lower-cased type column ("movie",
 // "show", "episode"...), empty when the file has none.
+//
+// TMDBID is the title's TMDB id when the file gives one, so it needs no
+// search. Season is the season a show row tracks, 0 for a row about the
+// whole show. Watched is how many distinct episodes of that season were
+// watched, 0 when the file does not say.
 type Row struct {
-	Title string
-	Year  int
-	Score *int
-	Type  string
+	Title   string
+	Year    int
+	Score   *int
+	Type    string
+	TMDBID  int
+	Season  int
+	Watched int
 }
 
 // isFilm reports whether the row names a film. Files without a type column
@@ -51,14 +60,42 @@ func (r Row) isFilm() bool {
 	}
 }
 
-// parseImport turns a source file into normalised rows. It is CSV-based for
-// all three sources today; the rating column's scale is the only real
-// difference (Letterboxd: 0.5–5 stars, Trakt: 1–10, generic: 0–100).
+// isShow reports whether the row names a show or one of its seasons.
+func (r Row) isShow() bool {
+	switch r.Type {
+	case "tv", "show", "series", "season":
+		return true
+	default:
+		return false
+	}
+}
+
+// utf8BOM is the byte order mark some tools write at the start of a file.
+var utf8BOM = []byte("\xef\xbb\xbf")
+
+// parseImport turns a source file into normalised rows. Trakt hands over a
+// ZIP of JSON files, or one of those files on its own. Everything else is a
+// CSV, where the rating column's scale is the real difference between
+// sources (Letterboxd: 0.5–5 stars, Trakt: 1–10, generic: 0–100).
 func parseImport(source Source, data []byte) ([]Row, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, fmt.Errorf("import file is empty")
 	}
+	if isZIP(data) {
+		if source != SourceTrakt {
+			return nil, errors.New("this is a ZIP file. Upload the CSV inside it instead (ratings.csv for Letterboxd)")
+		}
+		return parseTraktExport(data, maxExportBytes)
+	}
+	if text := bytes.TrimSpace(bytes.TrimPrefix(data, utf8BOM)); source == SourceTrakt && text[0] == '[' {
+		return parseTraktJSON(text)
+	}
+	return parseCSV(source, data)
+}
 
+// parseCSV reads a CSV with a header row. Only a title (or Letterboxd's
+// name) column is required.
+func parseCSV(source Source, data []byte) ([]Row, error) {
 	r := csv.NewReader(bytes.NewReader(data))
 	r.FieldsPerRecord = -1 // tolerate ragged rows
 	r.TrimLeadingSpace = true
@@ -93,10 +130,12 @@ func parseImport(source Source, data []byte) ([]Row, error) {
 		}
 
 		rows = append(rows, Row{
-			Title: title,
-			Year:  atoiSafe(field(rec, column(cols, "year"))),
-			Score: parseScore(source, field(rec, column(cols, "rating"))),
-			Type:  strings.ToLower(strings.TrimSpace(field(rec, column(cols, "type")))),
+			Title:  title,
+			Year:   atoiSafe(field(rec, column(cols, "year"))),
+			Score:  parseScore(source, field(rec, column(cols, "rating"))),
+			Type:   strings.ToLower(strings.TrimSpace(field(rec, column(cols, "type")))),
+			TMDBID: atoiSafe(field(rec, column(cols, "tmdb_id"))),
+			Season: atoiSafe(field(rec, column(cols, "season"))),
 		})
 	}
 	return rows, nil
@@ -148,6 +187,12 @@ func parseScore(source Source, raw string) *int {
 		scaled = f // already 0–100
 	}
 
+	v := clampScore(scaled)
+	return &v
+}
+
+// clampScore rounds a scaled rating onto the tracker's 0–100.
+func clampScore(scaled float64) int {
 	v := int(math.Round(scaled))
 	if v < 0 {
 		v = 0
@@ -155,7 +200,7 @@ func parseScore(source Source, raw string) *int {
 	if v > 100 {
 		v = 100
 	}
-	return &v
+	return v
 }
 
 func atoiSafe(s string) int {

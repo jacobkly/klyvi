@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -50,7 +51,8 @@ func (f *fakeTMDB) TMDBRequest(_ context.Context, _, endpoint string, _ interfac
 			"id": %d, "name": "Klyvi test series", "vote_average": 8.1, "vote_count": 900,
 			"genres": [{"id": 18, "name": "Drama"}, {"id": 80, "name": "Crime"}],
 			"keywords": {"results": [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]},
-			"credits": {"cast": [{"id": 17419, "name": "Bryan Cranston", "order": 0}], "crew": []}
+			"credits": {"cast": [{"id": 17419, "name": "Bryan Cranston", "order": 0}], "crew": []},
+			"seasons": [{"season_number": 0, "episode_count": 3}, {"season_number": 1, "episode_count": 7}]
 		}`, id)
 	default:
 		return nil, errors.New("fakeTMDB: unexpected endpoint " + endpoint)
@@ -171,6 +173,37 @@ func TestEnsureSeries_FetchesOnlyWhenTheSeriesIsMissing(t *testing.T) {
 	keywords, indexed := seriesState(t, dbh, tvID)
 	if keywords != "1,2" || !indexed {
 		t.Errorf("series keywords = {%s}, indexed = %v; want {1,2} and true", keywords, indexed)
+	}
+}
+
+// An import needs each season's episode count to tell a finished season
+// from one in progress. The counts come from the cached series, which is
+// fetched once.
+func TestSeasonEpisodeCounts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB integration test in short mode")
+	}
+	_, _, dbh := setup(t)
+	requireMigration(t, dbh, 30)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const tvID = 2_100_000_015
+	resetShow(t, dbh, tvID)
+	client := &fakeTMDB{}
+	svc := tv.NewService(client, tv.NewRepository(dbh))
+
+	for range 2 {
+		counts, err := svc.SeasonEpisodeCounts(ctx, tvID)
+		if err != nil {
+			t.Fatalf("SeasonEpisodeCounts: %v", err)
+		}
+		if want := map[int]int{0: 3, 1: 7}; !reflect.DeepEqual(counts, want) {
+			t.Errorf("counts = %v, want %v", counts, want)
+		}
+	}
+	if n := client.seriesCalls(); n != 1 {
+		t.Errorf("series fetched %d times, want 1", n)
 	}
 }
 

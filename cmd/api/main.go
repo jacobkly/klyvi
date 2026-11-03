@@ -106,7 +106,8 @@ func main() {
 		log.Printf("imports: could not fail unfinished jobs: %v", err)
 	}
 	importsService := imports.NewService(importsRepo, importsTMDB,
-		movies.NewService(importsTMDB, movieRepo), trackingService, interactionsService)
+		movies.NewService(importsTMDB, movieRepo), trackingService, interactionsService).
+		WithSeries(tv.NewService(importsTMDB, tvRepo))
 
 	// Recommender orchestrator. Adapters wrap movies.Repository + raw SQL
 	// against interactions/media_list to feed the orchestrator. Scoring

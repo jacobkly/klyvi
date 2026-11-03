@@ -58,7 +58,10 @@ func (f *fakeRepo) SetProgress(_ context.Context, id uuid.UUID, total, matched, 
 	return nil
 }
 
-func (f *fakeRepo) SetUnmatchedTitles(context.Context, uuid.UUID, UnmatchedTitles) error {
+func (f *fakeRepo) SetUnmatchedTitles(_ context.Context, id uuid.UUID, titles UnmatchedTitles) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.jobs[id].Titles = titles
 	return nil
 }
 

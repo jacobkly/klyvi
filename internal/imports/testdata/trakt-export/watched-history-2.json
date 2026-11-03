@@ -1,0 +1,17 @@
+[
+  {"id": 9009, "watched_at": "2024-06-01T21:00:00.000Z", "action": "watch", "type": "episode",
+   "episode": {"season": 1, "number": 1, "title": "1:23:45", "ids": {"trakt": 3021, "tvdb": 7105316, "imdb": "tt8162428", "tmdb": 1777633}},
+   "show": {"title": "Chernobyl", "year": 2019, "ids": {"trakt": 129718, "slug": "chernobyl", "tvdb": 360893, "imdb": "tt7366338", "tmdb": 87108}}},
+  {"id": 9010, "watched_at": "2024-07-01T21:00:00.000Z", "action": "scrobble", "type": "episode",
+   "episode": {"season": 1, "number": 1, "title": "Good News About Hell", "ids": {"trakt": 4011, "tvdb": 8519395, "imdb": "tt11650328", "tmdb": 1980637}},
+   "show": {"title": "Severance", "year": 2022, "ids": {"trakt": 154997, "slug": "severance", "tvdb": 371980, "imdb": "tt11280740", "tmdb": 95396}}},
+  {"id": 9011, "watched_at": "2024-07-02T21:00:00.000Z", "action": "scrobble", "type": "episode",
+   "episode": {"season": 1, "number": 2, "title": "Half Loop", "ids": {"trakt": 4012, "tvdb": 8792001, "imdb": "tt11650330", "tmdb": 3434545}},
+   "show": {"title": "Severance", "year": 2022, "ids": {"trakt": 154997, "slug": "severance", "tvdb": 371980, "imdb": "tt11280740", "tmdb": 95396}}},
+  {"id": 9012, "watched_at": "2024-07-03T21:00:00.000Z", "action": "scrobble", "type": "episode",
+   "episode": {"season": 1, "number": 3, "title": "In Perpetuity", "ids": {"trakt": 4013, "tvdb": 8792002, "imdb": "tt11650332", "tmdb": 3434546}},
+   "show": {"title": "Severance", "year": 2022, "ids": {"trakt": 154997, "slug": "severance", "tvdb": 371980, "imdb": "tt11280740", "tmdb": 95396}}},
+  {"id": 9013, "watched_at": "2024-07-04T21:00:00.000Z", "action": "watch", "type": "episode",
+   "episode": {"season": 0, "number": 1, "title": "Behind the Scenes", "ids": {"trakt": 4900, "tvdb": null, "imdb": null, "tmdb": 4000001}},
+   "show": {"title": "Severance", "year": 2022, "ids": {"trakt": 154997, "slug": "severance", "tvdb": 371980, "imdb": "tt11280740", "tmdb": 95396}}}
+]

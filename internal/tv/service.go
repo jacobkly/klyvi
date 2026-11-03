@@ -2,6 +2,7 @@ package tv
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -127,6 +128,35 @@ func (s *Service) EnsureSeries(ctx context.Context, tvID int) error {
 		return fmt.Errorf("index series %d: %w", tvID, err)
 	}
 	return nil
+}
+
+// SeasonEpisodeCounts gives the episode count of each season of a show,
+// keyed by season number, from the cached series. It caches the series
+// first when it is not. An import uses it to tell a finished season from
+// one in progress, and a real season from one the show does not have.
+func (s *Service) SeasonEpisodeCounts(ctx context.Context, tvID int) (map[int]int, error) {
+	if err := s.EnsureSeries(ctx, tvID); err != nil {
+		return nil, err
+	}
+	series, err := s.repo.GetTVSeriesByID(ctx, tvID)
+	if err != nil {
+		return nil, fmt.Errorf("read series %d: %w", tvID, err)
+	}
+	counts := map[int]int{}
+	if series == nil || series.Seasons == nil {
+		return counts, nil
+	}
+	var seasons []struct {
+		SeasonNumber int `json:"season_number"`
+		EpisodeCount int `json:"episode_count"`
+	}
+	if err := json.Unmarshal(*series.Seasons, &seasons); err != nil {
+		return nil, fmt.Errorf("decode seasons of series %d: %w", tvID, err)
+	}
+	for _, season := range seasons {
+		counts[season.SeasonNumber] = season.EpisodeCount
+	}
+	return counts, nil
 }
 
 // fetchSeries fetches a series detail from TMDB with its keywords and

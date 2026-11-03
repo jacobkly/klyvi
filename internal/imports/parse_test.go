@@ -128,6 +128,38 @@ func TestParse_TypeColumn(t *testing.T) {
 	}
 }
 
+// A CSV can name a show and its season, and give TMDB ids so nothing has to
+// be searched.
+func TestParse_CSVShowColumns(t *testing.T) {
+	csv := "type,title,year,season,tmdb_id,rating\n" +
+		"tv,Severance,2022,1,,90\n" +
+		"movie,Dune,2021,,438631,85\n" +
+		"tv,Chernobyl,2019,1,87108,\n"
+
+	rows, err := parseImport(SourceCSV, []byte(csv))
+	if err != nil {
+		t.Fatalf("parseImport: %v", err)
+	}
+	assertRows(t, rows, []Row{
+		{Title: "Severance", Year: 2022, Type: "tv", Season: 1, Score: intPtr(90)},
+		{Title: "Dune", Year: 2021, Type: "movie", TMDBID: 438631, Score: intPtr(85)},
+		{Title: "Chernobyl", Year: 2019, Type: "tv", TMDBID: 87108, Season: 1},
+	})
+}
+
+// The type words a file might use for a show all mean one. An episode is
+// neither a film nor a show Klyvi tracks.
+func TestRow_IsShow(t *testing.T) {
+	for _, typ := range []string{"tv", "show", "series", "season"} {
+		if r := (Row{Type: typ}); !r.isShow() || r.isFilm() {
+			t.Errorf("type %q: show = %v film = %v, want a show", typ, r.isShow(), r.isFilm())
+		}
+	}
+	if r := (Row{Type: "episode"}); r.isShow() || r.isFilm() {
+		t.Error("an episode row should be neither a film nor a show")
+	}
+}
+
 // Without a type column every row is a film, as before.
 func TestParse_NoTypeColumnMeansFilm(t *testing.T) {
 	rows, err := parseImport(SourceCSV, []byte("title,year\nWhiplash,2014\n"))

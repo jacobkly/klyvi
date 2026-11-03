@@ -11,7 +11,7 @@ import (
 )
 
 // UnmatchedTitle is one import row that could not be resolved to a catalog
-// film — surfaced so the user can find and rate it manually.
+// film or season, surfaced so the user can find and rate it manually.
 type UnmatchedTitle struct {
 	Title string `json:"title"`
 	Year  int    `json:"year"`

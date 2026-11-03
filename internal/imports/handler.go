@@ -63,7 +63,7 @@ func (a *API) Create(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrImportActive):
 		response.WriteError(w, http.StatusConflict, err.Error())
 		return
-	case errors.Is(err, ErrTooManyRows):
+	case errors.Is(err, ErrTooManyRows), errors.Is(err, ErrExportTooLarge):
 		response.WriteError(w, http.StatusRequestEntityTooLarge, err.Error())
 		return
 	case err != nil:

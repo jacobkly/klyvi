@@ -56,6 +56,52 @@ func matchRow(ctx context.Context, client TMDBClient, row Row) int {
 	return 0
 }
 
+// matchShow resolves a show row to a TMDB series id through /search/tv.
+// Unlike a film, a show is matched only strongly: the title is the show's
+// name or original name, the year (when the row has one) is the year it
+// first aired, and no other result fits as well. Anything weaker returns 0,
+// so a guess never tracks a season of the wrong show.
+func matchShow(ctx context.Context, client TMDBClient, row Row) int {
+	title := strings.TrimSpace(row.Title)
+	endpoint := fmt.Sprintf("/search/tv?query=%s&language=en-US&page=1", url.QueryEscape(title))
+	year := ""
+	if row.Year > 0 {
+		year = strconv.Itoa(row.Year)
+		endpoint += "&first_air_date_year=" + year
+	}
+
+	resp, err := client.TMDBRequest(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return 0
+	}
+	results, _ := resp["results"].([]any)
+
+	match := 0
+	for _, r := range results {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		original, _ := m["original_name"].(string)
+		if !strings.EqualFold(strings.TrimSpace(name), title) && !strings.EqualFold(strings.TrimSpace(original), title) {
+			continue
+		}
+		if aired, _ := m["first_air_date"].(string); year != "" && !strings.HasPrefix(aired, year) {
+			continue
+		}
+		id := intField(m, "id")
+		if id == 0 || id == match {
+			continue
+		}
+		if match != 0 {
+			return 0 // two shows fit equally well
+		}
+		match = id
+	}
+	return match
+}
+
 func intField(m map[string]any, key string) int {
 	if f, ok := m[key].(float64); ok {
 		return int(f)

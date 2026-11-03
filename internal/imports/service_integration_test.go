@@ -1,6 +1,8 @@
 package imports_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/tmdb"
 	"klyvi-api/internal/tracking"
+	"klyvi-api/internal/tv"
 	"klyvi-api/internal/users"
 )
 
@@ -61,7 +64,8 @@ func setupImports(t *testing.T) (*imports.Service, *sqlx.DB, uuid.UUID) {
 	trackingSvc := tracking.NewService(trackingRepo)
 	interactionsSvc := interactions.NewService(interactions.NewRepository(dbConn), trackingRepo)
 	movieSvc := movies.NewService(tmdbClient, movies.NewRepository(dbConn))
-	svc := imports.NewService(imports.NewRepository(dbConn), tmdbClient, movieSvc, trackingSvc, interactionsSvc)
+	svc := imports.NewService(imports.NewRepository(dbConn), tmdbClient, movieSvc, trackingSvc, interactionsSvc).
+		WithSeries(tv.NewService(tmdbClient, tv.NewRepository(dbConn)))
 
 	userID := uuid.New()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -152,5 +156,108 @@ func TestImport_LetterboxdEndToEnd(t *testing.T) {
 	}
 	if trackCount < 2 {
 		t.Errorf("tracking rows = %d, want at least 2", trackCount)
+	}
+}
+
+// waitForImport polls a job until it finishes.
+func waitForImport(t *testing.T, svc *imports.Service, userID, id uuid.UUID) *imports.Import {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		imp, err := svc.Get(ctx, userID, id)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if imp.Status == imports.StatusDone || imp.Status == imports.StatusFailed {
+			return imp
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("import did not finish in time")
+	return nil
+}
+
+// The trimmed Trakt export, zipped the way Trakt hands it over, goes through
+// real TMDB and the database: the finished miniseries lands as a completed
+// season, the show started lands as watching, and the show rating becomes a
+// series-level signal.
+func TestImport_TraktExportEndToEnd(t *testing.T) {
+	svc, dbConn, userID := setupImports(t)
+	ctx := context.Background()
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	files, err := filepath.Glob(filepath.Join("testdata", "trakt-export", "*.json"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("fixture files: %v (found %d)", err, len(files))
+	}
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := zw.Create(filepath.Base(path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	imp, err := svc.Start(ctx, userID, string(imports.SourceTrakt), buf.Bytes())
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	final := waitForImport(t, svc, userID, imp.ID)
+	if final.Status != imports.StatusDone {
+		t.Fatalf("job did not finish: %+v", final)
+	}
+	// The obscure film has no TMDB id and may or may not find a match by
+	// search, so only the totals are pinned.
+	if final.Total != 6 || final.Matched+final.Unmatched != final.Total || final.Matched < 5 {
+		t.Errorf("total/matched/unmatched = %d/%d/%d, want 6 with at least 5 matched",
+			final.Total, final.Matched, final.Unmatched)
+	}
+
+	type season struct {
+		Status   string `db:"status"`
+		Progress *int   `db:"episode_progress"`
+	}
+	seasonOf := func(tvID, number int) season {
+		t.Helper()
+		var s season
+		if err := dbConn.GetContext(ctx, &s, `
+			select ml.status, ml.episode_progress
+			from media_list ml
+			join media_index mi on mi.media_id = ml.media_id
+			where ml.user_id = $1 and mi.id = $2 and mi.season_number = $3 and mi.media_type = 'season'`,
+			userID, tvID, number); err != nil {
+			t.Fatalf("season %d of tv %d: %v", number, tvID, err)
+		}
+		return s
+	}
+	if got := seasonOf(87108, 1); got.Status != "completed" || got.Progress == nil || *got.Progress != 5 {
+		t.Errorf("Chernobyl season 1 = %s with progress %v, want completed with 5", got.Status, got.Progress)
+	}
+	if got := seasonOf(95396, 1); got.Status != "watching" || got.Progress == nil || *got.Progress != 3 {
+		t.Errorf("Severance season 1 = %s with progress %v, want watching with 3", got.Status, got.Progress)
+	}
+
+	var showRatings int
+	if err := dbConn.GetContext(ctx, &showRatings, `
+		select count(*)
+		from interactions i
+		join media_index mi on mi.media_id = i.media_id
+		where i.user_id = $1 and mi.id = 95396 and i.media_type = 'tv' and i.kind = 'rated' and i.rating = 80`,
+		userID); err != nil {
+		t.Fatalf("count show ratings: %v", err)
+	}
+	if showRatings != 1 {
+		t.Errorf("Severance show ratings = %d, want 1", showRatings)
 	}
 }

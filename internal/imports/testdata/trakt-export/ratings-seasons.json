@@ -1,0 +1,5 @@
+[
+  {"rated_at": "2024-04-06T22:00:00.000Z", "rating": 10, "type": "season",
+   "season": {"number": 1, "ids": {"trakt": 182730, "tvdb": 770853, "tmdb": 115563}},
+   "show": {"title": "Chernobyl", "year": 2019, "ids": {"trakt": 129718, "slug": "chernobyl", "tvdb": 360893, "imdb": "tt7366338", "tmdb": 87108}}}
+]

@@ -1,0 +1,23 @@
+[
+  {"id": 9001, "watched_at": "2024-03-01T20:00:00.000Z", "action": "watch", "type": "movie",
+   "movie": {"title": "Dune", "year": 2021, "ids": {"trakt": 287071, "slug": "dune-2021", "imdb": "tt1160419", "tmdb": 438631}}},
+  {"id": 9002, "watched_at": "2024-03-02T20:00:00.000Z", "action": "checkin", "type": "movie",
+   "movie": {"title": "Arrival", "year": 2016, "ids": {"trakt": 150900, "slug": "arrival-2016", "imdb": "tt2543164", "tmdb": 329865}}},
+  {"id": 9003, "watched_at": "2024-03-03T20:00:00.000Z", "action": "watch", "type": "movie",
+   "movie": {"title": "Obscure Short", "year": 2003, "ids": {"trakt": 777001, "slug": "obscure-short-2003", "imdb": null, "tmdb": null}}},
+  {"id": 9004, "watched_at": "2024-04-01T21:00:00.000Z", "action": "scrobble", "type": "episode",
+   "episode": {"season": 1, "number": 1, "title": "1:23:45", "ids": {"trakt": 3021, "tvdb": 7105316, "imdb": "tt8162428", "tmdb": 1777633}},
+   "show": {"title": "Chernobyl", "year": 2019, "ids": {"trakt": 129718, "slug": "chernobyl", "tvdb": 360893, "imdb": "tt7366338", "tmdb": 87108}}},
+  {"id": 9005, "watched_at": "2024-04-02T21:00:00.000Z", "action": "scrobble", "type": "episode",
+   "episode": {"season": 1, "number": 2, "title": "Please Remain Calm", "ids": {"trakt": 3022, "tvdb": 7140017, "imdb": "tt8162430", "tmdb": 1777634}},
+   "show": {"title": "Chernobyl", "year": 2019, "ids": {"trakt": 129718, "slug": "chernobyl", "tvdb": 360893, "imdb": "tt7366338", "tmdb": 87108}}},
+  {"id": 9006, "watched_at": "2024-04-03T21:00:00.000Z", "action": "scrobble", "type": "episode",
+   "episode": {"season": 1, "number": 3, "title": "Open Wide, O Earth", "ids": {"trakt": 3023, "tvdb": 7140018, "imdb": "tt8162432", "tmdb": 1777635}},
+   "show": {"title": "Chernobyl", "year": 2019, "ids": {"trakt": 129718, "slug": "chernobyl", "tvdb": 360893, "imdb": "tt7366338", "tmdb": 87108}}},
+  {"id": 9007, "watched_at": "2024-04-04T21:00:00.000Z", "action": "scrobble", "type": "episode",
+   "episode": {"season": 1, "number": 4, "title": "The Happiness of All Mankind", "ids": {"trakt": 3024, "tvdb": 7140019, "imdb": "tt8162434", "tmdb": 1777636}},
+   "show": {"title": "Chernobyl", "year": 2019, "ids": {"trakt": 129718, "slug": "chernobyl", "tvdb": 360893, "imdb": "tt7366338", "tmdb": 87108}}},
+  {"id": 9008, "watched_at": "2024-04-05T21:00:00.000Z", "action": "scrobble", "type": "episode",
+   "episode": {"season": 1, "number": 5, "title": "Vichnaya Pamyat", "ids": {"trakt": 3025, "tvdb": 7140020, "imdb": "tt8162436", "tmdb": 1777637}},
+   "show": {"title": "Chernobyl", "year": 2019, "ids": {"trakt": 129718, "slug": "chernobyl", "tvdb": 360893, "imdb": "tt7366338", "tmdb": 87108}}}
+]
