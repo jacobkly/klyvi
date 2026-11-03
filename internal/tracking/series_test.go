@@ -51,6 +51,37 @@ func TestAdd_EnsuresTheSeriesBehindATrackedSeason(t *testing.T) {
 	}
 }
 
+// orderedTracking notes which series were cached by the time the new entry
+// was read back.
+type orderedTracking struct {
+	memTracking
+	series   *ensuredSeries
+	atAddEnd []int
+}
+
+func (o *orderedTracking) AddEntry(ctx context.Context, userID uuid.UUID, mediaID int, p tracking.AddParams) (*tracking.Entry, error) {
+	o.atAddEnd = slices.Clone(o.series.ids)
+	return o.memTracking.AddEntry(ctx, userID, mediaID, p)
+}
+
+// The first add of a season returns its name, poster and episode count, so
+// the series must be cached before the entry is read.
+func TestAdd_EnsuresTheSeriesBeforeReadingTheEntry(t *testing.T) {
+	two := 2
+	series := &ensuredSeries{}
+	repo := &orderedTracking{series: series}
+	svc := tracking.NewService(repo).WithSeriesEnsurer(series)
+
+	if _, err := svc.Add(context.Background(), uuid.New(), tracking.AddRequest{
+		TMDBID: 1396, MediaType: tracking.MediaTypeSeason, SeasonNumber: &two,
+	}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !slices.Equal(repo.atAddEnd, []int{1396}) {
+		t.Errorf("series cached when the entry was read: %v, want [1396]", repo.atAddEnd)
+	}
+}
+
 // The user's list is theirs. A catalog miss must not cost them the entry.
 func TestAdd_KeepsTheEntryWhenTheSeriesCannotBeCached(t *testing.T) {
 	two := 2

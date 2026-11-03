@@ -106,6 +106,14 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, req AddRequest) (*E
 	if err != nil {
 		return nil, err
 	}
+	// Best effort, and before the entry is read back, so the first add of a
+	// season returns its name, poster and episode count. The entry is the
+	// user's and stands without the catalog.
+	if s.series != nil && req.MediaType == MediaTypeSeason {
+		if err := s.series.EnsureSeries(ctx, req.TMDBID); err != nil {
+			log.Printf("best-effort EnsureSeries failed for tv=%d: %v", req.TMDBID, err)
+		}
+	}
 
 	entry, err := s.repo.AddEntry(ctx, userID, mediaID, AddParams{
 		MediaType:       req.MediaType,
@@ -119,12 +127,6 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, req AddRequest) (*E
 		return nil, err
 	}
 	s.listChanged(userID)
-	// Best effort: the entry is the user's and stands without the catalog.
-	if s.series != nil && req.MediaType == MediaTypeSeason {
-		if err := s.series.EnsureSeries(ctx, req.TMDBID); err != nil {
-			log.Printf("best-effort EnsureSeries failed for tv=%d: %v", req.TMDBID, err)
-		}
-	}
 	return entry, nil
 }
 

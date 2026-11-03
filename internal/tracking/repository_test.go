@@ -337,6 +337,43 @@ func TestTracking_List_EnrichesEntries(t *testing.T) {
 	}
 }
 
+// A season's number is its identity, held by media_index, so the entry
+// carries it even before the season itself is cached in tv_seasons.
+func TestTracking_AddSeason_NumberBeforeSeasonIsCached(t *testing.T) {
+	env := setupTracking(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Synthetic series id with no tv_series or tv_seasons rows.
+	const testTMDBID = 2_100_000_778
+	const seasonNum = 3
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = env.db.ExecContext(ctx, `delete from media_list where user_id = $1`, env.userID)
+		_, _ = env.db.ExecContext(ctx,
+			`delete from media_index where id = $1 and media_type = 'season'`, testTMDBID)
+	})
+
+	sn := seasonNum
+	entry, err := env.service.Add(ctx, env.userID, tracking.AddRequest{
+		TMDBID:       testTMDBID,
+		MediaType:    tracking.MediaTypeSeason,
+		SeasonNumber: &sn,
+	})
+	if err != nil {
+		t.Fatalf("Add season: %v", err)
+	}
+	if entry.SeasonNumber == nil || *entry.SeasonNumber != seasonNum {
+		t.Errorf("SeasonNumber: got %v, want %d", entry.SeasonNumber, seasonNum)
+	}
+	if entry.SeasonName != nil || entry.EpisodeCount != nil {
+		t.Errorf("uncached season: got SeasonName %v, EpisodeCount %v; want both nil",
+			entry.SeasonName, entry.EpisodeCount)
+	}
+}
+
 // Verifies the JSON contract: GET /v1/tracking for a user with no entries
 // returns "data": [], not "data": null. Frontend declared the field as an
 // array in the OpenAPI spec; the Go nil-slice quirk should not leak.

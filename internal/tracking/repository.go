@@ -78,6 +78,9 @@ type ListFilters struct {
 //
 // `season poster, fallback to series poster` is realised via the
 // COALESCE order: tvse.poster_path then tvs.poster_path.
+//
+// season_number comes from media_index, the season's identity, so it is
+// set even before the season is cached in tv_seasons.
 const entrySelectClause = `
 	ml.id, ml.user_id, ml.media_id, ml.media_type,
 	ml.status, ml.score, ml.episode_progress,
@@ -93,7 +96,7 @@ const entrySelectClause = `
 		extract(year from tvse.air_date)::int,
 		extract(year from tvs.first_air_date)::int
 	) as release_year,
-	tvse.season_number as season_number,
+	mi.season_number as season_number,
 	tvse.name as season_name,
 	case when jsonb_typeof(tvse.episodes) = 'array' then jsonb_array_length(tvse.episodes) end as episode_count
 `
