@@ -2,7 +2,10 @@ package reco
 
 import (
 	"context"
+	"math"
 	"sort"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // maxTasteKeywords caps how many keyword ids the taste-overlap retrieval uses.
@@ -13,44 +16,87 @@ import (
 const maxTasteKeywords = 300
 
 // candidateSource is the subset of the catalog that pool assembly needs —
-// the two retrieval methods, without the reason-name lookup the harness has
-// no use for. Kept minimal so both the orchestrator's full CatalogRepository
-// and the harness's lighter adapter satisfy it.
+// the retrieval methods for films and series, without the reason-name lookup
+// the harness has no use for. Kept minimal so both the orchestrator's full
+// CatalogRepository and the harness's lighter adapter satisfy it.
 type candidateSource interface {
 	SampleMovieCandidates(ctx context.Context, limit int) ([]Candidate, error)
 	CandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]Candidate, error)
+	SampleSeriesCandidates(ctx context.Context, limit int) ([]Candidate, error)
+	SeriesCandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]Candidate, error)
 }
 
 // BuildCandidatePool assembles the fixed-size pool a scorer ranks over.
 //
-// For a user with signal it retrieves candidates that share the taste's
-// genres/keywords (so the feed is drawn from taste-relevant titles, not the
-// globally most-popular ones), then tops up with the popularity pool if that
-// retrieval is thin — a user with one liked item should not get a three-item
-// feed. A cold user (no resolved liked features) gets the popularity pool
-// directly, which is exactly what Tier 0 expects.
+// Films and series are drawn apart, side by side, because series vote counts
+// run lower than films' and one draw sorted by votes would hold almost no
+// shows. Series take their share of the pool (cfg.TVShare) and films fill the
+// rest, including any share a thin series catalog leaves unused. The scorer
+// then ranks both types against each other on one scale.
 //
 // It lives here, not inline in the orchestrator, so the evaluation harness
 // builds its pool the same way — otherwise the harness would measure a
 // different pipeline than production runs.
 func BuildCandidatePool(ctx context.Context, catalog candidateSource, liked []SignalItem, cfg Config) ([]Candidate, error) {
 	genreIDs, keywordIDs := likedFeatureIDs(liked)
+	quota := seriesQuota(cfg.TVShare)
 
+	var films, series []Candidate
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		films, err = drawCandidates(gctx, catalog.CandidatesByTaste, catalog.SampleMovieCandidates,
+			genreIDs, keywordIDs, cfg.QualityFloorVotes, candidatePoolSize)
+		return err
+	})
+	if quota > 0 {
+		g.Go(func() (err error) {
+			series, err = drawCandidates(gctx, catalog.SeriesCandidatesByTaste, catalog.SampleSeriesCandidates,
+				TVGenresFor(genreIDs), keywordIDs, cfg.QualityFloorVotes, quota)
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	films = films[:min(len(films), candidatePoolSize-len(series))]
+	return mergeCandidates(films, series, candidatePoolSize), nil
+}
+
+// seriesQuota is how many pool slots series may take: the TV share of the
+// pool, clamped to between none and all of it.
+func seriesQuota(share float64) int {
+	return int(math.Round(min(max(share, 0), 1) * candidatePoolSize))
+}
+
+// drawCandidates retrieves up to limit candidates of one media type. For a
+// user with signal it takes the candidates that share the taste's genres or
+// keywords (so the feed is drawn from taste-relevant titles, not the globally
+// most-popular ones), then tops up from the popular ones if that retrieval is
+// thin — a user with one liked item should not get a three-item feed. A cold
+// user (no resolved liked features) gets the popular ones directly, which is
+// exactly what Tier 0 expects.
+func drawCandidates(
+	ctx context.Context,
+	byTaste func(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]Candidate, error),
+	popular func(ctx context.Context, limit int) ([]Candidate, error),
+	genreIDs, keywordIDs []int, minVotes, limit int,
+) ([]Candidate, error) {
 	var cands []Candidate
 	if len(genreIDs) > 0 || len(keywordIDs) > 0 {
 		var err error
-		cands, err = catalog.CandidatesByTaste(ctx, genreIDs, keywordIDs, cfg.QualityFloorVotes, candidatePoolSize)
+		cands, err = byTaste(ctx, genreIDs, keywordIDs, minVotes, limit)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if len(cands) < candidatePoolSize {
-		pop, err := catalog.SampleMovieCandidates(ctx, candidatePoolSize)
+	if len(cands) < limit {
+		pop, err := popular(ctx, limit)
 		if err != nil {
 			return nil, err
 		}
-		cands = mergeCandidates(cands, pop, candidatePoolSize)
+		cands = mergeCandidates(cands, pop, limit)
 	}
 
 	return cands, nil

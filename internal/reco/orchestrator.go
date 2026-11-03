@@ -25,9 +25,8 @@ const (
 )
 
 // CatalogRepository is the read surface the orchestrator uses to pull
-// candidates and feature data from the movies cache. The reco package
-// declares the interface; the concrete movies.Repository (Phase 4
-// extension) will satisfy it.
+// candidates and feature data from the movies and series caches. The reco
+// package declares the interface; the API's catalog adapter satisfies it.
 type CatalogRepository interface {
 	// SampleMovieCandidates returns up to N candidates from the movies cache
 	// ranked by popularity. This is the cold-start pool — what a zero-signal
@@ -40,6 +39,12 @@ type CatalogRepository interface {
 	// otherwise only ever rank the globally most-popular movies.
 	CandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]Candidate, error)
 
+	// SampleSeriesCandidates and SeriesCandidatesByTaste are the two above
+	// over the series cache. Genre ids reach SeriesCandidatesByTaste in TV's
+	// own genre space (see TVGenresFor).
+	SampleSeriesCandidates(ctx context.Context, limit int) ([]Candidate, error)
+	SeriesCandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]Candidate, error)
+
 	// CandidatesByMediaIDs returns Candidates for a specific set of media_ids,
 	// used to load features for items in the user's interaction history.
 	CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) ([]Candidate, error)
@@ -49,10 +54,11 @@ type CatalogRepository interface {
 	// ids are simply absent from the returned maps — never an error.
 	LookupReasonNames(ctx context.Context, genreIDs, keywordIDs []int) (map[int]string, map[int]string, error)
 
-	// CardDetails returns the card text for the given media ids, keyed by
-	// media id. It runs over the ranked feed, never the candidate pool, so
-	// the pool query stays narrow. Ids it does not hold are simply absent.
-	CardDetails(ctx context.Context, mediaIDs []int) (map[int]CardDetails, error)
+	// CardDetails returns the card text for the given film and series media
+	// ids, keyed by media id. It runs over the ranked feed, never the
+	// candidate pool, so the pool query stays narrow. Ids it does not hold are
+	// simply absent.
+	CardDetails(ctx context.Context, movieIDs, seriesIDs []int) (map[int]CardDetails, error)
 }
 
 // SignalRepository pulls the user's interaction history for the signal
@@ -252,12 +258,13 @@ func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, depth int) ([
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
 
 	// MMR rerank trades a little relevance for a noticeably more varied
-	// feed. Tier 0 candidates have nil Features in the synthetic test
-	// path, in which case their similarity is 0 and MMRReorder
-	// degenerates to plain score order. Rank down to `depth` (the deepest
-	// item the caller needs); MMR's greedy order is prefix-stable, so ranking
-	// deeper never disturbs earlier pages.
-	return MMRReorder(scored, depth, o.cfg.MMRLambda), nil
+	// feed, and holds films and series to their shares of it so neither
+	// takes over. Tier 0 candidates have nil Features in the synthetic test
+	// path, in which case their similarity is 0 and MMR degenerates to plain
+	// score order. Rank down to `depth` (the deepest item the caller needs);
+	// MMR's greedy order is prefix-stable, so ranking deeper never disturbs
+	// earlier pages.
+	return MMRReorderWithin(scored, depth, o.cfg.MMRLambda, FeedTypeBound(o.cfg, user.Liked)), nil
 }
 
 // resolveReasonNames mutates the scored slice, filling in Reason.Name
@@ -312,25 +319,31 @@ func (o *Orchestrator) resolveReasonNames(ctx context.Context, scored []Scored) 
 	}
 }
 
-// fillCardDetails sets the synopsis, runtime and genre names on every item.
-// Unlike reason names these are not optional: a card with a blank synopsis
-// looks broken, so a failed lookup fails the feed (and is never cached).
-// Genres is never nil, so it encodes as [] for an item with no details.
+// fillCardDetails sets the synopsis, genre names, and runtime or season count
+// on every item. Unlike reason names these are not optional: a card with a
+// blank synopsis looks broken, so a failed lookup fails the feed (and is
+// never cached). Genres is never nil, so it encodes as [] for an item with no
+// details.
 func (o *Orchestrator) fillCardDetails(ctx context.Context, scored []Scored) error {
 	if len(scored) == 0 {
 		return nil
 	}
-	ids := make([]int, len(scored))
-	for i, s := range scored {
-		ids[i] = s.MediaID
+	var movieIDs, seriesIDs []int
+	for _, s := range scored {
+		if s.MediaType == "tv" {
+			seriesIDs = append(seriesIDs, s.MediaID)
+		} else {
+			movieIDs = append(movieIDs, s.MediaID)
+		}
 	}
-	details, err := o.catalog.CardDetails(ctx, ids)
+	details, err := o.catalog.CardDetails(ctx, movieIDs, seriesIDs)
 	if err != nil {
 		return fmt.Errorf("card details: %w", err)
 	}
 	for i := range scored {
 		d := details[scored[i].MediaID]
 		scored[i].Overview, scored[i].Runtime, scored[i].Genres = d.Overview, d.Runtime, d.Genres
+		scored[i].SeasonCount = d.SeasonCount
 		if scored[i].Genres == nil {
 			scored[i].Genres = []string{}
 		}

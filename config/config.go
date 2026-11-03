@@ -27,6 +27,12 @@ type ConfReco struct {
 	NegativeSimWeight float64 `env:"RECO_NEGATIVE_WEIGHT,default=0.6"`
 	QualityFloorVotes int     `env:"RECO_QUALITY_FLOOR,default=25"`
 
+	// TVShare is the share of the feed kept for series, 0 to 1. Series get
+	// their own share of the candidate pool, since their vote counts run lower
+	// than films', and shows fill at most this share of a film lover's feed.
+	// 0 is the films-only feed.
+	TVShare float64 `env:"RECO_TV_SHARE,default=0.4"`
+
 	// UseIDF turns on global inverse-document-frequency weighting of taste
 	// features — it damps catalog-ubiquitous genres/keywords so a diverse taste
 	// leans on its discriminative signal. Off by default: the offline

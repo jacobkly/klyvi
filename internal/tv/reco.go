@@ -3,6 +3,8 @@ package tv
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 
 	"klyvi-api/internal/platform/db"
 )
@@ -117,6 +119,73 @@ func (r *Repository) candidatesByOverlap(ctx context.Context, column string, ids
 		limit $3
 	`, minVotes, ids, limit)
 	return rows, err
+}
+
+// CardDetails is the card text the feed shows for one series: its synopsis,
+// its genre names in TMDB order (TV's own, so Sci-Fi & Fantasy stays one
+// genre), and its season count where a film's card has its runtime.
+type CardDetails struct {
+	MediaID     int
+	Overview    string
+	Genres      []string
+	SeasonCount int
+}
+
+// CardDetailsByMediaIDs returns the card text for the series in a ranked
+// feed, the TV twin of movies.Repository.CardDetailsByMediaIDs. Ids that are
+// not a cached series are absent.
+func (r *Repository) CardDetailsByMediaIDs(ctx context.Context, mediaIDs []int) ([]CardDetails, error) {
+	if len(mediaIDs) == 0 {
+		return []CardDetails{}, nil
+	}
+	var rows []struct {
+		MediaID     int              `db:"media_id"`
+		Overview    string           `db:"overview"`
+		SeasonCount int              `db:"number_of_seasons"`
+		Genres      *json.RawMessage `db:"genres"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		select mi.media_id, coalesce(s.overview, '') as overview,
+		       coalesce(s.number_of_seasons, 0) as number_of_seasons, s.genres
+		from tv_series s
+		join media_index mi on mi.id = s.tv_id and mi.media_type = 'tv'
+		where mi.media_id = any($1)
+	`, mediaIDs); err != nil {
+		return nil, fmt.Errorf("select series card details: %w", err)
+	}
+
+	out := make([]CardDetails, len(rows))
+	for i, row := range rows {
+		out[i] = CardDetails{
+			MediaID:     row.MediaID,
+			Overview:    row.Overview,
+			Genres:      genreNames(row.Genres),
+			SeasonCount: row.SeasonCount,
+		}
+	}
+	return out, nil
+}
+
+// genreNames reads the names out of a TMDB genres array, in order. A missing
+// or malformed column yields no names: the card goes without genres rather
+// than failing the whole feed over one row.
+func genreNames(raw *json.RawMessage) []string {
+	names := []string{}
+	if raw == nil {
+		return names
+	}
+	var genres []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(*raw, &genres); err != nil {
+		return names
+	}
+	for _, g := range genres {
+		if g.Name != "" {
+			names = append(names, g.Name)
+		}
+	}
+	return names
 }
 
 // LookupGenreNames returns id→name pairs for the requested genre ids from

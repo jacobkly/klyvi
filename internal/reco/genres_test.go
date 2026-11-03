@@ -29,6 +29,29 @@ func TestCanonicalTVGenres(t *testing.T) {
 	}
 }
 
+// A taste is held in film genres, but the series cache stores TV's own ids.
+// Looking a taste up among series asks for the combined TV genre as well.
+func TestTVGenresFor(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []int
+		want []int
+	}{
+		{"science fiction also asks for sci-fi and fantasy", []int{878}, []int{878, 10765}},
+		{"action and adventure share one tv genre", []int{28, 12}, []int{28, 10759, 12}},
+		{"war also asks for war and politics", []int{10752}, []int{10752, 10768}},
+		{"genres films share pass through", []int{18, 80}, []int{18, 80}},
+		{"no genres", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := TVGenresFor(tt.in); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("TVGenresFor(%v) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 // The series feature stats are counted over TV's own genre ids. Read into
 // the film space, a combined genre's count goes to each genre it splits into.
 func TestCanonicalTVGenreDF(t *testing.T) {

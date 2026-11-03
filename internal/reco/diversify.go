@@ -1,6 +1,41 @@
 package reco
 
-import "slices"
+import (
+	"math"
+	"slices"
+)
+
+// TypeBound is the most of a feed each media type may fill, as a share from
+// 0 to 1 of every stretch of the feed from the top.
+type TypeBound struct {
+	TV    float64
+	Movie float64
+}
+
+// FeedTypeBound keeps either type from taking over a feed. Series may fill
+// cfg.TVShare of it and films the rest, unless the user's own history leans
+// further one way, in which case that type gets the history's share. A
+// film-only user sees at most 4 shows in 10, and a seasons-only user can get
+// a feed of shows with at most 6 films in 10. Liked items whose features did
+// not resolve have no known type and do not count.
+func FeedTypeBound(cfg Config, liked []SignalItem) TypeBound {
+	share := min(max(cfg.TVShare, 0), 1)
+	var tv, known int
+	for _, li := range liked {
+		if li.Features == nil {
+			continue
+		}
+		known++
+		if li.Features.MediaType == "tv" {
+			tv++
+		}
+	}
+	historyTV := 0.0
+	if known > 0 {
+		historyTV = float64(tv) / float64(known)
+	}
+	return TypeBound{TV: max(share, historyTV), Movie: max(1-share, 1-historyTV)}
+}
 
 // MMRReorder rearranges scored candidates to balance relevance with novelty
 // against items already picked. λ controls the balance:
@@ -13,6 +48,16 @@ import "slices"
 // keywords of something already shown — the difference between a smart-
 // looking feed and five films from the same franchise.
 func MMRReorder(scored []Scored, k int, lambda float64) []Scored {
+	return MMRReorderWithin(scored, k, lambda, TypeBound{TV: 1, Movie: 1})
+}
+
+// MMRReorderWithin is MMRReorder with each media type held to its share of
+// the feed. At every position a type may fill at most its share of the picks
+// so far, rounded up, so the top item can be either type. Once only one type
+// has room or candidates left it takes the next pick, so the bound orders the
+// feed and never shortens it. Each pick depends only on the picks before it,
+// so the order stays prefix-stable.
+func MMRReorderWithin(scored []Scored, k int, lambda float64, bound TypeBound) []Scored {
 	if len(scored) == 0 || k <= 0 {
 		return nil
 	}
@@ -24,16 +69,24 @@ func MMRReorder(scored []Scored, k int, lambda float64) []Scored {
 	// max similarity to the picks so far. A new pick only has to be compared
 	// against the unpicked candidates, never the whole selected list again.
 	feats := make([]featureSet, len(scored))
+	isTV := make([]bool, len(scored))
 	for i := range scored {
 		feats[i] = newFeatureSet(scored[i].Features)
+		isTV[i] = scored[i].MediaType == "tv"
 	}
 	maxSim := make([]float64, len(scored))
 	taken := make([]bool, len(scored))
 
 	selected := make([]Scored, 0, k)
+	var tvPicked, moviePicked int
 	pick := func(idx int) {
 		taken[idx] = true
 		selected = append(selected, scored[idx])
+		if isTV[idx] {
+			tvPicked++
+		} else {
+			moviePicked++
+		}
 		if len(selected) == k {
 			return
 		}
@@ -47,30 +100,53 @@ func MMRReorder(scored []Scored, k int, lambda float64) []Scored {
 		}
 	}
 
-	// First pick: highest score (input is already sorted by Score desc when
-	// MMRReorder is called by the orchestrator, but we don't rely on that).
-	bestIdx := 0
-	for i := 1; i < len(scored); i++ {
-		if scored[i].Score > scored[bestIdx].Score {
+	// room reports whether the next pick may be candidate i's type.
+	room := func(i int) bool {
+		n := len(selected) + 1
+		if isTV[i] {
+			return tvPicked < shareOf(bound.TV, n)
+		}
+		return moviePicked < shareOf(bound.Movie, n)
+	}
+
+	// First pick: highest score among the types with room (input is already
+	// sorted by Score desc when MMRReorder is called by the orchestrator, but
+	// we don't rely on that), else the highest score.
+	bestIdx, fallback := -1, -1
+	for i := range scored {
+		if fallback < 0 || scored[i].Score > scored[fallback].Score {
+			fallback = i
+		}
+		if room(i) && (bestIdx < 0 || scored[i].Score > scored[bestIdx].Score) {
 			bestIdx = i
 		}
+	}
+	if bestIdx < 0 {
+		bestIdx = fallback
 	}
 	pick(bestIdx)
 
 	for len(selected) < k {
 		// Unpicked candidates are scanned in input order, so ties still go
 		// to the earlier candidate.
-		nextIdx := -1
-		bestMMR := -1e18
+		nextIdx, fallback := -1, -1
+		bestMMR, fallbackMMR := -1e18, -1e18
 		for i := range scored {
 			if taken[i] {
 				continue
 			}
 			mmr := lambda*scored[i].Score - (1-lambda)*maxSim[i]
-			if mmr > bestMMR {
+			if mmr > fallbackMMR {
+				fallbackMMR = mmr
+				fallback = i
+			}
+			if mmr > bestMMR && room(i) {
 				bestMMR = mmr
 				nextIdx = i
 			}
+		}
+		if nextIdx < 0 {
+			nextIdx = fallback
 		}
 		if nextIdx < 0 {
 			break
@@ -79,6 +155,13 @@ func MMRReorder(scored []Scored, k int, lambda float64) []Scored {
 	}
 
 	return selected
+}
+
+// shareOf is the most of the first n picks a type with the given share may
+// hold, rounded up. The slack keeps a share that lands on a whole number,
+// like 0.4 of 5, from rounding past it on float error.
+func shareOf(share float64, n int) int {
+	return int(math.Ceil(share*float64(n) - 1e-9))
 }
 
 // featureSet is a candidate's genre and keyword ids in one sorted, encoded

@@ -35,6 +35,7 @@ import (
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/reco"
+	"klyvi-api/internal/tv"
 )
 
 func main() {
@@ -50,6 +51,7 @@ func main() {
 	eWeight := flag.Float64("era-weight", -1, "override reco EraWeight")
 	negWeight := flag.Float64("neg-weight", -1, "override reco NegativeSimWeight")
 	qFloor := flag.Int("quality-floor", -1, "override reco QualityFloorVotes")
+	tvShare := flag.Float64("tv-share", -1, "override reco TVShare, the pool share kept for series (0 is the films-only pool)")
 	useIDF := flag.Bool("idf", true, "apply global IDF feature weighting (set -idf=false to A/B against the raw-sum baseline)")
 	flag.Parse()
 
@@ -91,11 +93,14 @@ func main() {
 	if *qFloor >= 0 {
 		recoCfg.QualityFloorVotes = *qFloor
 	}
-	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d",
+	if *tvShare >= 0 {
+		recoCfg.TVShare = *tvShare
+	}
+	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d tv_share=%.2f",
 		recoCfg.KeywordWeight, recoCfg.GenreWeight, recoCfg.EraWeight,
-		recoCfg.NegativeSimWeight, recoCfg.QualityFloorVotes)
+		recoCfg.NegativeSimWeight, recoCfg.QualityFloorVotes, recoCfg.TVShare)
 
-	catalog := newCatalogAdapter(movieRepo)
+	catalog := newCatalogAdapter(movieRepo, tv.NewRepository(dbConn))
 
 	// Diagnostics: the size of the eligible candidate universe. A small or
 	// mainstream-only catalog caps recommendation quality regardless of the
@@ -106,7 +111,7 @@ func main() {
 		log.Printf("catalog: %d eligible movies (vote_count > 0)", n)
 	}
 
-	// Build the same global IDF table the API loads, once, held fixed across
+	// Build the same global IDF tables the API loads, once, held fixed across
 	// all users, trials, and weight configs — exactly what a fair comparison of
 	// scorer weights needs. -idf=false runs the raw-sum baseline for A/B.
 	var featureIDF *reco.MediaIDF
@@ -120,6 +125,16 @@ func main() {
 			log.Println("idf: feature_stats empty — running raw-sum (run seed-catalog -refresh-feature-stats)")
 		} else {
 			log.Printf("idf: active (corpus=%d genres=%d keywords=%d)", corpus, len(gdf), len(kdf))
+		}
+		tvGDF, tvKDF, tvCorpus, err := movieRepo.LoadFeatureStats(context.Background(), "tv")
+		if err != nil {
+			log.Fatalf("load tv feature stats: %v", err)
+		}
+		featureIDF.TV = reco.NewTVFeatureIDF(tvGDF, tvKDF, tvCorpus)
+		if featureIDF.TV == nil {
+			log.Println("idf: tv feature_stats empty, series score raw-sum")
+		} else {
+			log.Printf("idf: tv active (corpus=%d genres=%d keywords=%d)", tvCorpus, len(tvGDF), len(tvKDF))
 		}
 	} else {
 		log.Println("idf: disabled by flag (raw-sum baseline)")
@@ -189,13 +204,15 @@ func main() {
 		float64(totalHits50)/float64(totalTrials),
 		totalMRR/float64(totalTrials))
 
-	// Sample feed for the first user — gives the human something to eyeball
+	// Sample feeds for every user give the human something to eyeball
 	// alongside the numbers. Recommender quality is a judgment call, not a
 	// pass/fail on recall@K alone: numbers AND sample outputs are the gate.
-	if len(users) > 0 {
+	// Synthetic users get fresh random ids each run, so printing only the
+	// first would show a different taste from run to run.
+	for _, uid := range users {
 		fmt.Println("---")
-		fmt.Println("Sample top-10 feed for user", users[0].String()[:8])
-		printSampleFeed(ctx, dbConn, catalog, featureIDF, recoCfg, users[0], 10)
+		fmt.Println("Sample top-10 feed for user", uid.String()[:8])
+		printSampleFeed(ctx, dbConn, catalog, featureIDF, recoCfg, uid, 10)
 	}
 }
 
@@ -355,7 +372,7 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, i
 			return 0, 0, 0, 0, err
 		}
 		sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
-		ranked := reco.MMRReorder(scored, cfg.FeedSize, cfg.MMRLambda)
+		ranked := reco.MMRReorderWithin(scored, cfg.FeedSize, cfg.MMRLambda, reco.FeedTypeBound(cfg, user.Liked))
 
 		rank := -1
 		for i, s := range ranked {
@@ -500,19 +517,24 @@ func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapt
 
 	scored, _ := scorer.Score(ctx, user, cands)
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
-	ranked := reco.MMRReorder(scored, k, cfg.MMRLambda)
+	ranked := reco.MMRReorderWithin(scored, k, cfg.MMRLambda, reco.FeedTypeBound(cfg, user.Liked))
 
 	for i, s := range ranked {
 		title, _ := titleForMediaID(ctx, dbConn, s.MediaID)
+		if s.MediaType == "tv" {
+			title += " (tv)"
+		}
 		fmt.Printf("  %2d. media_id=%d score=%.3f  %s  reasons=%v\n", i+1, s.MediaID, s.Score, title, s.Reasons)
 	}
 }
 
+// titleForMediaID names a film by its title or a series by its name.
 func titleForMediaID(ctx context.Context, dbConn *sqlx.DB, mediaID int) (string, error) {
 	var title sql.NullString
 	err := dbConn.GetContext(ctx, &title, `
-		select m.title from movies m
-		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
+		select coalesce(m.title, s.name) from media_index mi
+		left join movies m on mi.media_type = 'movie' and m.movie_id = mi.id
+		left join tv_series s on mi.media_type = 'tv' and s.tv_id = mi.id
 		where mi.media_id = $1
 	`, mediaID)
 	if err == sql.ErrNoRows {

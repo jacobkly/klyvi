@@ -27,8 +27,9 @@ type MediaFeatures struct {
 // follow-up lookup. The scorers themselves do not read these fields — they
 // ride through the embedding into Scored unchanged.
 //
-// Overview, Runtime and Genres are filled only on the ranked feed, after
-// scoring (see CardDetails), so the candidate pool never carries them.
+// Overview, Runtime, SeasonCount and Genres are filled only on the ranked
+// feed, after scoring (see CardDetails), so the candidate pool never carries
+// them. A series has a season count where a film has a runtime.
 type Candidate struct {
 	MediaID      int            `json:"media_id"`
 	MediaType    string         `json:"media_type"`
@@ -40,17 +41,20 @@ type Candidate struct {
 	VoteAverage  float64        `json:"vote_average"`
 	Overview     string         `json:"overview"`
 	Runtime      int            `json:"runtime"`
+	SeasonCount  int            `json:"season_count"`
 	Genres       []string       `json:"genres"`
 	Features     *MediaFeatures `json:"features"`
 }
 
 // CardDetails is the text a feed card shows beyond its artwork and title:
-// the synopsis, the runtime in minutes (0 when unknown), and the genre names
-// in TMDB's order.
+// the synopsis, the genre names in TMDB's order, and the runtime in minutes
+// for a film or the season count for a series (0 when unknown, and 0 for the
+// field the other type has).
 type CardDetails struct {
-	Overview string
-	Runtime  int
-	Genres   []string
+	Overview    string
+	Runtime     int
+	Genres      []string
+	SeasonCount int
 }
 
 // Scored is a ranked Candidate plus the score and structured reasons
@@ -116,6 +120,14 @@ type Config struct {
 
 	// Result size.
 	FeedSize int
+
+	// TVShare is the share of the feed kept for series, 0 to 1. It sizes the
+	// series draw in the candidate pool, since series vote counts run lower
+	// than films' and a pool drawn by votes alone would hold almost no shows.
+	// Films fill whatever share the series catalog cannot. It also bounds the
+	// ranked feed, so shows cannot take over a film lover's feed (see
+	// FeedTypeBound). 0 is the films-only feed.
+	TVShare float64
 }
 
 // DefaultConfig is the starting point. All values are tunable via
@@ -142,5 +154,6 @@ func DefaultConfig() Config {
 
 		MMRLambda: 0.7,
 		FeedSize:  30,
+		TVShare:   0.4,
 	}
 }

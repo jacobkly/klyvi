@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"golang.org/x/sync/errgroup"
 
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/reco"
@@ -28,8 +29,9 @@ func newRecoOrchestrator(dbConn *sqlx.DB, movieRepo *movies.Repository, tvRepo *
 		WithTier2(reco.NewTier2(cfg, newProfileAdapter(dbConn)).WithIDF(idf))
 }
 
-// catalogAdapter wraps movies.Repository to satisfy reco.CatalogRepository.
-// Translates the movies cache rows into reco's MediaFeatures shape. A user's
+// catalogAdapter wraps the movies and series repositories to satisfy
+// reco.CatalogRepository, translating their cache rows into reco's
+// MediaFeatures shape. The pool draws films and series apart. A user's
 // history can hold series (seasons roll up to them), so features fall back to
 // the series cache, and so do reason names, for the genres and keywords only
 // series carry.
@@ -88,6 +90,22 @@ func (a *catalogAdapter) CandidatesByTaste(ctx context.Context, genreIDs, keywor
 	return rowsToCandidates(rows), nil
 }
 
+func (a *catalogAdapter) SampleSeriesCandidates(ctx context.Context, limit int) ([]reco.Candidate, error) {
+	rows, err := a.tvRepo.ListCandidatesForReco(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	return seriesToCandidates(rows), nil
+}
+
+func (a *catalogAdapter) SeriesCandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]reco.Candidate, error) {
+	rows, err := a.tvRepo.ListCandidatesByTaste(ctx, genreIDs, keywordIDs, minVotes, limit)
+	if err != nil {
+		return nil, err
+	}
+	return seriesToCandidates(rows), nil
+}
+
 // LookupReasonNames satisfies reco.CatalogRepository from the in-process
 // name cache, which only goes to the database for ids it has never seen.
 func (a *catalogAdapter) LookupReasonNames(ctx context.Context, genreIDs, keywordIDs []int) (map[int]string, map[int]string, error) {
@@ -95,15 +113,32 @@ func (a *catalogAdapter) LookupReasonNames(ctx context.Context, genreIDs, keywor
 }
 
 // CardDetails satisfies reco.CatalogRepository with one query over the
-// ranked ids.
-func (a *catalogAdapter) CardDetails(ctx context.Context, mediaIDs []int) (map[int]reco.CardDetails, error) {
-	rows, err := a.repo.CardDetailsByMediaIDs(ctx, mediaIDs)
-	if err != nil {
+// ranked films and one over the ranked series, side by side. Either repo
+// skips its query when it has no ids.
+func (a *catalogAdapter) CardDetails(ctx context.Context, movieIDs, seriesIDs []int) (map[int]reco.CardDetails, error) {
+	var (
+		films  []movies.CardDetails
+		series []tv.CardDetails
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		films, err = a.repo.CardDetailsByMediaIDs(gctx, movieIDs)
+		return err
+	})
+	g.Go(func() (err error) {
+		series, err = a.tvRepo.CardDetailsByMediaIDs(gctx, seriesIDs)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	out := make(map[int]reco.CardDetails, len(rows))
-	for _, r := range rows {
+
+	out := make(map[int]reco.CardDetails, len(films)+len(series))
+	for _, r := range films {
 		out[r.MediaID] = reco.CardDetails{Overview: r.Overview, Runtime: r.Runtime, Genres: r.Genres}
+	}
+	for _, r := range series {
+		out[r.MediaID] = reco.CardDetails{Overview: r.Overview, Genres: r.Genres, SeasonCount: r.SeasonCount}
 	}
 	return out, nil
 }

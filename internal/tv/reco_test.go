@@ -2,6 +2,7 @@ package tv_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -285,5 +286,54 @@ func TestLookupGenreNames_ReadsSeriesGenres(t *testing.T) {
 	}
 	if len(names) != 1 || names[seriesGenre] != "series-only genre" {
 		t.Errorf("names = %v, want only %d named", names, seriesGenre)
+	}
+}
+
+// A show's feed card carries its synopsis, its genre names in TMDB order and
+// its season count. A series with no synopsis or genres still has a card,
+// blank rather than missing, and its genres encode as [] not null.
+func TestCardDetailsByMediaIDs_ReadsTheSeriesCard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB integration test in short mode")
+	}
+	_, repo, dbh := setup(t)
+	requireMigration(t, dbh, 30)
+
+	const (
+		fullCard = 2_100_000_064
+		bareCard = 2_100_000_065
+	)
+	ids := seedRecoSeries(t, dbh, []recoSeries{
+		{fullCard, "Full Card", 100, `[{"id": 18, "name": "Drama"}, {"id": 80, "name": "Crime"}]`, `[]`, true},
+		{bareCard, "Bare Card", 100, `[]`, `[]`, true},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := dbh.ExecContext(ctx,
+		`update tv_series set overview = 'A teacher turns to crime.', number_of_seasons = 5 where tv_id = $1`,
+		fullCard); err != nil {
+		t.Fatalf("set the full card: %v", err)
+	}
+
+	got, err := repo.CardDetailsByMediaIDs(ctx, []int{ids[fullCard], ids[bareCard]})
+	if err != nil {
+		t.Fatalf("CardDetailsByMediaIDs: %v", err)
+	}
+	byID := map[int]tv.CardDetails{}
+	for _, d := range got {
+		byID[d.MediaID] = d
+	}
+
+	full := byID[ids[fullCard]]
+	if full.Overview != "A teacher turns to crime." || full.SeasonCount != 5 ||
+		!slices.Equal(full.Genres, []string{"Drama", "Crime"}) {
+		t.Errorf("full card = %+v, want its synopsis, Drama then Crime, and 5 seasons", full)
+	}
+	bare, ok := byID[ids[bareCard]]
+	if !ok {
+		t.Fatalf("no card for the bare series, got %+v", got)
+	}
+	if bare.Overview != "" || bare.SeasonCount != 0 || bare.Genres == nil || len(bare.Genres) != 0 {
+		t.Errorf("bare card = %+v, want a blank card with empty genres", bare)
 	}
 }

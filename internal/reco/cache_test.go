@@ -45,11 +45,11 @@ func (r *countedRepos) LookupReasonNames(ctx context.Context, genreIDs, keywordI
 	return r.stubCatalog.LookupReasonNames(ctx, genreIDs, keywordIDs)
 }
 
-func (r *countedRepos) CardDetails(ctx context.Context, mediaIDs []int) (map[int]CardDetails, error) {
+func (r *countedRepos) CardDetails(ctx context.Context, movieIDs, seriesIDs []int) (map[int]CardDetails, error) {
 	r.loads.Add(1)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.stubCatalog.CardDetails(ctx, mediaIDs)
+	return r.stubCatalog.CardDetails(ctx, movieIDs, seriesIDs)
 }
 
 func (r *countedRepos) failDetails(err error) {

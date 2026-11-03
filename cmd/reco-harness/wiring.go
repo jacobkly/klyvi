@@ -5,18 +5,20 @@ import (
 
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/reco"
+	"klyvi-api/internal/tv"
 )
 
 // catalogAdapter is the same shape as cmd/api's adapter but local to the
-// harness binary. Both binaries need to bridge movies.Repository onto
-// reco's Candidate type; extracting the wiring to a shared package is
-// future cleanup.
+// harness binary. Both binaries need to bridge the movies and series
+// repositories onto reco's Candidate type; extracting the wiring to a shared
+// package is future cleanup.
 type catalogAdapter struct {
-	repo *movies.Repository
+	repo   *movies.Repository
+	tvRepo *tv.Repository
 }
 
-func newCatalogAdapter(repo *movies.Repository) *catalogAdapter {
-	return &catalogAdapter{repo: repo}
+func newCatalogAdapter(repo *movies.Repository, tvRepo *tv.Repository) *catalogAdapter {
+	return &catalogAdapter{repo: repo, tvRepo: tvRepo}
 }
 
 func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) ([]reco.Candidate, error) {
@@ -41,6 +43,48 @@ func (a *catalogAdapter) CandidatesByTaste(ctx context.Context, genreIDs, keywor
 		return nil, err
 	}
 	return rowsToCandidates(rows), nil
+}
+
+func (a *catalogAdapter) SampleSeriesCandidates(ctx context.Context, limit int) ([]reco.Candidate, error) {
+	rows, err := a.tvRepo.ListCandidatesForReco(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	return seriesToCandidates(rows), nil
+}
+
+func (a *catalogAdapter) SeriesCandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]reco.Candidate, error) {
+	rows, err := a.tvRepo.ListCandidatesByTaste(ctx, genreIDs, keywordIDs, minVotes, limit)
+	if err != nil {
+		return nil, err
+	}
+	return seriesToCandidates(rows), nil
+}
+
+// seriesToCandidates is rowsToCandidates for the series cache, with genres
+// read into the film genre space as the API's adapter does.
+func seriesToCandidates(rows []tv.RecoCandidateRow) []reco.Candidate {
+	cands := make([]reco.Candidate, 0, len(rows))
+	for _, row := range rows {
+		year := 0
+		if row.FirstAirDate != nil && row.FirstAirDate.Valid {
+			year = row.FirstAirDate.Time.Year()
+		}
+		cands = append(cands, reco.Candidate{
+			MediaID:   row.MediaID,
+			MediaType: "tv",
+			Features: &reco.MediaFeatures{
+				MediaID:     row.MediaID,
+				MediaType:   "tv",
+				GenreIDs:    reco.CanonicalTVGenres(row.GenreIDs),
+				KeywordIDs:  row.KeywordIDs,
+				Year:        year,
+				VoteAverage: row.VoteAverage,
+				VoteCount:   row.VoteCount,
+			},
+		})
+	}
+	return cands
 }
 
 func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {

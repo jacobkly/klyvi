@@ -10,11 +10,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// stubCatalog returns a fixed slice of Candidates from SampleMovieCandidates
-// and a no-op from CandidatesByMediaIDs. Used for unit testing the
-// orchestrator's response-shaping behaviour without a real DB.
+// stubCatalog returns a fixed slice of Candidates from SampleMovieCandidates,
+// a fixed slice of series from the series retrieval, and a no-op from
+// CandidatesByMediaIDs. Used for unit testing the orchestrator's
+// response-shaping behaviour without a real DB.
 type stubCatalog struct {
 	cands        []Candidate
+	series       []Candidate
 	genreNames   map[int]string
 	keywordNames map[int]string
 	details      map[int]CardDetails
@@ -29,6 +31,14 @@ func (s *stubCatalog) CandidatesByTaste(ctx context.Context, genreIDs, keywordID
 	return s.cands, nil
 }
 
+func (s *stubCatalog) SampleSeriesCandidates(ctx context.Context, limit int) ([]Candidate, error) {
+	return s.series, nil
+}
+
+func (s *stubCatalog) SeriesCandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]Candidate, error) {
+	return s.series, nil
+}
+
 func (s *stubCatalog) CandidatesByMediaIDs(ctx context.Context, ids []int) ([]Candidate, error) {
 	return nil, nil
 }
@@ -37,12 +47,12 @@ func (s *stubCatalog) LookupReasonNames(ctx context.Context, genreIDs, keywordID
 	return s.genreNames, s.keywordNames, nil
 }
 
-func (s *stubCatalog) CardDetails(ctx context.Context, mediaIDs []int) (map[int]CardDetails, error) {
+func (s *stubCatalog) CardDetails(ctx context.Context, movieIDs, seriesIDs []int) (map[int]CardDetails, error) {
 	if s.detailsErr != nil {
 		return nil, s.detailsErr
 	}
 	out := map[int]CardDetails{}
-	for _, id := range mediaIDs {
+	for _, id := range slices.Concat(movieIDs, seriesIDs) {
 		if d, ok := s.details[id]; ok {
 			out[id] = d
 		}
@@ -187,15 +197,17 @@ func TestFeed_DetailsFailureFailsTheFeed(t *testing.T) {
 	}
 }
 
-// recordingDetails records which media ids the orchestrator asked details for.
+// recordingDetails records which media ids the orchestrator asked details
+// for, films and series apart.
 type recordingDetails struct {
 	*stubCatalog
-	asked []int
+	asked, askedSeries []int
 }
 
-func (r *recordingDetails) CardDetails(ctx context.Context, mediaIDs []int) (map[int]CardDetails, error) {
-	r.asked = append(r.asked, mediaIDs...)
-	return r.stubCatalog.CardDetails(ctx, mediaIDs)
+func (r *recordingDetails) CardDetails(ctx context.Context, movieIDs, seriesIDs []int) (map[int]CardDetails, error) {
+	r.asked = append(r.asked, movieIDs...)
+	r.askedSeries = append(r.askedSeries, seriesIDs...)
+	return r.stubCatalog.CardDetails(ctx, movieIDs, seriesIDs)
 }
 
 // Verifies that Reasons returned from the orchestrator carry resolved

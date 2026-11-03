@@ -24,10 +24,12 @@ import (
 )
 
 // tier2FeedQueryBudget is the most DB round trips one Tier 2 feed request may
-// make. Every query is a full homelab-to-Supabase round trip, so this number
-// is the feed's latency floor. The fifth is the card details lookup, which
-// replaces a /v1/movies/{id} request per card from the client.
-const tier2FeedQueryBudget = 5
+// make. Every query is a full homelab-to-Supabase round trip. The fifth is the
+// card details lookup, which replaces a /v1/movies/{id} request per card from
+// the client. The sixth and seventh are the series draw and the series cards,
+// which run beside the film draw and the film cards, so they add round trips
+// but not a step to the feed's latency floor.
+const tier2FeedQueryBudget = 7
 
 // TestTier2FeedQueryBudget builds the production recommender for a synthetic
 // Tier 2 user and counts the queries one feed page costs.
@@ -341,5 +343,69 @@ func TestCatalogAdapter_LooksUpFilmsAndSeriesTogether(t *testing.T) {
 	}
 	if types[film] != "movie" || types[series] != "tv" {
 		t.Errorf("types = %v, want film %d as movie and series %d as tv", types, film, series)
+	}
+}
+
+// The pool draws series apart from films. Both series draws return shows,
+// typed tv and keyed by the series' TMDB id, with features to score.
+func TestCatalogAdapter_DrawsSeries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-dependent test in -short mode")
+	}
+	dbConn := openTestDB(t)
+	ctx := context.Background()
+	adapter := newCatalogAdapter(movies.NewRepository(dbConn), tv.NewRepository(dbConn))
+
+	popular, err := adapter.SampleSeriesCandidates(ctx, 5)
+	if err != nil {
+		t.Fatalf("SampleSeriesCandidates: %v", err)
+	}
+	byTaste, err := adapter.SeriesCandidatesByTaste(ctx, []int{18}, nil, 25, 5)
+	if err != nil {
+		t.Fatalf("SeriesCandidatesByTaste: %v", err)
+	}
+	if len(popular) == 0 || len(byTaste) == 0 {
+		t.Skipf("catalog drew %d popular and %d drama series; need some of each", len(popular), len(byTaste))
+	}
+	for _, c := range append(popular, byTaste...) {
+		if c.MediaType != "tv" || c.TMDBID == 0 || c.Features == nil || c.Features.MediaType != "tv" {
+			t.Errorf("drew %+v, want a series with its TMDB id and TV features", c)
+		}
+	}
+}
+
+// A ranked page mixes films and series, and each card reads its own cache: a
+// runtime for the film, a season count for the series.
+func TestCatalogAdapter_CardDetailsForFilmsAndSeries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-dependent test in -short mode")
+	}
+	dbConn := openTestDB(t)
+	ctx := context.Background()
+
+	var film, series int
+	if err := dbConn.GetContext(ctx, &film, `
+		select mi.media_id from media_index mi join movies m on m.movie_id = mi.id
+		where mi.media_type = 'movie' and m.runtime > 0 limit 1
+	`); err != nil {
+		t.Skipf("no cached film with a runtime: %v", err)
+	}
+	if err := dbConn.GetContext(ctx, &series, `
+		select mi.media_id from media_index mi join tv_series s on s.tv_id = mi.id
+		where mi.media_type = 'tv' and s.number_of_seasons > 0 and s.overview <> '' limit 1
+	`); err != nil {
+		t.Skipf("no cached series with seasons and a synopsis: %v", err)
+	}
+
+	details, err := newCatalogAdapter(movies.NewRepository(dbConn), tv.NewRepository(dbConn)).
+		CardDetails(ctx, []int{film}, []int{series})
+	if err != nil {
+		t.Fatalf("CardDetails: %v", err)
+	}
+	if f := details[film]; f.Runtime == 0 || f.SeasonCount != 0 {
+		t.Errorf("film card = %+v, want a runtime and no seasons", f)
+	}
+	if s := details[series]; s.SeasonCount == 0 || s.Runtime != 0 || s.Overview == "" {
+		t.Errorf("series card = %+v, want a synopsis, seasons and no runtime", s)
 	}
 }
