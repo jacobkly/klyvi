@@ -72,7 +72,7 @@ func TestFeed_MovieOnlyUserGetsRelevantShowsMixedIn(t *testing.T) {
 	rated := rowsSignal{{MediaID: 1, MediaType: "movie", Kind: "rated", Rating: ptrInt(95)}}
 	orch := NewOrchestrator(cat, rated, stubSeen{}, DefaultConfig()).WithTier1(NewTier1(DefaultConfig()))
 
-	out, err := orch.Feed(context.Background(), uuid.New(), 10, 0)
+	out, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 10, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestFeed_SeasonsOnlyUserGetsATVLedFeed(t *testing.T) {
 	orch := NewOrchestrator(cat, rowsSignal(ratedSeasons(3, 90, true)), seen, DefaultConfig()).
 		WithTier1(NewTier1(DefaultConfig()))
 
-	out, err := orch.Feed(context.Background(), uuid.New(), 5, 0)
+	out, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 5, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestFeed_TVCardsCarryTheirSeasonCount(t *testing.T) {
 	}}
 	orch := NewOrchestrator(cat, stubSignal{}, stubSeen{}, DefaultConfig()).WithTier0(voteScorer{})
 
-	out, err := orch.Feed(context.Background(), uuid.New(), 10, 0)
+	out, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 10, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}

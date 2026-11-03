@@ -89,7 +89,7 @@ func TestFeed_SeasonsOnlyUserGetsTheTierTheirSeasonsEarn(t *testing.T) {
 			orch := NewOrchestrator(seriesCatalog{&stubCatalog{cands: pool}}, rowsSignal(tt.rows), stubSeen{}, DefaultConfig()).
 				WithTier0(tiers[0]).WithTier1(tiers[1]).WithTier2(tiers[2])
 
-			if _, err := orch.Feed(context.Background(), uuid.New(), 10, 0); err != nil {
+			if _, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 10, 0); err != nil {
 				t.Fatalf("Feed: %v", err)
 			}
 			for tier, s := range tiers {
@@ -108,7 +108,7 @@ func TestFeed_SeasonsOnlyUserTastesOfTheirSeries(t *testing.T) {
 	orch := NewOrchestrator(seriesCatalog{&stubCatalog{}}, rowsSignal(ratedSeasons(3, 90, true)), stubSeen{}, DefaultConfig()).
 		WithTier1(tier1)
 
-	if _, err := orch.Feed(context.Background(), uuid.New(), 10, 0); err != nil {
+	if _, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 10, 0); err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
 	if tier1.user == nil {
@@ -136,7 +136,7 @@ func TestFeed_NeverRecommendsASeenSeries(t *testing.T) {
 	orch := NewOrchestrator(&stubCatalog{cands: pool}, stubSignal{}, seenSet{1000: true, 1001: true}, DefaultConfig()).
 		WithTier0(NewTier0())
 
-	out, err := orch.Feed(context.Background(), uuid.New(), 10, 0)
+	out, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 10, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}

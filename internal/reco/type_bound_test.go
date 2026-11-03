@@ -103,7 +103,7 @@ func TestFeed_ShowsDoNotTakeOverAFilmOnlyUsersFeed(t *testing.T) {
 	rated := rowsSignal{{MediaID: 1, MediaType: "movie", Kind: "rated", Rating: ptrInt(95)}}
 	orch := NewOrchestrator(cat, rated, stubSeen{}, DefaultConfig()).WithTier1(NewTier1(DefaultConfig()))
 
-	out, err := orch.Feed(context.Background(), uuid.New(), 10, 0)
+	out, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 10, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}

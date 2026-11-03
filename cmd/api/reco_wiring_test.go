@@ -47,12 +47,12 @@ func TestTier2FeedQueryBudget(t *testing.T) {
 
 	// Warm the pool's connections and statement caches first, so the count
 	// and timing below match a server that has been up for a while.
-	if _, err := orch.Feed(context.Background(), userID, 30, 0); err != nil {
+	if _, err := orch.Feed(context.Background(), userID, reco.FeedAll, 30, 0); err != nil {
 		t.Fatalf("warm-up Feed: %v", err)
 	}
 
 	ctx, rec := timing.NewContext(context.Background())
-	page, err := orch.Feed(ctx, userID, 30, 0)
+	page, err := orch.Feed(ctx, userID, reco.FeedAll, 30, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestCachedFeed_LaterPagesSkipTheDBUntilARating(t *testing.T) {
 		interactions.NewRepository(dbConn), tracking.NewRepository(dbConn)).
 		WithFeedInvalidator(feedCache)
 
-	first, err := orch.Feed(context.Background(), userID, 30, 0)
+	first, err := orch.Feed(context.Background(), userID, reco.FeedAll, 30, 0)
 	if err != nil {
 		t.Fatalf("page 1: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestCachedFeed_LaterPagesSkipTheDBUntilARating(t *testing.T) {
 	}
 
 	ctx, rec := timing.NewContext(context.Background())
-	if _, err := orch.Feed(ctx, userID, 30, 30); err != nil {
+	if _, err := orch.Feed(ctx, userID, reco.FeedAll, 30, 30); err != nil {
 		t.Fatalf("page 2: %v", err)
 	}
 	if n := rec.Snapshot().DBQueries; n != 0 {
@@ -121,7 +121,7 @@ func TestCachedFeed_LaterPagesSkipTheDBUntilARating(t *testing.T) {
 	}
 
 	ctx, rec = timing.NewContext(context.Background())
-	after, err := orch.Feed(ctx, userID, 30, 0)
+	after, err := orch.Feed(ctx, userID, reco.FeedAll, 30, 0)
 	if err != nil {
 		t.Fatalf("feed after rating: %v", err)
 	}

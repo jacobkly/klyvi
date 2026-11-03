@@ -24,9 +24,10 @@ func NewAPI(orch *Orchestrator) *API {
 	return &API{orch: orch}
 }
 
-// Feed — GET /v1/reco/feed. Returns the top-K recommendations for the
-// authenticated user. UUID is read from request context (placed there by
-// the JWT middleware); no user id is accepted from the request.
+// Feed — GET /v1/reco/feed?media=all|movie|tv. Returns the top-K
+// recommendations for the authenticated user: films and series mixed, or one
+// of them alone. UUID is read from request context (placed there by the JWT
+// middleware); no user id is accepted from the request.
 func (a *API) Feed(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.UserUUIDFromContext(r.Context())
 	if !ok {
@@ -35,6 +36,11 @@ func (a *API) Feed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
+	media, ok := ParseFeedMedia(q.Get("media"))
+	if !ok {
+		response.WriteError(w, http.StatusBadRequest, "media must be movie, tv, or all")
+		return
+	}
 	limit := atoiDefault(q.Get("limit"), defaultFeedLimit)
 	offset := atoiDefault(q.Get("offset"), 0)
 	if limit < 1 {
@@ -47,7 +53,7 @@ func (a *API) Feed(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	scored, err := a.orch.Feed(r.Context(), userID, limit, offset)
+	scored, err := a.orch.Feed(r.Context(), userID, media, limit, offset)
 	if err != nil {
 		log.Printf("reco: %v", err)
 		response.WriteError(w, http.StatusInternalServerError, "internal server error")

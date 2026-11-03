@@ -32,7 +32,8 @@ type candidateSource interface {
 // run lower than films' and one draw sorted by votes would hold almost no
 // shows. Series take their share of the pool (cfg.TVShare) and films fill the
 // rest, including any share a thin series catalog leaves unused. The scorer
-// then ranks both types against each other on one scale.
+// then ranks both types against each other on one scale. A share of 1 is the
+// series-only pool: no films are drawn, however thin the series catalog.
 //
 // It lives here, not inline in the orchestrator, so the evaluation harness
 // builds its pool the same way — otherwise the harness would measure a
@@ -43,11 +44,13 @@ func BuildCandidatePool(ctx context.Context, catalog candidateSource, liked []Si
 
 	var films, series []Candidate
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() (err error) {
-		films, err = drawCandidates(gctx, catalog.CandidatesByTaste, catalog.SampleMovieCandidates,
-			genreIDs, keywordIDs, cfg.QualityFloorVotes, candidatePoolSize)
-		return err
-	})
+	if quota < candidatePoolSize {
+		g.Go(func() (err error) {
+			films, err = drawCandidates(gctx, catalog.CandidatesByTaste, catalog.SampleMovieCandidates,
+				genreIDs, keywordIDs, cfg.QualityFloorVotes, candidatePoolSize)
+			return err
+		})
+	}
 	if quota > 0 {
 		g.Go(func() (err error) {
 			series, err = drawCandidates(gctx, catalog.SeriesCandidatesByTaste, catalog.SampleSeriesCandidates,

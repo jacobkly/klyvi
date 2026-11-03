@@ -30,7 +30,7 @@ type ConfReco struct {
 	// TVShare is the share of the feed kept for series, 0 to 1. Series get
 	// their own share of the candidate pool, since their vote counts run lower
 	// than films', and shows fill at most this share of a film lover's feed.
-	// 0 is the films-only feed.
+	// 0 is the films-only feed and 1 the series-only feed.
 	TVShare float64 `env:"RECO_TV_SHARE,default=0.4"`
 
 	// UseIDF turns on global inverse-document-frequency weighting of taste

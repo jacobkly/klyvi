@@ -131,14 +131,18 @@ func (o *Orchestrator) Wait() {
 	}
 }
 
-// Feed returns the top-K recommendations for a user. The orchestrator picks
-// the active scorer based on signal volume:
+// Feed returns the top-K recommendations of the given media for a user. The
+// zero media is the mixed feed. The orchestrator picks the active scorer
+// based on signal volume:
 //   - 0 interactions → Tier 0 (cold).
 //   - 1..N interactions → Tier 1 (content-based).
 //   - >= N interactions AND Tier 2 ready → Tier 2 (taste profile).
 //
 // Filtering (already-seen) and diversification wrap whichever tier runs.
-func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Scored, error) {
+func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, media FeedMedia, limit, offset int) ([]Scored, error) {
+	if media == "" {
+		media = FeedAll
+	}
 	if limit <= 0 {
 		limit = o.cfg.FeedSize
 	}
@@ -154,7 +158,7 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset
 	}
 
 	if o.cache == nil {
-		ranked, err := o.rank(ctx, userID, want)
+		ranked, err := o.rank(ctx, userID, media, want)
 		if err != nil {
 			return nil, err
 		}
@@ -169,8 +173,8 @@ func (o *Orchestrator) Feed(ctx context.Context, userID uuid.UUID, limit, offset
 		return page, nil
 	}
 
-	ranked, err := o.cache.ranked(ctx, userID, func(ctx context.Context) ([]Scored, error) {
-		ranked, err := o.rank(ctx, userID, maxFeedDepth)
+	ranked, err := o.cache.ranked(ctx, userID, media, func(ctx context.Context) ([]Scored, error) {
+		ranked, err := o.rank(ctx, userID, media, maxFeedDepth)
 		if err != nil {
 			return nil, err
 		}
@@ -197,9 +201,11 @@ func pageOf(ranked []Scored, offset, limit int) []Scored {
 	return ranked[offset:min(offset+limit, len(ranked))]
 }
 
-// rank loads the user's signal, builds and scores the candidate pool, and
-// returns the top depth items in feed order.
-func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, depth int) ([]Scored, error) {
+// rank loads the user's signal, builds and scores the candidate pool of the
+// given media, and returns the top depth items in feed order.
+func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, media FeedMedia, depth int) ([]Scored, error) {
+	cfg := o.cfg.forMedia(media)
+
 	// The history and the seen set are independent reads; load them together
 	// so the feed waits for one round trip, not two.
 	var (
@@ -238,7 +244,7 @@ func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, depth int) ([
 	// the feed. Size is independent of the requested page so pagination stays
 	// stable — every page ranks the same pool, and MMR's greedy selection is
 	// prefix-stable, so page 2 continues page 1 without dupes.
-	cands, err := BuildCandidatePool(ctx, o.catalog, user.Liked, o.cfg)
+	cands, err := BuildCandidatePool(ctx, o.catalog, user.Liked, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +270,7 @@ func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, depth int) ([
 	// score order. Rank down to `depth` (the deepest item the caller needs);
 	// MMR's greedy order is prefix-stable, so ranking deeper never disturbs
 	// earlier pages.
-	return MMRReorderWithin(scored, depth, o.cfg.MMRLambda, FeedTypeBound(o.cfg, user.Liked)), nil
+	return MMRReorderWithin(scored, depth, cfg.MMRLambda, FeedTypeBound(cfg, user.Liked)), nil
 }
 
 // resolveReasonNames mutates the scored slice, filling in Reason.Name

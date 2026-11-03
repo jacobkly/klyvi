@@ -103,7 +103,7 @@ func TestFeed_PopulatesDisplayFields(t *testing.T) {
 		DefaultConfig(),
 	).WithTier0(NewTier0())
 
-	out, err := orch.Feed(context.Background(), uuid.New(), 30, 0)
+	out, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 30, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestFeed_CarriesCardDetails(t *testing.T) {
 	}}
 	orch := NewOrchestrator(cat, stubSignal{}, stubSeen{}, DefaultConfig()).WithTier0(voteScorer{})
 
-	out, err := orch.Feed(context.Background(), uuid.New(), 10, 0)
+	out, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 10, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestFeed_UncachedLooksUpDetailsForThePageOnly(t *testing.T) {
 	cat := &recordingDetails{stubCatalog: &stubCatalog{cands: cands}}
 	orch := NewOrchestrator(cat, stubSignal{}, stubSeen{}, DefaultConfig()).WithTier0(voteScorer{})
 
-	if _, err := orch.Feed(context.Background(), uuid.New(), 2, 2); err != nil {
+	if _, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 2, 2); err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
 	if !slices.Equal(cat.asked, []int{3, 4}) {
@@ -192,7 +192,7 @@ func TestFeed_DetailsFailureFailsTheFeed(t *testing.T) {
 	}
 	orch := NewOrchestrator(cat, stubSignal{}, stubSeen{}, DefaultConfig()).WithTier0(voteScorer{})
 
-	if _, err := orch.Feed(context.Background(), uuid.New(), 10, 0); err == nil {
+	if _, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 10, 0); err == nil {
 		t.Fatal("Feed succeeded with the details lookup down")
 	}
 }
@@ -266,7 +266,7 @@ func TestFeed_ResolvesReasonNames(t *testing.T) {
 	orch := NewOrchestrator(cat2, sig, stubSeen{}, DefaultConfig()).
 		WithTier1(NewTier1(DefaultConfig()))
 
-	out, err := orch.Feed(context.Background(), uuid.New(), 30, 0)
+	out, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 30, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestFeed_PaginationIsStableAndContiguous(t *testing.T) {
 	orch := NewOrchestrator(&stubCatalog{cands: cands}, stubSignal{}, stubSeen{}, DefaultConfig()).
 		WithTier0(NewTier0())
 
-	full, err := orch.Feed(context.Background(), uuid.New(), 10, 0)
+	full, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 10, 0)
 	if err != nil {
 		t.Fatalf("Feed full: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestFeed_PaginationIsStableAndContiguous(t *testing.T) {
 	}
 
 	for off := 0; off < 6; off += 2 {
-		page, err := orch.Feed(context.Background(), uuid.New(), 2, off)
+		page, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 2, off)
 		if err != nil {
 			t.Fatalf("Feed offset=%d: %v", off, err)
 		}
@@ -375,7 +375,7 @@ func TestFeed_PaginationIsStableAndContiguous(t *testing.T) {
 		}
 	}
 
-	empty, err := orch.Feed(context.Background(), uuid.New(), 2, 10)
+	empty, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 2, 10)
 	if err != nil {
 		t.Fatalf("Feed past-end page: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestFeed_LoadsSignalAndSeenConcurrently(t *testing.T) {
 	orch := NewOrchestrator(&stubCatalog{}, rendezvousSignal{r}, rendezvousSeen{r}, DefaultConfig()).
 		WithTier0(NewTier0())
 
-	if _, err := orch.Feed(context.Background(), uuid.New(), 10, 0); err != nil {
+	if _, err := orch.Feed(context.Background(), uuid.New(), FeedAll, 10, 0); err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
 }

@@ -103,13 +103,13 @@ func TestFeed_CachedFeedServesLaterPagesWithoutLoading(t *testing.T) {
 	orch, _ := newCachedOrchestrator(repos)
 	ctx, user := context.Background(), uuid.New()
 
-	first, err := orch.Feed(ctx, user, 20, 0)
+	first, err := orch.Feed(ctx, user, FeedAll, 20, 0)
 	if err != nil {
 		t.Fatalf("page 1: %v", err)
 	}
 	loads := repos.loads.Load()
 
-	second, err := orch.Feed(ctx, user, 20, 20)
+	second, err := orch.Feed(ctx, user, FeedAll, 20, 20)
 	if err != nil {
 		t.Fatalf("page 2: %v", err)
 	}
@@ -136,11 +136,11 @@ func TestFeed_CachedPagesCarryDetails(t *testing.T) {
 	orch, _ := newCachedOrchestrator(repos)
 	ctx, user := context.Background(), uuid.New()
 
-	if _, err := orch.Feed(ctx, user, 10, 0); err != nil {
+	if _, err := orch.Feed(ctx, user, FeedAll, 10, 0); err != nil {
 		t.Fatalf("page 1: %v", err)
 	}
 	loads := repos.loads.Load()
-	page3, err := orch.Feed(ctx, user, 10, 20)
+	page3, err := orch.Feed(ctx, user, FeedAll, 10, 20)
 	if err != nil {
 		t.Fatalf("page 3: %v", err)
 	}
@@ -160,11 +160,11 @@ func TestFeed_DetailsFailureIsNotCached(t *testing.T) {
 	orch, _ := newCachedOrchestrator(repos)
 	ctx, user := context.Background(), uuid.New()
 
-	if _, err := orch.Feed(ctx, user, 5, 0); err == nil {
+	if _, err := orch.Feed(ctx, user, FeedAll, 5, 0); err == nil {
 		t.Fatal("Feed succeeded with the details lookup down")
 	}
 	repos.failDetails(nil)
-	out, err := orch.Feed(ctx, user, 5, 0)
+	out, err := orch.Feed(ctx, user, FeedAll, 5, 0)
 	if err != nil {
 		t.Fatalf("Feed after recovery: %v", err)
 	}
@@ -178,11 +178,11 @@ func TestFeed_CacheIsPerUser(t *testing.T) {
 	orch, _ := newCachedOrchestrator(repos)
 	ctx := context.Background()
 
-	if _, err := orch.Feed(ctx, uuid.New(), 5, 0); err != nil {
+	if _, err := orch.Feed(ctx, uuid.New(), FeedAll, 5, 0); err != nil {
 		t.Fatalf("first user: %v", err)
 	}
 	loads := repos.loads.Load()
-	if _, err := orch.Feed(ctx, uuid.New(), 5, 0); err != nil {
+	if _, err := orch.Feed(ctx, uuid.New(), FeedAll, 5, 0); err != nil {
 		t.Fatalf("second user: %v", err)
 	}
 	if repos.loads.Load() == loads {
@@ -195,7 +195,7 @@ func TestFeed_InvalidateDropsTheCachedFeed(t *testing.T) {
 	orch, fc := newCachedOrchestrator(repos)
 	ctx, user := context.Background(), uuid.New()
 
-	before, err := orch.Feed(ctx, user, 5, 0)
+	before, err := orch.Feed(ctx, user, FeedAll, 5, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestFeed_InvalidateDropsTheCachedFeed(t *testing.T) {
 	repos.markSeen(top)
 
 	// Until the write is reported, the cached feed still serves.
-	cached, err := orch.Feed(ctx, user, 5, 0)
+	cached, err := orch.Feed(ctx, user, FeedAll, 5, 0)
 	if err != nil {
 		t.Fatalf("cached Feed: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestFeed_InvalidateDropsTheCachedFeed(t *testing.T) {
 	}
 
 	fc.Invalidate(user)
-	after, err := orch.Feed(ctx, user, 5, 0)
+	after, err := orch.Feed(ctx, user, FeedAll, 5, 0)
 	if err != nil {
 		t.Fatalf("Feed after invalidate: %v", err)
 	}
@@ -223,19 +223,112 @@ func TestFeed_InvalidateDropsTheCachedFeed(t *testing.T) {
 	}
 }
 
+// withShows adds ten shows, media ids 1001..1010, that outscore every film.
+func (r *countedRepos) withShows() *countedRepos {
+	for i := 1; i <= 10; i++ {
+		r.series = append(r.series, Candidate{MediaID: 1000 + i, MediaType: "tv", VoteAverage: float64(2000 - i)})
+	}
+	return r
+}
+
+// Each media filter ranks and caches its own list, so a filtered feed is
+// never served from the mixed one or the other way round.
+func TestFeed_CacheKeepsEachMediaFilterApart(t *testing.T) {
+	repos := newCountedRepos(10).withShows()
+	orch, _ := newCachedOrchestrator(repos)
+	ctx, user := context.Background(), uuid.New()
+
+	mixed, err := orch.Feed(ctx, user, FeedAll, 10, 0)
+	if err != nil {
+		t.Fatalf("mixed feed: %v", err)
+	}
+	if countScored(mixed, "movie") == 0 || countScored(mixed, "tv") == 0 {
+		t.Fatalf("mixed feed = %v, want films and shows", idsOf(mixed))
+	}
+	shows, err := orch.Feed(ctx, user, FeedTV, 10, 0)
+	if err != nil {
+		t.Fatalf("shows feed: %v", err)
+	}
+	if n := countScored(shows, "movie"); n > 0 {
+		t.Errorf("shows feed holds %d films after the mixed feed was cached: %v", n, idsOf(shows))
+	}
+	films, err := orch.Feed(ctx, user, FeedMovies, 10, 0)
+	if err != nil {
+		t.Fatalf("films feed: %v", err)
+	}
+	if n := countScored(films, "tv"); n > 0 {
+		t.Errorf("films feed holds %d shows after the others were cached: %v", n, idsOf(films))
+	}
+}
+
+// A tracking or interaction write reports Invalidate, which drops every media
+// variant of the user's feed, not just the mixed one.
+func TestFeed_InvalidateDropsEveryMediaVariant(t *testing.T) {
+	repos := newCountedRepos(10).withShows()
+	orch, fc := newCachedOrchestrator(repos)
+	ctx, user := context.Background(), uuid.New()
+	variants := []FeedMedia{FeedAll, FeedMovies, FeedTV}
+
+	for _, m := range variants {
+		if _, err := orch.Feed(ctx, user, m, 5, 0); err != nil {
+			t.Fatalf("%s feed: %v", m, err)
+		}
+	}
+	// Every variant is cached, so none of them loads again.
+	loads := repos.loads.Load()
+	for _, m := range variants {
+		if _, err := orch.Feed(ctx, user, m, 5, 0); err != nil {
+			t.Fatalf("cached %s feed: %v", m, err)
+		}
+	}
+	if got := repos.loads.Load(); got != loads {
+		t.Fatalf("cached variants made %d loads, want 0", got-loads)
+	}
+
+	fc.Invalidate(user)
+	for _, m := range variants {
+		before := repos.loads.Load()
+		if _, err := orch.Feed(ctx, user, m, 5, 0); err != nil {
+			t.Fatalf("%s feed after invalidate: %v", m, err)
+		}
+		if repos.loads.Load() == before {
+			t.Errorf("the %s feed was served from the cache after Invalidate", m)
+		}
+	}
+}
+
+// The zero media is the mixed feed and shares its cache entry, so Invalidate
+// drops it too.
+func TestFeed_ZeroMediaIsTheMixedFeed(t *testing.T) {
+	repos := newCountedRepos(10).withShows()
+	orch, _ := newCachedOrchestrator(repos)
+	ctx, user := context.Background(), uuid.New()
+
+	if _, err := orch.Feed(ctx, user, "", 5, 0); err != nil {
+		t.Fatalf("zero-media feed: %v", err)
+	}
+	loads := repos.loads.Load()
+	if _, err := orch.Feed(ctx, user, FeedAll, 5, 0); err != nil {
+		t.Fatalf("mixed feed: %v", err)
+	}
+	if got := repos.loads.Load(); got != loads {
+		t.Errorf("the mixed feed made %d loads after the zero-media feed was cached, want 0", got-loads)
+	}
+}
+
 func TestFeed_CallerCannotAlterTheCachedFeed(t *testing.T) {
 	repos := newCountedRepos(10)
 	orch, _ := newCachedOrchestrator(repos)
 	ctx, user := context.Background(), uuid.New()
 
-	page, err := orch.Feed(ctx, user, 5, 0)
+	page, err := orch.Feed(ctx, user, FeedAll, 5, 0)
 	if err != nil {
 		t.Fatalf("Feed: %v", err)
 	}
 	page[0].MediaID = -1
 	_ = append(page, Scored{Candidate: Candidate{MediaID: -2}})
 
-	again, err := orch.Feed(ctx, user, 6, 0)
+	again, err := orch.Feed(ctx, user, FeedAll, 6, 0)
 	if err != nil {
 		t.Fatalf("Feed again: %v", err)
 	}
@@ -262,7 +355,7 @@ func TestFeedCache_WriteDuringComputeIsNotCached(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if _, err := fc.ranked(ctx, user, compute); err != nil {
+		if _, err := fc.ranked(ctx, user, FeedAll, compute); err != nil {
 			t.Errorf("first ranked: %v", err)
 		}
 	}()
@@ -271,7 +364,7 @@ func TestFeedCache_WriteDuringComputeIsNotCached(t *testing.T) {
 	close(release)
 	<-done
 
-	if _, err := fc.ranked(ctx, user, compute); err != nil {
+	if _, err := fc.ranked(ctx, user, FeedAll, compute); err != nil {
 		t.Fatalf("second ranked: %v", err)
 	}
 	if n := computes.Load(); n != 2 {
@@ -296,7 +389,7 @@ func TestFeedCache_ConcurrentMissesShareOneCompute(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := fc.ranked(ctx, user, compute); err != nil {
+			if _, err := fc.ranked(ctx, user, FeedAll, compute); err != nil {
 				t.Errorf("ranked: %v", err)
 			}
 		}()
@@ -322,7 +415,7 @@ func TestFeedCache_JoinerOutlivesALeaderThatHungUp(t *testing.T) {
 	leaderDone := make(chan struct{})
 	go func() {
 		defer close(leaderDone)
-		_, _ = fc.ranked(leaderCtx, user, func(ctx context.Context) ([]Scored, error) {
+		_, _ = fc.ranked(leaderCtx, user, FeedAll, func(ctx context.Context) ([]Scored, error) {
 			close(started)
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -332,7 +425,7 @@ func TestFeedCache_JoinerOutlivesALeaderThatHungUp(t *testing.T) {
 
 	joinerDone := make(chan error, 1)
 	go func() {
-		ranked, err := fc.ranked(context.Background(), user, func(context.Context) ([]Scored, error) {
+		ranked, err := fc.ranked(context.Background(), user, FeedAll, func(context.Context) ([]Scored, error) {
 			return []Scored{{Score: 1}}, nil
 		})
 		if err == nil && len(ranked) != 1 {
@@ -363,13 +456,13 @@ func TestFeedCache_PanickedComputeDoesNotWedgeTheUser(t *testing.T) {
 
 	func() {
 		defer func() { _ = recover() }()
-		_, _ = fc.ranked(ctx, user, func(context.Context) ([]Scored, error) { panic("scorer bug") })
+		_, _ = fc.ranked(ctx, user, FeedAll, func(context.Context) ([]Scored, error) { panic("scorer bug") })
 	}()
 
 	waitCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	ran := false
-	if _, err := fc.ranked(waitCtx, user, func(context.Context) ([]Scored, error) {
+	if _, err := fc.ranked(waitCtx, user, FeedAll, func(context.Context) ([]Scored, error) {
 		ran = true
 		return []Scored{}, nil
 	}); err != nil {

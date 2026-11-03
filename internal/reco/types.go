@@ -1,6 +1,8 @@
 package reco
 
 import (
+	"slices"
+
 	"github.com/google/uuid"
 )
 
@@ -126,7 +128,7 @@ type Config struct {
 	// than films' and a pool drawn by votes alone would hold almost no shows.
 	// Films fill whatever share the series catalog cannot. It also bounds the
 	// ranked feed, so shows cannot take over a film lover's feed (see
-	// FeedTypeBound). 0 is the films-only feed.
+	// FeedTypeBound). 0 is the films-only feed and 1 the series-only feed.
 	TVShare float64
 }
 
@@ -156,4 +158,42 @@ func DefaultConfig() Config {
 		FeedSize:  30,
 		TVShare:   0.4,
 	}
+}
+
+// FeedMedia is which media a feed holds: films and series mixed, or one of
+// them alone.
+type FeedMedia string
+
+const (
+	FeedAll    FeedMedia = "all"
+	FeedMovies FeedMedia = "movie"
+	FeedTV     FeedMedia = "tv"
+)
+
+// feedMedia is every FeedMedia, so the cache can drop each variant of a feed.
+var feedMedia = []FeedMedia{FeedAll, FeedMovies, FeedTV}
+
+// ParseFeedMedia reads a feed's ?media= value. Empty is the mixed feed, and
+// ok is false for anything else the feed does not know.
+func ParseFeedMedia(s string) (media FeedMedia, ok bool) {
+	if s == "" {
+		return FeedAll, true
+	}
+	if m := FeedMedia(s); slices.Contains(feedMedia, m) {
+		return m, true
+	}
+	return "", false
+}
+
+// forMedia is the config that ranks a feed of the given media. A films-only
+// feed runs at TV share 0 and a series-only feed at 1, so the pool draws only
+// that type. The mixed feed keeps the configured share.
+func (c Config) forMedia(m FeedMedia) Config {
+	switch m {
+	case FeedMovies:
+		c.TVShare = 0
+	case FeedTV:
+		c.TVShare = 1
+	}
+	return c
 }

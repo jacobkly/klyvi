@@ -75,8 +75,8 @@ func main() {
 
 	// Each user's ranked feed is kept for 10 minutes, so later pages and the
 	// other screens that open on it reuse one computation. Writes that change
-	// the user's signal drop it. A cached feed is about 130 KB, so 256 users
-	// bound the cache near 33 MB.
+	// the user's signal drop it. A cached feed is about 130 KB, so 256 feeds
+	// bound the cache near 33 MB. Each media filter of a user's feed is one.
 	feedCache := reco.NewFeedCache(10*time.Minute, 256)
 
 	trackingService := tracking.NewService(trackingRepo).

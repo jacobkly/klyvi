@@ -11,15 +11,18 @@ import (
 type poolSource struct {
 	films, series []Candidate
 
+	filmsAsked   bool
 	seriesAsked  bool
 	seriesGenres []int
 }
 
 func (p *poolSource) SampleMovieCandidates(_ context.Context, limit int) ([]Candidate, error) {
+	p.filmsAsked = true
 	return firstN(p.films, limit), nil
 }
 
 func (p *poolSource) CandidatesByTaste(_ context.Context, _, _ []int, _, limit int) ([]Candidate, error) {
+	p.filmsAsked = true
 	return firstN(p.films, limit), nil
 }
 
@@ -121,6 +124,26 @@ func TestBuildCandidatePool_ZeroShareIsFilmsOnly(t *testing.T) {
 	}
 	if got := countType(pool, "movie"); got != candidatePoolSize {
 		t.Errorf("pool holds %d films, want %d", got, candidatePoolSize)
+	}
+}
+
+// A full share is the series-only pool, and costs no film query. Films do not
+// fill the slots a thin series catalog leaves, or a shows-only feed would
+// hold films.
+func TestBuildCandidatePool_FullShareIsSeriesOnly(t *testing.T) {
+	src := &poolSource{films: catalogOf("movie", 1, 2000), series: catalogOf("tv", 100_001, 100)}
+	cfg := DefaultConfig()
+	cfg.TVShare = 1
+
+	pool, err := BuildCandidatePool(context.Background(), src, likedDrama, cfg)
+	if err != nil {
+		t.Fatalf("BuildCandidatePool: %v", err)
+	}
+	if src.filmsAsked {
+		t.Error("a full TV share still queried films")
+	}
+	if got := countType(pool, "tv"); got != 100 || len(pool) != 100 {
+		t.Errorf("pool holds %d series of %d candidates, want all 100 series and nothing else", got, len(pool))
 	}
 }
 
