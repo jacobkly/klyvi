@@ -29,12 +29,34 @@ func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) (
 	return rowsToCandidates(rows), nil
 }
 
+// CandidatesByMediaIDs looks the ids up as films, then sends the ids no film
+// matched to the series cache, as the API's adapter does, so a history that
+// holds series resolves their features.
 func (a *catalogAdapter) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) ([]reco.Candidate, error) {
 	rows, err := a.repo.CandidatesByMediaIDs(ctx, mediaIDs)
 	if err != nil {
 		return nil, err
 	}
-	return rowsToCandidates(rows), nil
+	cands := rowsToCandidates(rows)
+
+	found := make(map[int]bool, len(cands))
+	for _, c := range cands {
+		found[c.MediaID] = true
+	}
+	var rest []int
+	for _, id := range mediaIDs {
+		if !found[id] {
+			rest = append(rest, id)
+		}
+	}
+	if len(rest) == 0 {
+		return cands, nil
+	}
+	seriesRows, err := a.tvRepo.CandidatesByMediaIDs(ctx, rest)
+	if err != nil {
+		return nil, err
+	}
+	return append(cands, seriesToCandidates(seriesRows)...), nil
 }
 
 func (a *catalogAdapter) CandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]reco.Candidate, error) {

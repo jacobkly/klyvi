@@ -185,10 +185,10 @@ func ParseFeedMedia(s string) (media FeedMedia, ok bool) {
 	return "", false
 }
 
-// forMedia is the config that ranks a feed of the given media. A films-only
+// ForMedia is the config that ranks a feed of the given media. A films-only
 // feed runs at TV share 0 and a series-only feed at 1, so the pool draws only
 // that type. The mixed feed keeps the configured share.
-func (c Config) forMedia(m FeedMedia) Config {
+func (c Config) ForMedia(m FeedMedia) Config {
 	switch m {
 	case FeedMovies:
 		c.TVShare = 0

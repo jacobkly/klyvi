@@ -204,7 +204,7 @@ func pageOf(ranked []Scored, offset, limit int) []Scored {
 // rank loads the user's signal, builds and scores the candidate pool of the
 // given media, and returns the top depth items in feed order.
 func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, media FeedMedia, depth int) ([]Scored, error) {
-	cfg := o.cfg.forMedia(media)
+	cfg := o.cfg.ForMedia(media)
 
 	// The history and the seen set are independent reads; load them together
 	// so the feed waits for one round trip, not two.

@@ -1,14 +1,19 @@
 // reco-harness runs the leave-one-out evaluation harness against the
-// recommender. For each user with sufficient signal it hides one liked
-// item at a time, runs the cascade against the rest, and records whether
+// recommender. For each user with sufficient signal it hides one liked film
+// or show at a time, runs the cascade against the rest, and records whether
 // the hidden item is recovered in the top-K (recall@K) and at what rank
-// (MRR — mean reciprocal rank).
+// (MRR — mean reciprocal rank). Each trial ranks the mixed feed and the feed
+// of the hidden item's own type (?media=movie or tv), and the report breaks
+// the numbers down by what the user's likes hold: films, shows, or both.
 //
-// Two modes:
+// Three modes:
 //
 //	go run ./cmd/reco-harness                   # evaluates real users in the DB
 //	go run ./cmd/reco-harness -synthetic-users 5  # seeds N synthetic users
 //	                                              # first, then evaluates them
+//	go run ./cmd/reco-harness -coherent-tastes  # seeds curated film, show and
+//	                                            # mixed tastes, then evaluates
+//	                                            # them and checks cross-media
 //
 // Synthetic mode is for end-to-end smoke testing of the cascade plumbing.
 // The numbers it produces are NOT a signal of recommender quality — only
@@ -25,6 +30,7 @@ import (
 	"math/rand"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,7 +50,8 @@ func main() {
 	feedSize := flag.Int("feed-size", 50, "feed K used by the harness; recall@K/MRR computed up to K")
 	maxTrials := flag.Int("max-trials", 60, "cap leave-one-out trials per user; larger histories are evenly subsampled (per-trial MMR is the cost)")
 	cleanSynthetic := flag.Bool("clean-synthetic", false, "delete synthetic harness users (username like 'harness_%') and their interactions, then exit")
-	coherent := flag.Bool("coherent-tastes", false, "seed curated coherent-taste users (slow-burn, animation, cerebral-scifi) before evaluating")
+	coherent := flag.Bool("coherent-tastes", false, "seed curated coherent-taste users (films, shows and both) before evaluating")
+	sampleMedia := flag.String("sample-media", "all", "the feed the sample top-10s show, as the ?media= filter: all, movie or tv")
 	// Config overrides for recompile-free weight sweeps (<0 = keep default).
 	kwWeight := flag.Float64("keyword-weight", -1, "override reco KeywordWeight")
 	gWeight := flag.Float64("genre-weight", -1, "override reco GenreWeight")
@@ -54,6 +61,10 @@ func main() {
 	tvShare := flag.Float64("tv-share", -1, "override reco TVShare, the pool share kept for series (0 is the films-only pool)")
 	useIDF := flag.Bool("idf", true, "apply global IDF feature weighting (set -idf=false to A/B against the raw-sum baseline)")
 	flag.Parse()
+	sampleFeed, ok := reco.ParseFeedMedia(*sampleMedia)
+	if !ok {
+		log.Fatalf("-sample-media %q: want all, movie or tv", *sampleMedia)
+	}
 
 	if err := godotenv.Load(".env.dev"); err != nil {
 		log.Printf("godotenv: %v (continuing — env may already be set)", err)
@@ -105,10 +116,10 @@ func main() {
 	// Diagnostics: the size of the eligible candidate universe. A small or
 	// mainstream-only catalog caps recommendation quality regardless of the
 	// scorer, so this number is the first thing to read alongside recall@K.
-	if n, err := catalogSize(context.Background(), dbConn); err != nil {
+	if films, series, err := catalogSize(context.Background(), dbConn); err != nil {
 		log.Printf("catalog size: %v", err)
 	} else {
-		log.Printf("catalog: %d eligible movies (vote_count > 0)", n)
+		log.Printf("catalog: %d eligible movies, %d eligible series (vote_count > 0)", films, series)
 	}
 
 	// Build the same global IDF tables the API loads, once, held fixed across
@@ -148,12 +159,13 @@ func main() {
 		log.Printf("seeded %d synthetic users", len(ids))
 	}
 
+	var seeded []seededTaste
 	if *coherent {
-		ids, err := seedCoherentTastes(context.Background(), dbConn)
+		seeded, err = seedCoherentTastes(context.Background(), dbConn)
 		if err != nil {
 			log.Fatalf("seed coherent tastes: %v", err)
 		}
-		log.Printf("seeded %d coherent-taste users", len(ids))
+		log.Printf("seeded %d coherent-taste users", len(seeded))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
@@ -169,40 +181,59 @@ func main() {
 	}
 
 	var (
-		totalHits10 int
-		totalHits50 int
-		totalMRR    float64
-		totalTrials int
+		total     looStats // the mixed feed over every trial
+		breakdown = map[string]*feedStats{}
 	)
-
 	for _, uid := range users {
-		hits10, hits50, mrr, trials, err := runUserLOO(ctx, dbConn, catalog, featureIDF, recoCfg, uid, *maxTrials)
+		res, err := runUserLOO(ctx, dbConn, catalog, featureIDF, recoCfg, uid, *maxTrials)
 		if err != nil {
 			log.Printf("user %s LOO: %v", uid, err)
 			continue
 		}
-		if trials == 0 {
+		if len(res.trials) == 0 {
 			continue
 		}
-		fmt.Printf("user=%s trials=%d recall@10=%.3f recall@50=%.3f MRR=%.3f\n",
-			uid.String()[:8], trials, hits10, hits50, mrr)
-
-		totalHits10 += int(hits10 * float64(trials))
-		totalHits50 += int(hits50 * float64(trials))
-		totalMRR += mrr * float64(trials)
-		totalTrials += trials
+		var user feedStats
+		for _, tr := range res.trials {
+			user.add(tr)
+			key := breakdownKey(res.group, tr.hiddenType)
+			if breakdown[key] == nil {
+				breakdown[key] = &feedStats{}
+			}
+			breakdown[key].add(tr)
+		}
+		fmt.Printf("user=%s %-38s trials=%d recall@10=%.3f recall@50=%.3f MRR=%.3f  own-type: recall@10=%.3f recall@50=%.3f MRR=%.3f\n",
+			uid.String()[:8], userLabel(ctx, dbConn, uid)+" ("+res.group+")", user.mixed.trials,
+			user.mixed.recall10(), user.mixed.recall50(), user.mixed.mrr(),
+			user.own.recall10(), user.own.recall50(), user.own.mrr())
+		total.merge(user.mixed)
 	}
 
-	if totalTrials == 0 {
+	if total.trials == 0 {
 		log.Println("no trials run")
 		os.Exit(0)
 	}
 	fmt.Println("---")
 	fmt.Printf("AGGREGATE: trials=%d recall@10=%.3f recall@50=%.3f MRR=%.3f\n",
-		totalTrials,
-		float64(totalHits10)/float64(totalTrials),
-		float64(totalHits50)/float64(totalTrials),
-		totalMRR/float64(totalTrials))
+		total.trials, total.recall10(), total.recall50(), total.mrr())
+
+	// The same trials by what the user's likes hold and what was hidden, in
+	// the mixed feed and in the hidden item's own-type feed. The gap between
+	// the two is what mixing costs each type.
+	fmt.Println("likes/hidden  trials | mixed: recall@10 recall@50   MRR | own-type: recall@10 recall@50   MRR")
+	for _, key := range breakdownRows {
+		s := breakdown[key]
+		if s == nil {
+			continue
+		}
+		fmt.Printf("%-12s %7d | %16.3f %9.3f %5.3f | %19.3f %9.3f %5.3f\n", key, s.mixed.trials,
+			s.mixed.recall10(), s.mixed.recall50(), s.mixed.mrr(),
+			s.own.recall10(), s.own.recall50(), s.own.mrr())
+	}
+
+	if len(seeded) > 0 {
+		printCrossMedia(ctx, dbConn, catalog, featureIDF, recoCfg, seeded)
+	}
 
 	// Sample feeds for every user give the human something to eyeball
 	// alongside the numbers. Recommender quality is a judgment call, not a
@@ -211,22 +242,46 @@ func main() {
 	// first would show a different taste from run to run.
 	for _, uid := range users {
 		fmt.Println("---")
-		fmt.Println("Sample top-10 feed for user", uid.String()[:8])
-		printSampleFeed(ctx, dbConn, catalog, featureIDF, recoCfg, uid, 10)
+		fmt.Printf("Sample top-10 %s feed for user %s %s\n", sampleFeed, uid.String()[:8], userLabel(ctx, dbConn, uid))
+		printSampleFeed(ctx, dbConn, catalog, featureIDF, recoCfg.ForMedia(sampleFeed), uid, 10)
 	}
 }
 
-// catalogSize counts the eligible candidate universe — the same filter
-// ListCandidatesForReco applies — so the harness can report how many movies
-// the recommender actually has to choose from.
-func catalogSize(ctx context.Context, dbConn *sqlx.DB) (int, error) {
-	var n int
-	err := dbConn.GetContext(ctx, &n, `
-		select count(*) from movies m
-		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
-		where m.vote_count > 0
-	`)
-	return n, err
+// breakdownRows are the per-media aggregate rows in print order: what the
+// user's likes hold, then the hidden item's type.
+var breakdownRows = []string{"films/film", "shows/show", "mixed/film", "mixed/show"}
+
+func breakdownKey(group, hiddenType string) string {
+	if hiddenType == "tv" {
+		return group + "/show"
+	}
+	return group + "/film"
+}
+
+// userLabel is the user's username, which names a harness fixture, or ""
+// when none is set.
+func userLabel(ctx context.Context, dbConn *sqlx.DB, userID uuid.UUID) string {
+	var name sql.NullString
+	if err := dbConn.GetContext(ctx, &name, `select username from users where id = $1`, userID); err != nil {
+		return ""
+	}
+	return name.String
+}
+
+// catalogSize counts the eligible candidate universe — the filters
+// ListCandidatesForReco applies to films and to series — so the harness can
+// report how many titles the recommender actually has to choose from.
+func catalogSize(ctx context.Context, dbConn *sqlx.DB) (films, series int, err error) {
+	err = dbConn.QueryRowxContext(ctx, `
+		select
+			(select count(*) from movies m
+			 join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
+			 where m.vote_count > 0),
+			(select count(*) from tv_series s
+			 join media_index mi on mi.id = s.tv_id and mi.media_type = 'tv'
+			 where s.vote_count > 0)
+	`).Scan(&films, &series)
+	return films, series, err
 }
 
 // deleteSyntheticUsers removes users seeded by -synthetic-users (username
@@ -259,43 +314,35 @@ func listUsersWithSignal(ctx context.Context, dbConn *sqlx.DB, minInteractions i
 	return ids, err
 }
 
-// runUserLOO runs leave-one-out for one user. For each item the user
-// "liked" (rated >=70 or logged), hide it, run the recommender against
-// the rest, and check if the hidden item came back in the top-K.
-func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.MediaIDF, cfg reco.Config, userID uuid.UUID, maxTrials int) (recall10, recall50, mrr float64, trials int, err error) {
+// userLOO is one user's leave-one-out run: what their likes hold, and where
+// each hidden film or show came back.
+type userLOO struct {
+	group  string
+	trials []trialResult
+}
+
+// runUserLOO runs leave-one-out for one user. For each film or series the
+// user liked (rated >=70 or logged), it hides every row of it, ranks the mixed
+// feed and the feed of the hidden item's own type against the rest, and
+// records where the hidden item came back in each.
+func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.MediaIDF, cfg reco.Config, userID uuid.UUID, maxTrials int) (userLOO, error) {
 	interactions, err := loadInteractions(ctx, dbConn, userID)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return userLOO{}, err
 	}
-
-	// Identify "positive" items: rated>=70 OR logged.
-	type liked struct {
-		MediaID  int
-		IdxInArr int
-	}
-	var likes []liked
-	for i, it := range interactions {
-		if it.MediaType != "movie" {
-			continue
-		}
-		if it.Kind == "rated" && it.Rating != nil && *it.Rating >= 70 {
-			likes = append(likes, liked{it.MediaID, i})
-		} else if it.Kind == "logged" {
-			likes = append(likes, liked{it.MediaID, i})
-		}
-	}
-
+	likes := likedUnits(interactions)
 	if len(likes) < 5 {
-		return 0, 0, 0, 0, nil
+		return userLOO{}, nil
 	}
+	res := userLOO{group: historyGroup(likes)}
 
 	// Cap trials for large histories: each trial runs an MMR rerank (O(k²·n)),
 	// so a several-hundred-film taste is intractable in full. An even sample
-	// gives a fair recall@K estimate; the candidate pool below still uses the
+	// gives a fair recall@K estimate; the candidate pools below still use the
 	// full taste.
 	if maxTrials > 0 && len(likes) > maxTrials {
 		step := len(likes) / maxTrials
-		sampled := make([]liked, 0, maxTrials)
+		sampled := make([]likedUnit, 0, maxTrials)
 		for i := 0; i < len(likes) && len(sampled) < maxTrials; i += step {
 			sampled = append(sampled, likes[i])
 		}
@@ -304,116 +351,140 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, i
 
 	scorer := reco.NewTier1(cfg).WithIDF(idf)
 
-	// Preload features for every interacted movie, and build the candidate
-	// pool once from the full taste. Both are (near-)constant across the
-	// leave-one-out trials, so rebuilding them per trial just multiplies DB
-	// round-trips. Holding the pool fixed across trials — and across weight
+	// Preload features for everything in the signal, and build each feed's
+	// candidate pool once from the full taste. Both are (near-)constant across
+	// the leave-one-out trials, so rebuilding them per trial just multiplies DB
+	// round-trips. Holding the pools fixed across trials — and across weight
 	// configs — is exactly what a fair comparison of scorer weights needs.
-	allIDs := make([]int, 0, len(interactions))
-	for _, it := range interactions {
-		if it.MediaType == "movie" {
-			allIDs = append(allIDs, it.MediaID)
-		}
-	}
-	feats, err := catalog.CandidatesByMediaIDs(ctx, allIDs)
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-	featByID := map[int]*reco.MediaFeatures{}
-	for _, c := range feats {
-		if c.Features != nil {
-			featByID[c.MediaID] = c.Features
-		}
-	}
-
 	fullSignal := reco.AggregateSignal(cfg, interactions)
-	fullLiked, _ := reco.SplitLikedDisliked(fullSignal)
-	fullLikedItems := make([]reco.SignalItem, 0, len(fullLiked))
-	for id, w := range fullLiked {
-		fullLikedItems = append(fullLikedItems, reco.SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
-	}
-	pool, err := reco.BuildCandidatePool(ctx, catalog, fullLikedItems, cfg)
+	featByID, err := signalFeatures(ctx, catalog, fullSignal)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return userLOO{}, err
+	}
+	fullLiked, _ := reco.SplitLikedDisliked(fullSignal)
+	feeds := map[reco.FeedMedia]reco.Config{reco.FeedAll: cfg}
+	for _, u := range likes {
+		feeds[u.feed()] = cfg.ForMedia(u.feed())
+	}
+	pools := make(map[reco.FeedMedia][]reco.Candidate, len(feeds))
+	for media, feedCfg := range feeds {
+		if pools[media], err = reco.BuildCandidatePool(ctx, catalog, signalItems(fullLiked, featByID), feedCfg); err != nil {
+			return userLOO{}, err
+		}
 	}
 
-	var hits10, hits50 int
-	var mrrSum float64
 	for _, hidden := range likes {
-		held := append([]reco.InteractionRow{}, interactions[:hidden.IdxInArr]...)
-		held = append(held, interactions[hidden.IdxInArr+1:]...)
-
-		signal := reco.AggregateSignal(cfg, held)
-		likedMap, dislikedMap := reco.SplitLikedDisliked(signal)
-
-		user := &reco.UserContext{UserID: userID}
-		for id, w := range likedMap {
-			user.Liked = append(user.Liked, reco.SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
-		}
-		for id, w := range dislikedMap {
-			user.Disliked = append(user.Disliked, reco.SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
+		held := withoutUnit(interactions, hidden)
+		liked, disliked := reco.SplitLikedDisliked(reco.AggregateSignal(cfg, held))
+		user := &reco.UserContext{
+			UserID:   userID,
+			Liked:    signalItems(liked, featByID),
+			Disliked: signalItems(disliked, featByID),
 		}
 
-		// Filter held-in items from the fixed pool; the held-out item stays
+		// Filter held-in items from the fixed pools; the hidden item stays
 		// and must be recovered by scoring alone.
-		seenIDs := map[int]bool{}
-		for _, it := range held {
-			seenIDs[it.MediaID] = true
+		seen := seenIn(held)
+		own := hidden.feed()
+		tr := trialResult{hiddenType: hidden.MediaType}
+		if tr.mixedRank, err = rankOf(ctx, scorer, feeds[reco.FeedAll], user, pools[reco.FeedAll], seen, hidden.MediaID); err != nil {
+			return userLOO{}, err
 		}
-		filtered := make([]reco.Candidate, 0, len(pool))
-		for _, c := range pool {
-			if !seenIDs[c.MediaID] {
-				filtered = append(filtered, c)
-			}
+		if tr.ownRank, err = rankOf(ctx, scorer, feeds[own], user, pools[own], seen, hidden.MediaID); err != nil {
+			return userLOO{}, err
 		}
+		res.trials = append(res.trials, tr)
+	}
+	return res, nil
+}
 
-		scored, err := scorer.Score(ctx, user, filtered)
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
-		ranked := reco.MMRReorderWithin(scored, cfg.FeedSize, cfg.MMRLambda, reco.FeedTypeBound(cfg, user.Liked))
-
-		rank := -1
-		for i, s := range ranked {
-			if s.MediaID == hidden.MediaID {
-				rank = i + 1
-				break
-			}
-		}
-		if rank > 0 && rank <= 10 {
-			hits10++
-		}
-		if rank > 0 && rank <= 50 {
-			hits50++
-		}
-		if rank > 0 {
-			mrrSum += 1.0 / float64(rank)
+// rankOf is target's 1-based rank in the feed cfg ranks from the pool, or 0
+// when it misses the feed.
+func rankOf(ctx context.Context, scorer *reco.Tier1, cfg reco.Config, user *reco.UserContext, pool []reco.Candidate, seen map[int]bool, target int) (int, error) {
+	ranked, err := rankPool(ctx, scorer, cfg, user, pool, seen, cfg.FeedSize)
+	if err != nil {
+		return 0, err
+	}
+	for i, s := range ranked {
+		if s.MediaID == target {
+			return i + 1, nil
 		}
 	}
+	return 0, nil
+}
 
-	trials = len(likes)
-	recall10 = float64(hits10) / float64(trials)
-	recall50 = float64(hits50) / float64(trials)
-	mrr = mrrSum / float64(trials)
-	return
+// rankPool ranks the pool's unseen candidates as the orchestrator does: score,
+// sort, then the MMR rerank that holds films and series to their shares of
+// the feed, down to depth.
+func rankPool(ctx context.Context, scorer *reco.Tier1, cfg reco.Config, user *reco.UserContext, pool []reco.Candidate, seen map[int]bool, depth int) ([]reco.Scored, error) {
+	unseen := make([]reco.Candidate, 0, len(pool))
+	for _, c := range pool {
+		if !seen[c.MediaID] {
+			unseen = append(unseen, c)
+		}
+	}
+	scored, err := scorer.Score(ctx, user, unseen)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+	return reco.MMRReorderWithin(scored, depth, cfg.MMRLambda, reco.FeedTypeBound(cfg, user.Liked)), nil
+}
+
+// signalFeatures looks up the features of every film and series in the
+// signal, keyed by media id.
+func signalFeatures(ctx context.Context, catalog *catalogAdapter, signal map[int]float64) (map[int]*reco.MediaFeatures, error) {
+	feats := map[int]*reco.MediaFeatures{}
+	if len(signal) == 0 {
+		return feats, nil
+	}
+	ids := make([]int, 0, len(signal))
+	for id := range signal {
+		ids = append(ids, id)
+	}
+	cands, err := catalog.CandidatesByMediaIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range cands {
+		if c.Features != nil {
+			feats[c.MediaID] = c.Features
+		}
+	}
+	return feats, nil
+}
+
+// signalItems pairs each weight with its features, nil when they did not
+// resolve, as the orchestrator's user context does.
+func signalItems(weights map[int]float64, feats map[int]*reco.MediaFeatures) []reco.SignalItem {
+	items := make([]reco.SignalItem, 0, len(weights))
+	for id, w := range weights {
+		items = append(items, reco.SignalItem{MediaID: id, Weight: w, Features: feats[id]})
+	}
+	return items
 }
 
 // loadInteractions queries the interactions table for one user, computing
-// the age_days projection the signal pipeline needs.
+// the age_days projection the signal pipeline needs and each season's series,
+// as the API's signal adapter does.
 func loadInteractions(ctx context.Context, dbConn *sqlx.DB, userID uuid.UUID) ([]reco.InteractionRow, error) {
 	var rows []struct {
-		MediaID   int     `db:"media_id"`
-		MediaType string  `db:"media_type"`
-		Kind      string  `db:"kind"`
-		Rating    *int    `db:"rating"`
-		AgeDays   float64 `db:"age_days"`
+		MediaID       int     `db:"media_id"`
+		MediaType     string  `db:"media_type"`
+		Kind          string  `db:"kind"`
+		Rating        *int    `db:"rating"`
+		AgeDays       float64 `db:"age_days"`
+		SeriesMediaID int     `db:"series_media_id"`
 	}
 	err := dbConn.SelectContext(ctx, &rows, `
-		select media_id, media_type, kind, rating,
-		       extract(epoch from (now() - created_at)) / 86400.0 as age_days
-		from interactions
-		where user_id = $1
+		select i.media_id, i.media_type, i.kind, i.rating,
+		       extract(epoch from (now() - i.created_at)) / 86400.0 as age_days,
+		       coalesce(series.media_id, 0) as series_media_id
+		from interactions i
+		left join media_index season on season.media_id = i.media_id and season.media_type = 'season'
+		left join media_index series on series.id = season.id and series.media_type = 'tv'
+		where i.user_id = $1
+		order by i.created_at desc, i.id
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -421,27 +492,37 @@ func loadInteractions(ctx context.Context, dbConn *sqlx.DB, userID uuid.UUID) ([
 	out := make([]reco.InteractionRow, len(rows))
 	for i, r := range rows {
 		out[i] = reco.InteractionRow{
-			MediaID:   r.MediaID,
-			MediaType: r.MediaType,
-			Kind:      r.Kind,
-			Rating:    r.Rating,
-			AgeDays:   r.AgeDays,
+			MediaID:       r.MediaID,
+			MediaType:     r.MediaType,
+			Kind:          r.Kind,
+			Rating:        r.Rating,
+			AgeDays:       r.AgeDays,
+			SeriesMediaID: r.SeriesMediaID,
 		}
 	}
 	return out, nil
 }
 
-// seenMediaIDs unions the user's interactions + media_list rows — the same
-// "already-touched" set the live orchestrator's seenAdapter filters on. The
-// sample feed applies it so the printed feed matches what /v1/reco/feed would
-// actually serve (which never recommends something the user has engaged with),
-// rather than padding the list with the user's own logged films.
+// seenMediaIDs unions the user's interactions + media_list rows, each season
+// adding its series — the same "already-touched" set the live orchestrator's
+// seenAdapter filters on. The sample feed applies it so the printed feed
+// matches what /v1/reco/feed would actually serve (which never recommends
+// something the user has engaged with), rather than padding the list with the
+// user's own logged films.
 func seenMediaIDs(ctx context.Context, dbConn *sqlx.DB, userID uuid.UUID) (map[int]bool, error) {
 	var ids []int
 	err := dbConn.SelectContext(ctx, &ids, `
-		select media_id from interactions where user_id = $1
+		with touched as (
+			select media_id from interactions where user_id = $1
+			union
+			select media_id from media_list where user_id = $1
+		)
+		select media_id from touched
 		union
-		select media_id from media_list where user_id = $1
+		select series.media_id
+		from touched t
+		join media_index season on season.media_id = t.media_id and season.media_type = 'season'
+		join media_index series on series.id = season.id and series.media_type = 'tv'
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -453,79 +534,155 @@ func seenMediaIDs(ctx context.Context, dbConn *sqlx.DB, userID uuid.UUID) (map[i
 	return out, nil
 }
 
-func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.MediaIDF, cfg reco.Config, userID uuid.UUID, k int) {
+// feedDiag is how much of a user's signal resolved to features and how big
+// the candidate pool was before and after the seen filter.
+type feedDiag struct {
+	liked, resolved int
+	pool, unseen    int
+	series          int // unseen series in the pool
+}
+
+// liveFeed ranks the user's mixed feed from their whole history, as
+// /v1/reco/feed would serve it, down to depth. A user with no positive signal
+// gets no feed.
+func liveFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.MediaIDF, cfg reco.Config, userID uuid.UUID, depth int) ([]reco.Scored, feedDiag, error) {
+	var diag feedDiag
 	interactions, err := loadInteractions(ctx, dbConn, userID)
 	if err != nil {
-		log.Println("load interactions:", err)
-		return
+		return nil, diag, fmt.Errorf("load interactions: %w", err)
 	}
-	scorer := reco.NewTier1(cfg).WithIDF(idf)
 	signal := reco.AggregateSignal(cfg, interactions)
-	likedMap, _ := reco.SplitLikedDisliked(signal)
-	if len(likedMap) == 0 {
-		log.Println("no positive signal — sample feed would be tier 0 only")
-		return
+	featByID, err := signalFeatures(ctx, catalog, signal)
+	if err != nil {
+		return nil, diag, fmt.Errorf("signal features: %w", err)
 	}
-
-	ids := make([]int, 0, len(likedMap))
-	for id := range likedMap {
-		ids = append(ids, id)
+	liked, disliked := reco.SplitLikedDisliked(signal)
+	user := &reco.UserContext{
+		UserID:   userID,
+		Liked:    signalItems(liked, featByID),
+		Disliked: signalItems(disliked, featByID),
 	}
-	feats, _ := catalog.CandidatesByMediaIDs(ctx, ids)
-	featByID := map[int]*reco.MediaFeatures{}
-	for _, c := range feats {
-		if c.Features != nil {
-			featByID[c.MediaID] = c.Features
+	diag.liked = len(user.Liked)
+	for _, li := range user.Liked {
+		if li.Features != nil {
+			diag.resolved++
 		}
 	}
-	user := &reco.UserContext{UserID: userID}
-	for id, w := range likedMap {
-		user.Liked = append(user.Liked, reco.SignalItem{MediaID: id, Weight: w, Features: featByID[id]})
+	if diag.liked == 0 {
+		return nil, diag, nil
 	}
 
-	cands, _ := reco.BuildCandidatePool(ctx, catalog, user.Liked, cfg)
-
-	// Filter already-seen candidates, exactly as the live orchestrator does, so
-	// the printed feed is what the user would actually be served — new films —
+	pool, err := reco.BuildCandidatePool(ctx, catalog, user.Liked, cfg)
+	if err != nil {
+		return nil, diag, fmt.Errorf("candidate pool: %w", err)
+	}
+	// Filter already-seen candidates, exactly as the live orchestrator does,
+	// so the feed is what the user would actually be served — new titles —
 	// not their own back-catalog re-scored.
-	poolBefore := len(cands)
 	seen, err := seenMediaIDs(ctx, dbConn, userID)
 	if err != nil {
-		log.Println("seen media ids:", err)
-	} else {
-		kept := cands[:0]
-		for _, c := range cands {
-			if !seen[c.MediaID] {
-				kept = append(kept, c)
-			}
+		return nil, diag, fmt.Errorf("seen media ids: %w", err)
+	}
+	diag.pool = len(pool)
+	for _, c := range pool {
+		if seen[c.MediaID] {
+			continue
 		}
-		cands = kept
+		diag.unseen++
+		if c.MediaType == "tv" {
+			diag.series++
+		}
+	}
+
+	ranked, err := rankPool(ctx, reco.NewTier1(cfg).WithIDF(idf), cfg, user, pool, seen, depth)
+	return ranked, diag, err
+}
+
+func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.MediaIDF, cfg reco.Config, userID uuid.UUID, k int) {
+	ranked, diag, err := liveFeed(ctx, dbConn, catalog, idf, cfg, userID, k)
+	if err != nil {
+		log.Println("sample feed:", err)
+		return
+	}
+	if diag.liked == 0 {
+		log.Println("no positive signal — sample feed would be tier 0 only")
+		return
 	}
 
 	// Diagnostics: how much signal actually resolved to features, and how big
 	// the candidate pool is. Low feature-resolution means the user's liked
 	// items aren't in the cache (weak signal); a small pool means the feed is
-	// scored against too few movies to feel personal.
-	resolved := 0
-	for _, li := range user.Liked {
-		if li.Features != nil {
-			resolved++
-		}
-	}
-	fmt.Printf("  [diag] liked=%d features_resolved=%d candidate_pool=%d (seen-filtered from %d)\n",
-		len(user.Liked), resolved, len(cands), poolBefore)
-
-	scored, _ := scorer.Score(ctx, user, cands)
-	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
-	ranked := reco.MMRReorderWithin(scored, k, cfg.MMRLambda, reco.FeedTypeBound(cfg, user.Liked))
+	// scored against too few titles to feel personal.
+	fmt.Printf("  [diag] liked=%d features_resolved=%d candidate_pool=%d (seen-filtered from %d, %d series)\n",
+		diag.liked, diag.resolved, diag.unseen, diag.pool, diag.series)
 
 	for i, s := range ranked {
-		title, _ := titleForMediaID(ctx, dbConn, s.MediaID)
-		if s.MediaType == "tv" {
-			title += " (tv)"
-		}
-		fmt.Printf("  %2d. media_id=%d score=%.3f  %s  reasons=%v\n", i+1, s.MediaID, s.Score, title, s.Reasons)
+		fmt.Printf("  %2d. media_id=%d score=%.3f  %s  reasons=%v\n", i+1, s.MediaID, s.Score, displayTitle(ctx, dbConn, s), s.Reasons)
 	}
+}
+
+// printCrossMedia checks that a films-only taste reaches the shows its fans
+// would likely watch: how many of the related shows-only fixture's shows land
+// in the taste's live mixed feed, and which shows the feed does hold, for the
+// human to judge.
+func printCrossMedia(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.MediaIDF, cfg reco.Config, seeded []seededTaste) {
+	showsOf := map[string][]int{}
+	for _, s := range seeded {
+		showsOf[s.taste.name] = s.shows
+	}
+	fmt.Println("---")
+	fmt.Printf("Cross-media: each films-only taste's mixed top-%d against its related shows-only taste\n", cfg.FeedSize)
+	for _, s := range seeded {
+		related := showsOf[s.taste.related]
+		if len(s.taste.shows) > 0 || len(related) == 0 {
+			continue
+		}
+		ranked, _, err := liveFeed(ctx, dbConn, catalog, idf, cfg, s.userID, cfg.FeedSize)
+		if err != nil {
+			log.Printf("cross-media %s: %v", s.taste.name, err)
+			continue
+		}
+		relatedSet := make(map[int]bool, len(related))
+		for _, id := range related {
+			relatedSet[id] = true
+		}
+		shows, ranks := crossMediaHits(ranked, relatedSet)
+		fmt.Printf("taste %-15s %2d shows, %d of %d %s shows (recall@%d=%.3f)\n",
+			s.taste.name, shows, len(ranks), len(related), s.taste.related,
+			cfg.FeedSize, float64(len(ranks))/float64(len(related)))
+		fmt.Println("  related:  ", rankedTitles(ctx, dbConn, ranked, ranks))
+
+		var showRanks []int
+		for i, it := range ranked {
+			if it.MediaType == "tv" && len(showRanks) < 8 {
+				showRanks = append(showRanks, i+1)
+			}
+		}
+		fmt.Println("  top shows:", rankedTitles(ctx, dbConn, ranked, showRanks))
+	}
+}
+
+// rankedTitles lists the feed's items at the 1-based ranks as "#3 Title", or
+// "none".
+func rankedTitles(ctx context.Context, dbConn *sqlx.DB, ranked []reco.Scored, ranks []int) string {
+	if len(ranks) == 0 {
+		return "none"
+	}
+	parts := make([]string, len(ranks))
+	for i, r := range ranks {
+		title, _ := titleForMediaID(ctx, dbConn, ranked[r-1].MediaID)
+		parts[i] = fmt.Sprintf("#%d %s", r, title)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// displayTitle names a feed item, marking a series.
+func displayTitle(ctx context.Context, dbConn *sqlx.DB, s reco.Scored) string {
+	title, _ := titleForMediaID(ctx, dbConn, s.MediaID)
+	if s.MediaType == "tv" {
+		title += " (tv)"
+	}
+	return title
 }
 
 // titleForMediaID names a film by its title or a series by its name.
