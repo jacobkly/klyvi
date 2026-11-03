@@ -203,3 +203,143 @@ func newTier2User(t *testing.T, dbConn *sqlx.DB) uuid.UUID {
 	}
 	return id
 }
+
+// newSeriesFixture writes media_index rows for a synthetic series and its
+// first season, plus a user with nothing else, and returns all three ids. The
+// cleanup drops the user's library and interactions before the index rows
+// they point at.
+func newSeriesFixture(t *testing.T, dbConn *sqlx.DB, tvID int) (userID uuid.UUID, series, season int) {
+	t.Helper()
+	ctx := context.Background()
+	userID = uuid.New()
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = dbConn.ExecContext(ctx, `delete from media_list where user_id = $1`, userID)
+		_, _ = dbConn.ExecContext(ctx, `delete from users where id = $1`, userID)
+		_, _ = dbConn.ExecContext(ctx, `delete from media_index where id = $1 and media_type in ('tv', 'season')`, tvID)
+	})
+	if err := dbConn.GetContext(ctx, &series, `
+		insert into media_index (id, media_type) values ($1, 'tv') returning media_id
+	`, tvID); err != nil {
+		t.Fatalf("index series: %v", err)
+	}
+	if err := dbConn.GetContext(ctx, &season, `
+		insert into media_index (id, season_number, media_type) values ($1, 1, 'season') returning media_id
+	`, tvID); err != nil {
+		t.Fatalf("index season: %v", err)
+	}
+	if err := users.NewRepository(dbConn).EnsureUser(ctx, userID); err != nil {
+		t.Fatalf("EnsureUser: %v", err)
+	}
+	return userID, series, season
+}
+
+// Tracking any season of a series, or any series-level interaction, makes
+// the series seen, so the feed never offers a show the user is watching.
+func TestSeenAdapter_ASeasonMarksItsSeriesSeen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-dependent test in -short mode")
+	}
+	dbConn := openTestDB(t)
+	tests := []struct {
+		name     string
+		tvID     int
+		onSeries bool   // the touch is on the series, not its season
+		touch    string // $1 user, $2 the season or series media_id
+	}{
+		{"tracking a season", 2_100_000_060, false,
+			`insert into media_list (user_id, media_id, media_type, status) values ($1, $2, 'season', 'watching')`},
+		{"rating a season", 2_100_000_061, false,
+			`insert into interactions (user_id, media_id, media_type, kind, rating) values ($1, $2, 'season', 'rated', 90)`},
+		{"logging the series", 2_100_000_062, true,
+			`insert into interactions (user_id, media_id, media_type, kind) values ($1, $2, 'tv', 'logged')`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			userID, series, season := newSeriesFixture(t, dbConn, tt.tvID)
+			touched := season
+			if tt.onSeries {
+				touched = series
+			}
+			if _, err := dbConn.ExecContext(context.Background(), tt.touch, userID, touched); err != nil {
+				t.Fatalf("touch: %v", err)
+			}
+
+			seen, err := newSeenAdapter(dbConn).SeenMediaIDs(context.Background(), userID)
+			if err != nil {
+				t.Fatalf("SeenMediaIDs: %v", err)
+			}
+			if !seen[series] {
+				t.Errorf("seen = %v, want series %d in it", seen, series)
+			}
+		})
+	}
+}
+
+// A season interaction carries its series' media_id, which the rollup keys
+// the season's signal by.
+func TestSignalAdapter_PointsASeasonAtItsSeries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-dependent test in -short mode")
+	}
+	dbConn := openTestDB(t)
+	userID, series, season := newSeriesFixture(t, dbConn, 2_100_000_063)
+	if _, err := dbConn.ExecContext(context.Background(), `
+		insert into interactions (user_id, media_id, media_type, kind, rating)
+		values ($1, $2, 'season', 'rated', 90)
+	`, userID, season); err != nil {
+		t.Fatalf("insert interaction: %v", err)
+	}
+
+	rows, err := newSignalAdapter(dbConn).ListByUser(context.Background(), userID, 0)
+	if err != nil {
+		t.Fatalf("ListByUser: %v", err)
+	}
+	if len(rows) != 1 || rows[0].MediaID != season || rows[0].SeriesMediaID != series {
+		t.Fatalf("rows = %+v, want season %d pointing at series %d", rows, season, series)
+	}
+}
+
+// A history mixes films and series. Each comes back with its own type, and a
+// series' combined genres arrive split into the film genres they merge.
+func TestCatalogAdapter_LooksUpFilmsAndSeriesTogether(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-dependent test in -short mode")
+	}
+	dbConn := openTestDB(t)
+	ctx := context.Background()
+
+	var film, series int
+	if err := dbConn.GetContext(ctx, &film, `
+		select mi.media_id from media_index mi join movies m on m.movie_id = mi.id
+		where mi.media_type = 'movie' limit 1
+	`); err != nil {
+		t.Skipf("no cached film: %v", err)
+	}
+	if err := dbConn.GetContext(ctx, &series, `
+		select mi.media_id from media_index mi join tv_series s on s.tv_id = mi.id
+		where mi.media_type = 'tv' and s.genre_ids && '{10759,10765,10768}'::int[] limit 1
+	`); err != nil {
+		t.Skipf("no cached series with a combined genre: %v", err)
+	}
+
+	cands, err := newCatalogAdapter(movies.NewRepository(dbConn), tv.NewRepository(dbConn)).
+		CandidatesByMediaIDs(ctx, []int{film, series})
+	if err != nil {
+		t.Fatalf("CandidatesByMediaIDs: %v", err)
+	}
+	types := map[int]string{}
+	for _, c := range cands {
+		types[c.MediaID] = c.Features.MediaType
+		if c.MediaType == "tv" {
+			for _, g := range c.Features.GenreIDs {
+				if g == 10759 || g == 10765 || g == 10768 {
+					t.Errorf("series %d keeps combined genre %d; want it split into film genres", c.MediaID, g)
+				}
+			}
+		}
+	}
+	if types[film] != "movie" || types[series] != "tv" {
+		t.Errorf("types = %v, want film %d as movie and series %d as tv", types, film, series)
+	}
+}

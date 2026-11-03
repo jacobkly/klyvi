@@ -77,6 +77,9 @@ type InteractionRow struct {
 	Kind      string
 	Rating    *int
 	AgeDays   float64
+	// SeriesMediaID is a season's series' media_id, which its signal rolls up
+	// to. Zero for any other row, or for a season whose series is not indexed.
+	SeriesMediaID int
 }
 
 // Orchestrator wires a tier cascade to a user-facing feed.
@@ -210,12 +213,16 @@ func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, depth int) ([
 		return nil, err
 	}
 
-	scorer := o.pickScorer(len(interactions))
+	// The tier reads the signal the scorers will use, so rows that add nothing
+	// (a season with no indexed series, a neutral rating) do not promote a user
+	// into a tier with an empty taste.
+	signal, volume := aggregateSignal(o.cfg, interactions)
+	scorer := o.pickScorer(volume)
 	if scorer == nil {
 		return []Scored{}, nil
 	}
 
-	user, err := o.buildUserContext(ctx, userID, interactions, seen)
+	user, err := o.buildUserContext(ctx, userID, signal, seen)
 	if err != nil {
 		return nil, err
 	}
@@ -331,8 +338,8 @@ func (o *Orchestrator) fillCardDetails(ctx context.Context, scored []Scored) err
 	return nil
 }
 
-// pickScorer applies the tier cascade. Slice 4-7/4-8 will introduce
-// Tier 1/2; until then everyone gets Tier 0.
+// pickScorer applies the tier cascade to the number of interactions the
+// user's signal is built from.
 func (o *Orchestrator) pickScorer(signalVolume int) Scorer {
 	if signalVolume >= 20 && o.tier2 != nil {
 		return o.tier2
@@ -343,12 +350,11 @@ func (o *Orchestrator) pickScorer(signalVolume int) Scorer {
 	return o.tier0
 }
 
-// buildUserContext turns raw interactions into the SignalItem slices a
-// Scorer consumes. Looks up MediaFeatures from the catalog for every
-// interacted media id — the cost is bounded by the user's interaction
-// count (typically <100).
-func (o *Orchestrator) buildUserContext(ctx context.Context, userID uuid.UUID, interactions []InteractionRow, seen map[int]bool) (*UserContext, error) {
-	signal := AggregateSignal(o.cfg, interactions)
+// buildUserContext turns the aggregated signal into the SignalItem slices a
+// Scorer consumes. Looks up MediaFeatures from the catalog for every media id
+// in it (films, and series for rolled-up seasons) — the cost is bounded by
+// the user's interaction count (typically <100).
+func (o *Orchestrator) buildUserContext(ctx context.Context, userID uuid.UUID, signal map[int]float64, seen map[int]bool) (*UserContext, error) {
 	liked, disliked := SplitLikedDisliked(signal)
 
 	ids := make([]int, 0, len(liked)+len(disliked))

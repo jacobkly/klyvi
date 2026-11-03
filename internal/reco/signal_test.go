@@ -50,20 +50,102 @@ func TestWeight_RecencyDecayHalvesAtHalfLife(t *testing.T) {
 	}
 }
 
-func TestAggregateSignal_SkipsSeasonRows(t *testing.T) {
+func TestAggregateSignal_CombinesAMoviesInteractions(t *testing.T) {
 	cfg := DefaultConfig()
 	rows := []InteractionRow{
 		{MediaID: 1, MediaType: "movie", Kind: "logged", AgeDays: 0},
-		{MediaID: 2, MediaType: "season", Kind: "logged", AgeDays: 0},
 		{MediaID: 1, MediaType: "movie", Kind: "rated", Rating: ptrInt(80), AgeDays: 30},
 	}
 
 	signal := AggregateSignal(cfg, rows)
-	if _, ok := signal[2]; ok {
-		t.Error("expected season row to be skipped (Phase 4 is movies-only)")
+	want := Weight(cfg, "logged", nil, 0) + Weight(cfg, "rated", ptrInt(80), 30)
+	if math.Abs(signal[1]-want) > 1e-9 {
+		t.Errorf("signal[1] = %f, want the sum %f", signal[1], want)
 	}
-	if signal[1] <= 0 {
-		t.Errorf("expected combined positive signal for media 1, got %f", signal[1])
+}
+
+// A season's signal belongs to its series, keyed by the series' media_id.
+// Averaging the seasons keeps a strong S1 and a weak S4 from reading as two
+// votes for the show.
+func TestAggregateSignal_SeasonsRollUpToTheirSeriesAsAMean(t *testing.T) {
+	cfg := DefaultConfig()
+	const series, s1, s4 = 500, 501, 504
+	mixed := AggregateSignal(cfg, []InteractionRow{
+		{MediaID: s1, MediaType: "season", SeriesMediaID: series, Kind: "rated", Rating: ptrInt(90)},
+		{MediaID: s4, MediaType: "season", SeriesMediaID: series, Kind: "rated", Rating: ptrInt(30)},
+	})
+	allHigh := AggregateSignal(cfg, []InteractionRow{
+		{MediaID: s1, MediaType: "season", SeriesMediaID: series, Kind: "rated", Rating: ptrInt(90)},
+		{MediaID: s4, MediaType: "season", SeriesMediaID: series, Kind: "rated", Rating: ptrInt(90)},
+	})
+
+	if mixed[series] >= allHigh[series] {
+		t.Errorf("S1 high + S4 low = %f, want weaker than all seasons high = %f", mixed[series], allHigh[series])
+	}
+	want := (Weight(cfg, "rated", ptrInt(90), 0) + Weight(cfg, "rated", ptrInt(30), 0)) / 2
+	if math.Abs(mixed[series]-want) > 1e-9 {
+		t.Errorf("series signal = %f, want the season mean %f", mixed[series], want)
+	}
+	for _, season := range []int{s1, s4} {
+		if _, ok := mixed[season]; ok {
+			t.Errorf("season %d kept its own signal; it should only count toward the series", season)
+		}
+	}
+}
+
+// A season's own interactions add up like a movie's before the seasons are
+// averaged, so logging and rating one season is one season, not two.
+func TestAggregateSignal_ASeasonsInteractionsCombineBeforeTheMean(t *testing.T) {
+	cfg := DefaultConfig()
+	signal := AggregateSignal(cfg, []InteractionRow{
+		{MediaID: 501, MediaType: "season", SeriesMediaID: 500, Kind: "logged"},
+		{MediaID: 501, MediaType: "season", SeriesMediaID: 500, Kind: "rated", Rating: ptrInt(90)},
+		{MediaID: 502, MediaType: "season", SeriesMediaID: 500, Kind: "rated", Rating: ptrInt(70)},
+	})
+
+	s1 := Weight(cfg, "logged", nil, 0) + Weight(cfg, "rated", ptrInt(90), 0)
+	s2 := Weight(cfg, "rated", ptrInt(70), 0)
+	if want := (s1 + s2) / 2; math.Abs(signal[500]-want) > 1e-9 {
+		t.Errorf("series signal = %f, want %f", signal[500], want)
+	}
+}
+
+func TestAggregateSignal_OneRatedSeasonEqualsTheSameRatingOnTheSeries(t *testing.T) {
+	cfg := DefaultConfig()
+	season := AggregateSignal(cfg, []InteractionRow{
+		{MediaID: 501, MediaType: "season", SeriesMediaID: 500, Kind: "rated", Rating: ptrInt(80), AgeDays: 12},
+	})
+	series := AggregateSignal(cfg, []InteractionRow{
+		{MediaID: 500, MediaType: "tv", Kind: "rated", Rating: ptrInt(80), AgeDays: 12},
+	})
+
+	if season[500] == 0 || season[500] != series[500] {
+		t.Errorf("one rated season = %f, series-level rating = %f, want equal and non-zero", season[500], series[500])
+	}
+}
+
+// Series-level interactions (a dismissed series card, say) count directly,
+// on top of the season mean.
+func TestAggregateSignal_SeriesInteractionsAddToTheSeasonMean(t *testing.T) {
+	cfg := DefaultConfig()
+	signal := AggregateSignal(cfg, []InteractionRow{
+		{MediaID: 501, MediaType: "season", SeriesMediaID: 500, Kind: "rated", Rating: ptrInt(90)},
+		{MediaID: 500, MediaType: "tv", Kind: "dismissed"},
+	})
+
+	want := Weight(cfg, "rated", ptrInt(90), 0) + Weight(cfg, "dismissed", nil, 0)
+	if math.Abs(signal[500]-want) > 1e-9 {
+		t.Errorf("series signal = %f, want %f", signal[500], want)
+	}
+}
+
+// A season whose series has no media_index row has nowhere to roll up to.
+func TestAggregateSignal_SkipsASeasonWithNoSeries(t *testing.T) {
+	signal := AggregateSignal(DefaultConfig(), []InteractionRow{
+		{MediaID: 501, MediaType: "season", Kind: "rated", Rating: ptrInt(90)},
+	})
+	if len(signal) != 0 {
+		t.Errorf("signal = %v, want empty", signal)
 	}
 }
 

@@ -29,16 +29,18 @@ func newRecoOrchestrator(dbConn *sqlx.DB, movieRepo *movies.Repository, tvRepo *
 }
 
 // catalogAdapter wraps movies.Repository to satisfy reco.CatalogRepository.
-// Translates the movies cache rows into reco's MediaFeatures shape. Reason
-// names fall back to the series cache for the genres and keywords only
+// Translates the movies cache rows into reco's MediaFeatures shape. A user's
+// history can hold series (seasons roll up to them), so features fall back to
+// the series cache, and so do reason names, for the genres and keywords only
 // series carry.
 type catalogAdapter struct {
-	repo  *movies.Repository
-	names *reasonNames
+	repo   *movies.Repository
+	tvRepo *tv.Repository
+	names  *reasonNames
 }
 
 func newCatalogAdapter(repo *movies.Repository, tvRepo *tv.Repository) *catalogAdapter {
-	return &catalogAdapter{repo: repo, names: newReasonNames(repo, tvRepo)}
+	return &catalogAdapter{repo: repo, tvRepo: tvRepo, names: newReasonNames(repo, tvRepo)}
 }
 
 func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) ([]reco.Candidate, error) {
@@ -49,12 +51,33 @@ func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) (
 	return rowsToCandidates(rows), nil
 }
 
+// CandidatesByMediaIDs looks the ids up as films, then sends the ids no film
+// matched to the series cache. A films-only history makes one query.
 func (a *catalogAdapter) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) ([]reco.Candidate, error) {
 	rows, err := a.repo.CandidatesByMediaIDs(ctx, mediaIDs)
 	if err != nil {
 		return nil, err
 	}
-	return rowsToCandidates(rows), nil
+	cands := rowsToCandidates(rows)
+
+	found := make(map[int]bool, len(cands))
+	for _, c := range cands {
+		found[c.MediaID] = true
+	}
+	var rest []int
+	for _, id := range mediaIDs {
+		if !found[id] {
+			rest = append(rest, id)
+		}
+	}
+	if len(rest) == 0 {
+		return cands, nil
+	}
+	seriesRows, err := a.tvRepo.CandidatesByMediaIDs(ctx, rest)
+	if err != nil {
+		return nil, err
+	}
+	return append(cands, seriesToCandidates(seriesRows)...), nil
 }
 
 func (a *catalogAdapter) CandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]reco.Candidate, error) {
@@ -113,6 +136,37 @@ func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 	return cands
 }
 
+// seriesToCandidates is rowsToCandidates for the series cache. Genres are
+// read into the film genre space, so a series and a film that share a genre
+// score as sharing it.
+func seriesToCandidates(rows []tv.RecoCandidateRow) []reco.Candidate {
+	cands := make([]reco.Candidate, 0, len(rows))
+	for _, row := range rows {
+		year := yearOf(row.FirstAirDate)
+		feat := &reco.MediaFeatures{
+			MediaID:     row.MediaID,
+			MediaType:   "tv",
+			GenreIDs:    reco.CanonicalTVGenres(row.GenreIDs),
+			KeywordIDs:  row.KeywordIDs,
+			Year:        year,
+			VoteAverage: row.VoteAverage,
+			VoteCount:   row.VoteCount,
+		}
+		cands = append(cands, reco.Candidate{
+			MediaID:      row.MediaID,
+			MediaType:    "tv",
+			TMDBID:       row.TVID,
+			Title:        derefString(row.Name),
+			PosterPath:   derefString(row.PosterPath),
+			BackdropPath: derefString(row.BackdropPath),
+			ReleaseYear:  year,
+			VoteAverage:  row.VoteAverage,
+			Features:     feat,
+		})
+	}
+	return cands
+}
+
 // derefString returns the string pointed to, or "" if the pointer is nil.
 func derefString(s *string) string {
 	if s == nil {
@@ -130,34 +184,34 @@ type signalAdapter struct {
 
 func newSignalAdapter(db *sqlx.DB) *signalAdapter { return &signalAdapter{db: db} }
 
+// signalSelect reads a user's interactions ($1), each season carrying its
+// series' media_id for the rollup (0 when the series is not indexed).
+const signalSelect = `
+	select i.media_id, i.media_type, i.kind, i.rating,
+	       extract(epoch from (now() - i.created_at)) / 86400.0 as age_days,
+	       coalesce(series.media_id, 0) as series_media_id
+	from interactions i
+	left join media_index season on season.media_id = i.media_id and season.media_type = 'season'
+	left join media_index series on series.id = season.id and series.media_type = 'tv'
+	where i.user_id = $1`
+
 func (a *signalAdapter) ListByUser(ctx context.Context, userID uuid.UUID, sinceDays int) ([]reco.InteractionRow, error) {
-	var query string
+	query := signalSelect + ` order by i.created_at desc`
 	args := []any{userID}
 	if sinceDays > 0 {
-		query = `
-			select media_id, media_type, kind, rating,
-			       extract(epoch from (now() - created_at)) / 86400.0 as age_days
-			from interactions
-			where user_id = $1 and created_at >= now() - make_interval(days => $2)
-			order by created_at desc
-		`
+		query = signalSelect + `
+			and i.created_at >= now() - make_interval(days => $2)
+			order by i.created_at desc`
 		args = append(args, sinceDays)
-	} else {
-		query = `
-			select media_id, media_type, kind, rating,
-			       extract(epoch from (now() - created_at)) / 86400.0 as age_days
-			from interactions
-			where user_id = $1
-			order by created_at desc
-		`
 	}
 
 	var rows []struct {
-		MediaID   int     `db:"media_id"`
-		MediaType string  `db:"media_type"`
-		Kind      string  `db:"kind"`
-		Rating    *int    `db:"rating"`
-		AgeDays   float64 `db:"age_days"`
+		MediaID       int     `db:"media_id"`
+		MediaType     string  `db:"media_type"`
+		Kind          string  `db:"kind"`
+		Rating        *int    `db:"rating"`
+		AgeDays       float64 `db:"age_days"`
+		SeriesMediaID int     `db:"series_media_id"`
 	}
 	if err := a.db.SelectContext(ctx, &rows, query, args...); err != nil {
 		return nil, err
@@ -166,11 +220,12 @@ func (a *signalAdapter) ListByUser(ctx context.Context, userID uuid.UUID, sinceD
 	out := make([]reco.InteractionRow, len(rows))
 	for i, r := range rows {
 		out[i] = reco.InteractionRow{
-			MediaID:   r.MediaID,
-			MediaType: r.MediaType,
-			Kind:      r.Kind,
-			Rating:    r.Rating,
-			AgeDays:   r.AgeDays,
+			MediaID:       r.MediaID,
+			MediaType:     r.MediaType,
+			Kind:          r.Kind,
+			Rating:        r.Rating,
+			AgeDays:       r.AgeDays,
+			SeriesMediaID: r.SeriesMediaID,
 		}
 	}
 	return out, nil
@@ -315,7 +370,8 @@ func (*parseErr) Error() string { return "parse error" }
 // seenAdapter unions the user's interactions + media_list rows to produce
 // the set of "already-touched" media_ids. The recommender filters out
 // these candidates so the feed never recommends something the user has
-// already engaged with.
+// already engaged with. A touched season adds its series, so tracking any
+// season of a show keeps the show out of the feed.
 type seenAdapter struct {
 	db *sqlx.DB
 }
@@ -325,9 +381,17 @@ func newSeenAdapter(db *sqlx.DB) *seenAdapter { return &seenAdapter{db: db} }
 func (a *seenAdapter) SeenMediaIDs(ctx context.Context, userID uuid.UUID) (map[int]bool, error) {
 	var ids []int
 	err := a.db.SelectContext(ctx, &ids, `
-		select media_id from interactions where user_id = $1
+		with touched as (
+			select media_id from interactions where user_id = $1
+			union
+			select media_id from media_list where user_id = $1
+		)
+		select media_id from touched
 		union
-		select media_id from media_list where user_id = $1
+		select series.media_id
+		from touched t
+		join media_index season on season.media_id = t.media_id and season.media_type = 'season'
+		join media_index series on series.id = season.id and series.media_type = 'tv'
 	`, userID)
 	if err != nil {
 		return nil, err

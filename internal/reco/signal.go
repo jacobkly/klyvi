@@ -50,22 +50,57 @@ func (c Config) baseForKind(kind string) float64 {
 
 // AggregateSignal turns a slice of interactions into per-media_id signed
 // signal strength. Multiple interactions for the same media combine
-// additively (after each is recency-decayed). Movies-only this phase —
-// season rows are skipped because the season→series rollup is deferred
-// until the TV recommender is built.
+// additively (after each is recency-decayed).
+//
+// A season's signal rolls up to its series as the mean over the seasons the
+// user has signal on, so a strong first season and a weak fourth average out
+// instead of counting as two votes for the show. Series-level interactions
+// add to that mean directly. A season with no indexed series is skipped.
 func AggregateSignal(cfg Config, interactions []InteractionRow) map[int]float64 {
+	signal, _ := aggregateSignal(cfg, interactions)
+	return signal
+}
+
+// aggregateSignal is AggregateSignal plus the number of interactions the
+// signal used, which is the volume the tier cascade reads.
+func aggregateSignal(cfg Config, interactions []InteractionRow) (map[int]float64, int) {
 	out := make(map[int]float64, len(interactions))
+	seasons := make(map[int]map[int]float64) // series media_id → season media_id → weight
+	used := 0
 	for _, it := range interactions {
-		if it.MediaType != "movie" {
+		switch it.MediaType {
+		case "movie", "tv":
+		case "season":
+			if it.SeriesMediaID == 0 {
+				continue
+			}
+		default:
 			continue
 		}
 		w := Weight(cfg, it.Kind, it.Rating, it.AgeDays)
 		if w == 0 {
 			continue
 		}
-		out[it.MediaID] += w
+		used++
+		if it.MediaType != "season" {
+			out[it.MediaID] += w
+			continue
+		}
+		bySeason := seasons[it.SeriesMediaID]
+		if bySeason == nil {
+			bySeason = make(map[int]float64)
+			seasons[it.SeriesMediaID] = bySeason
+		}
+		bySeason[it.MediaID] += w
 	}
-	return out
+	for series, bySeason := range seasons {
+		var sum float64
+		for _, w := range bySeason {
+			sum += w
+		}
+		out[series] += sum / float64(len(bySeason))
+	}
+	return out, used
 }
 
 // SplitLikedDisliked separates the aggregated signal into positive and
