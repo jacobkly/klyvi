@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # ---------- build stage ----------
-# Toolchain tracks go.mod (go 1.24.x). Alpine keeps the build image small.
-FROM golang:1.24-alpine AS build
+# Toolchain tracks go.mod (go 1.27.x). Alpine keeps the build image small.
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 
 # Download modules in their own layer so it is cached until go.mod/go.sum change.
