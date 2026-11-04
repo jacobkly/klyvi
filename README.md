@@ -172,6 +172,62 @@ TMDB allows cached data to be kept for up to six months. Run the refresh nightly
 go run ./cmd/seed-catalog -refresh-older-than 150d -timeout 2h
 ```
 
+### Nightly jobs and backups
+
+`deploy/nightly.sh` is the one cron entry for the catalog refresh, the notifications job and the database backup, in that order. Each step runs even when the one before it failed, and the run exits non-zero if any step failed. The refresh and notifications jobs run from the deployed API image, so they always match the live API.
+
+```
+30 3 * * * sh /path/to/deploy/nightly.sh > /var/log/klyvi-nightly.log 2>&1
+```
+
+The backup signs in with its own role. Migration `00034` creates `backup_job`, which reads everything and writes nothing. It can't sign in until you give it a password in the Supabase SQL editor:
+
+```sql
+ALTER ROLE backup_job WITH LOGIN PASSWORD '...';
+```
+
+Then create `deploy/.env.backup` on the server, using the host from Supabase's session pooler connection string. The transaction pooler won't work with `pg_dump`:
+
+```bash
+BACKUP_DIR=/mnt/nas/klyvi-backups
+PGHOST=aws-0-us-east-2.pooler.supabase.com
+PGPORT=5432
+PGUSER=backup_job.<project-ref>
+PGPASSWORD='...'
+PGDATABASE=postgres
+```
+
+`BACKUP_DIR` must already exist. The script won't create it, so an unmounted NAS shows up as a failed run instead of filling the server's disk. Point it at a subfolder of the mount for that reason.
+
+Each run writes `klyvi-<UTC time>.dump`, reads the whole file back, and only then removes all but the newest 14 (`BACKUP_KEEP`). A failed run removes nothing. It uses `postgres:17-alpine` through Docker (`PG_IMAGE`), whose major version can't be older than the database's.
+
+Dumps hold email addresses and password hashes, so keep them private. Live sessions and sign-in tokens are left out. Avatar files live in Supabase Storage and are not in the dump.
+
+After the first run, check that the accounts came through:
+
+```bash
+pg_restore --list klyvi-<UTC time>.dump | grep "TABLE DATA auth users"
+```
+
+To test the scripts themselves, run `sh deploy/scripts_test.sh`. It uses stand-ins and touches nothing outside a temp folder.
+
+### Restoring a backup
+
+Restore into an empty Supabase project, where `TARGET` is its session pooler connection string:
+
+```bash
+# The app's tables, along with their row level security and grants.
+pg_restore --no-owner --clean --if-exists --schema=public -d "$TARGET" klyvi-<UTC time>.dump
+
+# The accounts. Users go first, since identities point at them.
+pg_restore --no-owner --data-only --schema=auth --table=users -d "$TARGET" klyvi-<UTC time>.dump
+pg_restore --no-owner --data-only --schema=auth --table=identities -d "$TARGET" klyvi-<UTC time>.dump
+```
+
+Everyone has to sign in again, since live sessions aren't in the backup. Migrations pick up where the dump left off, since `goose_db_version` is restored with the rest of `public`.
+
+These steps have been rehearsed on plain Postgres 17 with a stand-in `auth` schema, not on a real Supabase project. Try them on a spare project before you need them.
+
 ### Local database (rehearsing migrations)
 
 A disposable local Supabase stack (Postgres 17 with pgvector and the Supabase

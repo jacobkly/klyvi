@@ -1,6 +1,12 @@
 # Shared edge stack: one Cloudflare tunnel + one auto-updater for the whole
 # server, reused by every app and kept separate so app deploys never touch
 # ingress. Create the shared network first: `docker network create edge`.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -8,6 +14,7 @@ services:
     # Routes live in the Cloudflare dashboard, each pointing at a service on the
     # edge network, e.g. http://klyvi-api:8080.
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    logging: *logging
     networks:
       - edge
 
@@ -18,6 +25,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     # Watches every labelled container on the host — one instance covers all apps.
     command: --interval 60 --label-enable --cleanup
+    logging: *logging
 
 networks:
   edge:

@@ -5,11 +5,23 @@ services:
     image: ghcr.io/jacobkly/klyvi:latest
     restart: unless-stopped
     env_file: .env
+    # A hard cap, so a runaway request can't take the home server down with it. Go's
+    # own target sits a little under it, so it collects harder before the kill.
+    mem_limit: 512m
+    environment:
+      GOMEMLIMIT: 440MiB
     # Let the graceful-shutdown drain (10s, main.go) finish before SIGKILL.
     stop_grace_period: 20s
     labels:
       # Opt into the edge stack's Watchtower auto-updates.
       - "com.centurylinklabs.watchtower.enable=true"
+    # Capped at 30 MB, with the oldest lines overwritten first. The logs hold IP
+    # addresses, and the privacy page describes this limit, so change both together.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - edge
     # No ports — reachable only through the tunnel, over the edge network.
