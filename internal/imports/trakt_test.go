@@ -241,6 +241,20 @@ func TestParseTraktExport_RefusesAHugeEntry(t *testing.T) {
 	}
 }
 
+// A reader that refuses once and then carries on would hand the decoder a file
+// with a hole in it, and the refusal would surface as a truncated file.
+func TestCompactJSON_RefusalSticks(t *testing.T) {
+	r := newCompactJSON(strings.NewReader(`[{"title": "` + strings.Repeat("x", maxEntryBytes) + `"}]`))
+	buf := make([]byte, maxEntryBytes+64)
+
+	if _, err := r.Read(buf); !errors.Is(err, errEntryTooLarge) {
+		t.Fatalf("first read: err = %v, want %v", err, errEntryTooLarge)
+	}
+	if n, err := r.Read(buf); n != 0 || !errors.Is(err, errEntryTooLarge) {
+		t.Errorf("next read: n = %d, err = %v, want 0 and %v", n, err, errEntryTooLarge)
+	}
+}
+
 // The row cap holds while reading, so a crafted export cannot grow the
 // roll-up far past what Start would refuse anyway.
 func TestParseTraktExport_StopsAtTheRowCap(t *testing.T) {

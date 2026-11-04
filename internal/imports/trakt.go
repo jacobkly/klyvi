@@ -113,7 +113,8 @@ type compactJSON struct {
 	escaped  bool
 	space    bool // the last byte passed on was whitespace
 	depth    int
-	entry    int // bytes passed on since the top-level list's last comma
+	entry    int   // bytes passed on since the top-level list's last comma
+	err      error // a refusal, returned by every later Read as well
 }
 
 func newCompactJSON(r io.Reader) *compactJSON {
@@ -121,12 +122,18 @@ func newCompactJSON(r io.Reader) *compactJSON {
 }
 
 func (c *compactJSON) Read(p []byte) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
 	for {
 		n, err := c.r.Read(p)
 		out := 0
 		for _, b := range p[:n] {
 			b, keep, stepErr := c.step(b)
 			if stepErr != nil {
+				// The decoder ignores an error that comes with bytes and reads
+				// again, so the refusal has to still be there on the next Read.
+				c.err = stepErr
 				return out, stepErr
 			}
 			if keep {
