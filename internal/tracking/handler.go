@@ -29,7 +29,7 @@ func (a *API) Add(w http.ResponseWriter, r *http.Request) {
 
 	var req AddRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		response.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
@@ -59,7 +59,7 @@ func (a *API) Update(w http.ResponseWriter, r *http.Request) {
 
 	var req UpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		response.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
@@ -123,7 +123,7 @@ func (a *API) ResetScores(w http.ResponseWriter, r *http.Request) {
 
 	var req scopeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		response.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
@@ -149,7 +149,7 @@ func (a *API) DeleteList(w http.ResponseWriter, r *http.Request) {
 
 	var req scopeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		response.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 

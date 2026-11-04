@@ -1,6 +1,7 @@
 package onboarding
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 
@@ -35,7 +36,8 @@ func (a *API) Pool(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := a.service.ListEnriched(r.Context(), limit)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("onboarding: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 

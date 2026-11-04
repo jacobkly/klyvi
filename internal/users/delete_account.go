@@ -48,8 +48,8 @@ func (s *Service) DeleteAccount(ctx context.Context, id uuid.UUID) error {
 	if err := s.repo.DeleteAccountData(ctx, id); err != nil {
 		return fmt.Errorf("delete account data: %w", err)
 	}
-	// The users row is gone, so a sign-in with a still-valid token must
-	// recreate it.
+	// The users row is gone. If removing the auth user fails below, the client
+	// comes back with the same token to retry, and that request needs the row.
 	s.ensured.Remove(id.String())
 	if s.feed != nil {
 		s.feed.Invalidate(id)
@@ -64,5 +64,8 @@ func (s *Service) DeleteAccount(ctx context.Context, id uuid.UUID) error {
 	if err := s.deleter.DeleteAuthUser(ctx, id.String()); err != nil {
 		return fmt.Errorf("delete auth user: %w", err)
 	}
+	// Only now is the account really gone. Its token stays valid for up to an
+	// hour, so refuse it rather than let it recreate the row.
+	s.deleted.Set(id.String(), struct{}{})
 	return nil
 }

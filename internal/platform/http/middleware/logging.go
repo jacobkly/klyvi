@@ -50,18 +50,13 @@ func LoggerMiddleware(next http.Handler) http.Handler {
 
 		reqID := chimw.GetReqID(r.Context())
 
-		ip := r.RemoteAddr
-		if realIP := r.Header.Get("X-Forwarded-For"); realIP != "" {
-			ip = realIP
-		}
-
 		log.Printf(
 			"[REQUEST] id=%s method=%s path=%s query=%s ip=%s ua=%q",
 			reqID,
 			r.Method,
 			r.URL.Path,
 			r.URL.RawQuery,
-			ip,
+			ClientIP(r),
 			r.UserAgent(),
 		)
 

@@ -3,6 +3,7 @@ package imports
 import (
 	"errors"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -59,6 +60,7 @@ func (a *API) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	imp, err := a.service.Start(r.Context(), userID, source, data)
+	var badFile badFileError
 	switch {
 	case errors.Is(err, ErrImportActive):
 		response.WriteError(w, http.StatusConflict, err.Error())
@@ -66,8 +68,12 @@ func (a *API) Create(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrTooManyRows), errors.Is(err, ErrExportTooLarge):
 		response.WriteError(w, http.StatusRequestEntityTooLarge, err.Error())
 		return
-	case err != nil:
+	case errors.As(err, &badFile):
 		response.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	case err != nil:
+		log.Printf("imports: %v", err)
+		response.WriteError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 

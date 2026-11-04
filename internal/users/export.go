@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -55,7 +56,7 @@ func (s *Service) ExportTrackingCSV(ctx context.Context, id uuid.UUID) ([]byte, 
 		_ = w.Write([]string{
 			strconv.Itoa(e.MediaID),
 			e.MediaType,
-			derefStr(e.Title),
+			csvCell(derefStr(e.Title)),
 			intField(e.SeasonNumber),
 			derefStr(e.Status),
 			intField(e.Score),
@@ -111,6 +112,16 @@ func (s *Service) ExportAccountData(ctx context.Context, id uuid.UUID) ([]byte, 
 		Tracking     []tracking.Entry           `json:"tracking"`
 		Interactions []interactions.Interaction `json:"interactions"`
 	}{user, entries, events}, "", "  ")
+}
+
+// csvCell keeps a value from running as a formula when the file is opened in a
+// spreadsheet. Titles come from TMDB, so the export can't trust them. A real
+// title that starts this way, such as "+1", shows with a leading apostrophe.
+func csvCell(s string) string {
+	if s != "" && strings.ContainsRune("=+-@\t\r", rune(s[0])) {
+		return "'" + s
+	}
+	return s
 }
 
 func derefStr(p *string) string {

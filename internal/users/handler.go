@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 
 	"klyvi-api/internal/platform/http/middleware"
@@ -32,7 +33,7 @@ func (a *API) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := a.service.GetMe(r.Context(), id)
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if user == nil {
@@ -59,13 +60,13 @@ func (a *API) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	var req UpdateProfileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		response.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
 	user, err := a.service.UpdateMe(r.Context(), id, req)
 	if err != nil {
-		response.WriteError(w, statusForProfileError(err), err.Error())
+		respondError(w, statusForProfileError(err), err)
 		return
 	}
 	if user == nil {
@@ -145,6 +146,7 @@ func (a *API) DeleteMe(w http.ResponseWriter, r *http.Request) {
 			response.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		log.Printf("users: %v", err)
 		response.WriteError(w, http.StatusInternalServerError, "could not delete account")
 		return
 	}
@@ -210,7 +212,7 @@ func (a *API) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 
 	user, err := a.service.UpdateAvatar(r.Context(), id, data)
 	if err != nil {
-		response.WriteError(w, statusForAvatarError(err), err.Error())
+		respondError(w, statusForAvatarError(err), err)
 		return
 	}
 	if user == nil {
@@ -232,7 +234,7 @@ func (a *API) DeleteAvatar(w http.ResponseWriter, r *http.Request) {
 
 	user, err := a.service.DeleteAvatar(r.Context(), id)
 	if err != nil {
-		response.WriteError(w, statusForAvatarError(err), err.Error())
+		respondError(w, statusForAvatarError(err), err)
 		return
 	}
 	if user == nil {
@@ -242,6 +244,19 @@ func (a *API) DeleteAvatar(w http.ResponseWriter, r *http.Request) {
 
 	response.WriteSuccess(w, http.StatusOK, "v1",
 		middleware.StatsFromContext(r.Context()), user)
+}
+
+// respondError writes err at the status it maps to. A 500 is the server's fault
+// and its text can come from the database or an upstream service, so the client
+// gets a generic message and the log gets the detail. ErrStorageNotConfigured is
+// fixed text about the deployment, so it stays as it is.
+func respondError(w http.ResponseWriter, status int, err error) {
+	if status == http.StatusInternalServerError && !errors.Is(err, ErrStorageNotConfigured) {
+		log.Printf("users: %v", err)
+		response.WriteError(w, status, "internal server error")
+		return
+	}
+	response.WriteError(w, status, err.Error())
 }
 
 func statusForAvatarError(err error) int {

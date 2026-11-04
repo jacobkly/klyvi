@@ -13,6 +13,7 @@ import (
 
 	"klyvi-api/internal/platform/cache"
 	"klyvi-api/internal/platform/http/middleware"
+	"klyvi-api/internal/platform/http/response"
 )
 
 // MaxSettingsBytes caps the opaque settings blob. Large enough for every UI
@@ -77,6 +78,11 @@ type Service struct {
 	// row was removed behind the server's back.
 	ensured *cache.TTL[struct{}]
 
+	// deleted remembers accounts removed in the last deletedUsersTTL. Their
+	// tokens still verify, and without this one would recreate the users row.
+	// A restart forgets the list, which at worst leaves one empty row behind.
+	deleted *cache.TTL[struct{}]
+
 	// feed is nil unless the recommender's feed cache is wired; account
 	// deletion drops the user's cached feed through it.
 	feed FeedInvalidator
@@ -101,12 +107,18 @@ func (s *Service) WithFeedInvalidator(f FeedInvalidator) *Service {
 const (
 	ensuredUsersMax = 10_000
 	ensuredUsersTTL = time.Hour
+
+	deletedUsersMax = 10_000
+	// deletedUsersTTL outlives any token issued before the deletion, since
+	// access tokens last an hour.
+	deletedUsersTTL = 2 * time.Hour
 )
 
 func NewService(repo UserRepository) *Service {
 	return &Service{
 		repo:    repo,
 		ensured: cache.NewTTL[struct{}](ensuredUsersMax, ensuredUsersTTL),
+		deleted: cache.NewTTL[struct{}](deletedUsersMax, deletedUsersTTL),
 		now:     time.Now,
 	}
 }
@@ -137,10 +149,8 @@ func (s *Service) GetMe(ctx context.Context, id uuid.UUID) (*User, error) {
 
 // UpdateProfileRequest is the validated body for PATCH /v1/users/me.
 type UpdateProfileRequest struct {
-	Username  *string `json:"username"`
-	Bio       *string `json:"bio"`
-	AvatarURL *string `json:"avatar_url"`
-	BannerURL *string `json:"banner_url"`
+	Username *string `json:"username"`
+	Bio      *string `json:"bio"`
 	// Settings replaces the whole blob when present (the client owns the
 	// merge). Absent means unchanged.
 	Settings *json.RawMessage `json:"settings"`
@@ -175,12 +185,10 @@ func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileR
 		return nil, err
 	}
 	return s.repo.UpdateProfile(ctx, id, UpdateProfilePatch{
-		Username:  req.Username,
-		Bio:       req.Bio,
-		AvatarURL: req.AvatarURL,
-		BannerURL: req.BannerURL,
-		Settings:  req.Settings,
-		Birthday:  birthday,
+		Username: req.Username,
+		Bio:      req.Bio,
+		Settings: req.Settings,
+		Birthday: birthday,
 	})
 }
 
@@ -268,11 +276,16 @@ func unavailable(name, reason string) *UsernameAvailability {
 // user UUID is already in context. Failures are logged best-effort and do not
 // reject the request, on the assumption that catalog state is more useful to
 // the user than a 5xx if the upsert briefly fails. A failed upsert is retried
-// on the next request.
+// on the next request. A token belonging to an account deleted a moment ago is
+// refused, so it can't bring the row back.
 func (s *Service) EnsureUserMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if id, ok := middleware.UserUUIDFromContext(r.Context()); ok {
+				if _, gone := s.deleted.Get(id.String()); gone {
+					response.WriteError(w, http.StatusUnauthorized, "account deleted")
+					return
+				}
 				if _, done := s.ensured.Get(id.String()); !done {
 					if err := s.repo.EnsureUser(r.Context(), id); err != nil {
 						log.Printf("best-effort EnsureUser failed for %s: %v", id, err)

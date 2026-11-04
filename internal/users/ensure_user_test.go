@@ -59,13 +59,4 @@ func TestEnsureUserMiddleware_InsertsOncePerUser(t *testing.T) {
 	if repo.ensured[alice] != 1 || repo.ensured[bob] != 1 {
 		t.Fatalf("EnsureUser calls: alice=%d bob=%d, want 1 each", repo.ensured[alice], repo.ensured[bob])
 	}
-
-	// A deleted account that signs straight back in needs its row again.
-	if err := svc.DeleteAccount(context.Background(), alice); err != nil {
-		t.Fatalf("DeleteAccount: %v", err)
-	}
-	serveAs(t, h, alice)
-	if repo.ensured[alice] != 2 {
-		t.Errorf("EnsureUser calls for alice after account deletion = %d, want 2", repo.ensured[alice])
-	}
 }

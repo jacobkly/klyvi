@@ -88,6 +88,50 @@ func TestLoggerMiddleware_LogsTimingFields(t *testing.T) {
 	}
 }
 
+// A client can send any X-Forwarded-For it likes, so the log must not take the
+// address from it.
+func TestLoggerMiddleware_LogsTheAddressClientIPReports(t *testing.T) {
+	tests := []struct {
+		name   string
+		header map[string]string
+		want   string
+		absent string
+	}{
+		{
+			name:   "ignores a forged X-Forwarded-For",
+			header: map[string]string{"X-Forwarded-For": "6.6.6.6"},
+			want:   "ip=192.0.2.1 ",
+			absent: "6.6.6.6",
+		},
+		{
+			name:   "uses the Cloudflare header",
+			header: map[string]string{"X-Forwarded-For": "6.6.6.6", "CF-Connecting-IP": "203.0.113.9"},
+			want:   "ip=203.0.113.9 ",
+			absent: "6.6.6.6",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := captureLog(t)
+			h := middleware.LoggerMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/x", nil)
+			for k, v := range tt.header {
+				req.Header.Set(k, v)
+			}
+			h.ServeHTTP(httptest.NewRecorder(), req)
+
+			out := buf.String()
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("log output missing %q:\n%s", tt.want, out)
+			}
+			if strings.Contains(out, tt.absent) {
+				t.Errorf("log output contains the forged %q:\n%s", tt.absent, out)
+			}
+		})
+	}
+}
+
 // The whole path: a handler calls the real TMDB client on the request's
 // context, and the access log line reports it.
 func TestLoggerMiddleware_LogsCallsMadeByTheTMDBClient(t *testing.T) {

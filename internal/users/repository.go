@@ -269,7 +269,6 @@ type UpdateProfilePatch struct {
 	Username  *string
 	Bio       *string
 	AvatarURL *string
-	BannerURL *string
 	// Settings replaces the whole JSONB blob when non-nil.
 	Settings *json.RawMessage
 	// Birthday is tri-state — see OptionalDate.
@@ -299,13 +298,12 @@ func (r *Repository) UpdateProfile(ctx context.Context, id uuid.UUID, patch Upda
 			end,
 			bio        = coalesce($3, bio),
 			avatar_url = coalesce($4, avatar_url),
-			banner_url = coalesce($5, banner_url),
-			settings   = coalesce($6, settings),
-			birthday   = case when $7 then $8 else birthday end,
+			settings   = coalesce($5, settings),
+			birthday   = case when $6 then $7 else birthday end,
 			updated_at = now()
 		where id = $1
 		returning *
-	`, id, patch.Username, patch.Bio, patch.AvatarURL, patch.BannerURL, settingsArg(patch.Settings),
+	`, id, patch.Username, patch.Bio, patch.AvatarURL, settingsArg(patch.Settings),
 		patch.Birthday.Set, patch.Birthday.Value).StructScan(&u)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

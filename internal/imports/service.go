@@ -38,6 +38,13 @@ type SignalRecorder interface {
 	Record(ctx context.Context, userID uuid.UUID, req interactions.RecordRequest) (*interactions.Interaction, error)
 }
 
+// badFileError marks a problem with the upload itself. Its text is written for
+// the person uploading, so the handler returns it. Any other error from Start
+// is the server's fault.
+type badFileError struct{ error }
+
+func (e badFileError) Unwrap() error { return e.error }
+
 // MovieCacher ensures a matched film's catalog detail (title, poster, genres,
 // keywords) is persisted. Without this a film that isn't already in the cache
 // tracks as an "Untitled" row with no reco features. Behaviour-named per repo
@@ -85,11 +92,11 @@ func (s *Service) WithSeries(sc SeriesCatalog) *Service {
 // worker, lets a broken or oversized file be refused before any job exists.
 func (s *Service) Start(ctx context.Context, userID uuid.UUID, source string, data []byte) (*Import, error) {
 	if !ValidSource(source) {
-		return nil, fmt.Errorf("unsupported source %q", source)
+		return nil, badFileError{fmt.Errorf("unsupported source %q", source)}
 	}
 	rows, err := parseImport(Source(source), data)
 	if err != nil {
-		return nil, fmt.Errorf("could not parse import file: %w", err)
+		return nil, badFileError{fmt.Errorf("could not parse import file: %w", err)}
 	}
 	if len(rows) > maxImportRows {
 		return nil, ErrTooManyRows

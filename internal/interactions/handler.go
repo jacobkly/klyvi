@@ -27,7 +27,7 @@ func (a *API) Record(w http.ResponseWriter, r *http.Request) {
 
 	var req RecordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		response.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
@@ -54,7 +54,7 @@ func (a *API) RecordBatch(w http.ResponseWriter, r *http.Request) {
 		Interactions []RecordRequest `json:"interactions"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.WriteError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		response.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 

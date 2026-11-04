@@ -80,7 +80,7 @@ func (a *API) GetMovieCollection(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetTrendingMovies(w http.ResponseWriter, r *http.Request) {
 	trending, err := a.service.GetTrendingMovies(r.Context())
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -96,7 +96,7 @@ func (a *API) GetTrendingMovies(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetUpcomingMovies(w http.ResponseWriter, r *http.Request) {
 	trending, err := a.service.GetUpcomingMovies(r.Context())
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -112,7 +112,7 @@ func (a *API) GetUpcomingMovies(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetPopularMovies(w http.ResponseWriter, r *http.Request) {
 	trending, err := a.service.GetPopularMovies(r.Context())
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 
@@ -128,7 +128,7 @@ func (a *API) GetPopularMovies(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetTopRatedMovies(w http.ResponseWriter, r *http.Request) {
 	trending, err := a.service.GetTopRatedMovies(r.Context())
 	if err != nil {
-		response.WriteError(w, http.StatusInternalServerError, err.Error())
+		respondError(w, err)
 		return
 	}
 
