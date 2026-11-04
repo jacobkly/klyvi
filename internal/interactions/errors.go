@@ -28,6 +28,9 @@ func statusForError(err error) (int, string) {
 	if errors.As(err, &ve) {
 		return http.StatusBadRequest, ve.Error()
 	}
+	if errors.Is(err, ErrDailyCapReached) {
+		return http.StatusTooManyRequests, ErrDailyCapReached.Error()
+	}
 	return http.StatusInternalServerError, "internal server error"
 }
 

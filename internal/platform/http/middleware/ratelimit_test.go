@@ -141,3 +141,62 @@ func TestRateLimit_KeysOnCFConnectingIPBehindTunnel(t *testing.T) {
 		t.Errorf("client B got %d, want 200", code)
 	}
 }
+
+// One IPv6 customer usually holds a whole /64, so keying on the full address
+// would hand them a fresh bucket per address. An IPv4-mapped address is the
+// same client as the plain IPv4 form.
+func TestRateLimit_GroupsAddressesIntoOneBucket(t *testing.T) {
+	cases := []struct {
+		name       string
+		first      string
+		second     string
+		sameBucket bool
+	}{
+		{"same ipv6 /64", "[2001:db8:1:2:aaaa::1]:5000", "[2001:db8:1:2:bbbb::2]:5000", true},
+		{"neighbouring ipv6 /64", "[2001:db8:1:2::1]:5000", "[2001:db8:1:3::1]:5000", false},
+		{"ipv4-mapped and plain ipv4", "[::ffff:203.0.113.10]:5000", "203.0.113.10:5000", true},
+		{"neighbouring ipv4", "203.0.113.10:5000", "203.0.113.11:5000", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := middleware.RateLimit(middleware.RateLimitConfig{
+				RequestsPerMinute: 60,
+				Burst:             1,
+			})(okHandler())
+
+			if code := doGet(t, h, tc.first); code != http.StatusOK {
+				t.Fatalf("first request: got %d, want 200", code)
+			}
+			want := http.StatusOK
+			if tc.sameBucket {
+				want = http.StatusTooManyRequests
+			}
+			if code := doGet(t, h, tc.second); code != want {
+				t.Errorf("second request: got %d, want %d", code, want)
+			}
+		})
+	}
+}
+
+// The real client address arrives in a header behind the tunnel, so the
+// grouping has to apply there as well.
+func TestRateLimit_GroupsTheCloudflareHeader(t *testing.T) {
+	h := middleware.RateLimit(middleware.RateLimitConfig{
+		RequestsPerMinute: 60,
+		Burst:             1,
+	})(okHandler())
+
+	send := func(ip string) int {
+		req := httptest.NewRequest(http.MethodGet, "/v1/x", nil)
+		req.Header.Set("CF-Connecting-IP", ip)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := send("2001:db8:1:2::1"); code != http.StatusOK {
+		t.Fatalf("first request: got %d, want 200", code)
+	}
+	if code := send("2001:db8:1:2::2"); code != http.StatusTooManyRequests {
+		t.Errorf("same /64: got %d, want 429", code)
+	}
+}

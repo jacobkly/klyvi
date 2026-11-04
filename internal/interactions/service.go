@@ -3,6 +3,7 @@ package interactions
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -38,10 +39,11 @@ type Service struct {
 	media  MediaIndexResolver
 	feed   FeedInvalidator
 	series SeriesEnsurer
+	cap    *dailyCap
 }
 
 func NewService(repo InteractionRepository, media MediaIndexResolver) *Service {
-	return &Service{repo: repo, media: media}
+	return &Service{repo: repo, media: media, cap: newDailyCap(MaxClientWritesPerDay)}
 }
 
 // WithFeedInvalidator drops the user's cached feed after every deliberate
@@ -71,6 +73,18 @@ type RecordRequest struct {
 	Source       *string `json:"source"`
 }
 
+// RecordFromClient is Record for a write the client asked for directly: it
+// counts against the user's daily cap and returns ErrDailyCapReached past it.
+func (s *Service) RecordFromClient(ctx context.Context, userID uuid.UUID, req RecordRequest) (*Interaction, error) {
+	if !s.cap.take(userID, time.Now()) {
+		return nil, ErrDailyCapReached
+	}
+	return s.Record(ctx, userID, req)
+}
+
+// Record validates and stores one interaction with no daily cap. Server-side
+// writers use it directly, because an import is bounded by its file size and can
+// legitimately carry thousands of ratings.
 func (s *Service) Record(ctx context.Context, userID uuid.UUID, req RecordRequest) (*Interaction, error) {
 	if req.TMDBID <= 0 {
 		return nil, invalid("tmdb_id is required and must be positive")
@@ -147,8 +161,8 @@ type BatchResult struct {
 }
 
 // RecordBatch records many interactions in one call. Each row is validated
-// and written independently via Record; a row that fails counts toward
-// Rejected and does not abort the rest.
+// and written independently via RecordFromClient; a row that fails, or lands
+// past the daily cap, counts toward Rejected and does not abort the rest.
 func (s *Service) RecordBatch(ctx context.Context, userID uuid.UUID, reqs []RecordRequest) (*BatchResult, error) {
 	if len(reqs) == 0 {
 		return nil, invalid("batch must contain at least one interaction")
@@ -159,7 +173,7 @@ func (s *Service) RecordBatch(ctx context.Context, userID uuid.UUID, reqs []Reco
 
 	var res BatchResult
 	for _, req := range reqs {
-		if _, err := s.Record(ctx, userID, req); err != nil {
+		if _, err := s.RecordFromClient(ctx, userID, req); err != nil {
 			res.Rejected++
 			continue
 		}

@@ -17,11 +17,31 @@ func NewRepository(db *sqlx.DB) *Repository {
 
 // Record appends an interaction row. Interactions are append-only — the
 // signal pipeline aggregates them at read time.
+//
+// The exception is a repeated impression: a title the user already had an
+// impression on in the last 24 hours keeps that row, and e comes back holding
+// it. Feed reloads report the same titles again, which adds rows but no signal.
+// Two simultaneous requests can still both insert. That costs one extra row, so
+// it is not worth a unique index and a rewrite of the existing rows.
 func (r *Repository) Record(ctx context.Context, e *Interaction) error {
 	return r.db.QueryRowxContext(ctx, `
-		insert into interactions (user_id, media_id, media_type, kind, rating, source)
-		values ($1, $2, $3, $4, $5, $6)
-		returning id, created_at
+		with existing as (
+			select id, created_at from interactions
+			where $4::text = 'impression'
+			  and user_id = $1 and media_id = $2 and media_type = $3
+			  and kind = 'impression'
+			  and created_at >= now() - interval '24 hours'
+			limit 1
+		), inserted as (
+			insert into interactions (user_id, media_id, media_type, kind, rating, source)
+			select $1::uuid, $2::integer, $3::text, $4::text, $5::smallint, $6::text
+			where not exists (select 1 from existing)
+			returning id, created_at
+		)
+		select id, created_at from inserted
+		union all
+		select id, created_at from existing
+		limit 1
 	`, e.UserID, e.MediaID, e.MediaType, e.Kind, e.Rating, e.Source).
 		Scan(&e.ID, &e.CreatedAt)
 }

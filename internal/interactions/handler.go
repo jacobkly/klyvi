@@ -31,7 +31,7 @@ func (a *API) Record(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, err := a.service.Record(r.Context(), userID, req)
+	rec, err := a.service.RecordFromClient(r.Context(), userID, req)
 	if err != nil {
 		respondError(w, err)
 		return
