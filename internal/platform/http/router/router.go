@@ -104,7 +104,6 @@ func New(services Services) *chi.Mux {
 		r.Route("/movies", func(r chi.Router) {
 			r.Use(middleware.CacheControl(catalogMaxAge, catalogSWR))
 			r.Get("/{id}", movieAPI.GetMovieById)
-			r.Get("/{id}/recommendations", movieAPI.GetMovieRecommendations)
 			r.Get("/{id}/collection", movieAPI.GetMovieCollection)
 			r.Get("/{id}/similar", similar.NewAPI(services.SimilarMovies).Get)
 			r.Get("/", movieAPI.GetMovieList)
@@ -114,7 +113,6 @@ func New(services Services) *chi.Mux {
 		r.Route("/tv", func(r chi.Router) {
 			r.Use(middleware.CacheControl(catalogMaxAge, catalogSWR))
 			r.Get("/{id}", tvAPI.GetTvById)
-			r.Get("/{id}/recommendations", tvAPI.GetTvRecommendations)
 			r.Get("/{id}/collection", tvAPI.GetTvCollection)
 			r.Get("/{id}/similar", similar.NewAPI(services.SimilarTV).Get)
 			r.Get("/", tvAPI.GetTvList)

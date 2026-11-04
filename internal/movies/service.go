@@ -172,16 +172,6 @@ func (s *Service) RefreshCollection(ctx context.Context, collectionID int) (remo
 	return false, nil
 }
 
-func (s *Service) GetMovieRecommendations(ctx context.Context, id int) (interface{}, error) {
-	endpoint := fmt.Sprintf("/movie/%d/recommendations?language=en-US&page=1", id)
-	recommendations, err := s.client.TMDBRequest(ctx, "GET", endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return recommendations, nil
-}
-
 func (s *Service) GetMovieCollection(
 	ctx context.Context,
 	movieID int,

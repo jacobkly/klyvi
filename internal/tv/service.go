@@ -263,16 +263,6 @@ func (s *Service) RefreshSeason(ctx context.Context, tvID, seasonNum int) (remov
 	return false, nil
 }
 
-func (s *Service) GetTvRecommendations(ctx context.Context, idType string, id int) (interface{}, error) {
-	tvID, _, err := s.resolveTVID(ctx, idType, id, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	endpoint := fmt.Sprintf("/tv/%d/recommendations?language=en-US&page=1", tvID)
-	return s.client.TMDBRequest(ctx, "GET", endpoint, nil)
-}
-
 func (s *Service) GetTvCollection(ctx context.Context, idType string, id int) (interface{}, error) {
 	tvID, _, err := s.resolveTVID(ctx, idType, id, 0)
 	if err != nil {

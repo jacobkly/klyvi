@@ -60,36 +60,6 @@ func (a *API) GetTvById(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-func (a *API) GetTvRecommendations(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, "invalid tv id")
-		return
-	}
-
-	query := r.URL.Query()
-	idType := query.Get("type")
-	if idType == "" {
-		response.WriteError(w, http.StatusBadRequest, "type is required (external | internal)")
-		return
-	}
-
-	recommendations, err := a.service.GetTvRecommendations(r.Context(), idType, id)
-	if err != nil {
-		respondError(w, err)
-		return
-	}
-
-	response.WriteSuccess(
-		w,
-		http.StatusOK,
-		"v1",
-		middleware.StatsFromContext(r.Context()),
-		recommendations,
-	)
-}
-
 func (a *API) GetTvCollection(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.Atoi(idStr)

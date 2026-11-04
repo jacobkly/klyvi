@@ -140,3 +140,25 @@ func TestSimilarIsPublicAndCacheable(t *testing.T) {
 		}
 	}
 }
+
+// TMDB's own recommendation lists stopped being served when "More like this"
+// moved to Klyvi's ranking, so these paths must stay gone.
+func TestTMDBRecommendationRoutesAreGone(t *testing.T) {
+	r := router.New(router.Services{
+		Users:  users.NewService(nil),
+		AuthMW: func(next http.Handler) http.Handler { return next },
+	})
+
+	for _, path := range []string{
+		"/v1/movies/550/recommendations",
+		"/v1/tv/1396/recommendations?type=external",
+	} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("status = %d, want 404", rec.Code)
+			}
+		})
+	}
+}

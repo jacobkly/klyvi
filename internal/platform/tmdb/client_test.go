@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"klyvi-api/internal/platform/timing"
 )
 
 func TestTMDBRequest_RetriesOn5xxThenSucceeds(t *testing.T) {
@@ -283,5 +285,60 @@ func TestTMDBRequest_RateLimiterThrottles(t *testing.T) {
 	elapsed := time.Since(start)
 	if elapsed < 350*time.Millisecond {
 		t.Errorf("expected rate limiting to delay 6 calls past ~400ms, got %v", elapsed)
+	}
+}
+
+// Every attempt that reaches TMDB is a call, so a page slowed by retries shows
+// them in the request log.
+func TestTMDBRequest_RecordsEachUpstreamAttempt(t *testing.T) {
+	cases := []struct {
+		name     string
+		failures int32
+		want     int
+	}{
+		{name: "one attempt", failures: 0, want: 1},
+		{name: "retries count too", failures: 2, want: 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Long enough to register on Windows' coarse clock.
+				time.Sleep(20 * time.Millisecond)
+				if atomic.AddInt32(&attempts, 1) <= tc.failures {
+					http.Error(w, "boom", http.StatusServiceUnavailable)
+					return
+				}
+				_, _ = w.Write([]byte(`{"ok": true}`))
+			}))
+			defer srv.Close()
+
+			ctx, rec := timing.NewContext(context.Background())
+			c := newClientForTest("token", srv.URL, 1000, 1000)
+			if _, err := c.TMDBRequest(ctx, "GET", "/movie/1", nil); err != nil {
+				t.Fatalf("TMDBRequest: %v", err)
+			}
+
+			snap := rec.Snapshot()
+			if snap.TMDBCalls != tc.want {
+				t.Errorf("TMDBCalls = %d, want %d", snap.TMDBCalls, tc.want)
+			}
+			if snap.TMDB <= 0 {
+				t.Errorf("TMDB duration = %v, want > 0", snap.TMDB)
+			}
+		})
+	}
+}
+
+// A request without a recorder, like a seed run, still works.
+func TestTMDBRequest_WorksWithoutARecorder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok": true}`))
+	}))
+	defer srv.Close()
+
+	c := newClientForTest("token", srv.URL, 1000, 1000)
+	if _, err := c.TMDBRequest(context.Background(), "GET", "/movie/1", nil); err != nil {
+		t.Fatalf("TMDBRequest: %v", err)
 	}
 }

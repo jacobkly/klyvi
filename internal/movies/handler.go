@@ -43,29 +43,6 @@ func (a *API) GetMovieById(w http.ResponseWriter, r *http.Request) {
 	response.WriteSuccess(w, http.StatusOK, "v1", stats, movie)
 }
 
-func (a *API) GetMovieRecommendations(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		response.WriteError(w, http.StatusBadRequest, "invalid movie id")
-		return
-	}
-
-	recommendations, err := a.service.GetMovieRecommendations(r.Context(), id)
-	if err != nil {
-		respondError(w, err)
-		return
-	}
-
-	response.WriteSuccess(
-		w,
-		http.StatusOK,
-		"v1",
-		middleware.StatsFromContext(r.Context()),
-		recommendations,
-	)
-}
-
 func (a *API) GetMovieCollection(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.Atoi(idStr)

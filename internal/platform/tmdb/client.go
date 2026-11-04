@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
+
+	"klyvi-api/internal/platform/timing"
 )
 
 // TMDB documents ~50 req/s; staying under it with a small burst keeps us
@@ -83,7 +85,9 @@ func (c *Client) TMDBRequest(ctx context.Context, method, endpoint string, body 
 			return nil, err
 		}
 
+		start := time.Now()
 		result, retriable, err := c.doOnce(ctx, method, endpoint, bodyBytes, body != nil)
+		timing.FromContext(ctx).AddTMDB(time.Since(start))
 		if err == nil {
 			return result, nil
 		}

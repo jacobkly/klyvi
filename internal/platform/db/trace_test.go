@@ -52,8 +52,9 @@ func TestNewCountsQueriesPerRequest(t *testing.T) {
 	if err := conn.GetContext(ctx, &one, `select 1`); err != nil {
 		t.Fatalf("select 1: %v", err)
 	}
-	if _, err := conn.ExecContext(ctx, `select 1`); err != nil {
-		t.Fatalf("exec select 1: %v", err)
+	// Long enough to register on Windows' coarse clock.
+	if _, err := conn.ExecContext(ctx, `select pg_sleep(0.02)`); err != nil {
+		t.Fatalf("exec pg_sleep: %v", err)
 	}
 
 	snap := rec.Snapshot()

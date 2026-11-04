@@ -11,6 +11,7 @@ import (
 
 	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/platform/timing"
+	"klyvi-api/internal/platform/tmdb"
 )
 
 // captureLog redirects the standard logger for the duration of the test.
@@ -84,5 +85,29 @@ func TestLoggerMiddleware_LogsTimingFields(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("log output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// The whole path: a handler calls the real TMDB client on the request's
+// context, and the access log line reports it.
+func TestLoggerMiddleware_LogsCallsMadeByTheTMDBClient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok": true}`))
+	}))
+	defer srv.Close()
+	t.Setenv("TMDB_BASE_URL", srv.URL)
+	client := tmdb.NewClient("token")
+
+	buf := captureLog(t)
+	h := middleware.LoggerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := client.TMDBRequest(r.Context(), http.MethodGet, "/movie/1", nil); err != nil {
+			t.Errorf("TMDBRequest: %v", err)
+		}
+	}))
+
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/x", nil))
+
+	if out := buf.String(); !strings.Contains(out, "tmdb_calls=1") {
+		t.Errorf("log output missing tmdb_calls=1:\n%s", out)
 	}
 }
