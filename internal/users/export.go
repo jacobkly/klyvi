@@ -12,13 +12,14 @@ import (
 	"github.com/google/uuid"
 
 	"klyvi-api/internal/interactions"
+	"klyvi-api/internal/notifications"
 	"klyvi-api/internal/tracking"
 )
 
-// Export composes data owned by other domains (tracking, interactions) into
-// user-facing downloads. The readers are consumer interfaces so this package
-// depends on behaviour, not on those services' construction. Import direction
-// is one-way — neither tracking nor interactions imports users.
+// Export composes data owned by other domains (tracking, interactions,
+// notifications) into user-facing downloads. The readers are consumer interfaces
+// so this package depends on behaviour, not on those services' construction.
+// Import direction is one-way — none of them imports users.
 
 // TrackingReader is the enriched tracking list the export needs.
 type TrackingReader interface {
@@ -31,10 +32,16 @@ type InteractionReader interface {
 	ListByUser(ctx context.Context, userID uuid.UUID, sinceDays int) ([]interactions.Interaction, error)
 }
 
+// NoticeReader is the notice history the account export needs.
+type NoticeReader interface {
+	ListAll(ctx context.Context, userID uuid.UUID) ([]notifications.Notification, error)
+}
+
 // WithExportSources wires the data sources the export endpoints read from.
-func (s *Service) WithExportSources(tr TrackingReader, ir InteractionReader) *Service {
+func (s *Service) WithExportSources(tr TrackingReader, ir InteractionReader, nr NoticeReader) *Service {
 	s.tracking = tr
 	s.interactions = ir
+	s.notices = nr
 	return s
 }
 
@@ -86,7 +93,8 @@ func (s *Service) ExportTrackingJSON(ctx context.Context, id uuid.UUID) ([]byte,
 }
 
 // ExportAccountData is the GDPR bundle: everything held about the user in one
-// JSON document — profile, tracking, and the full interaction history.
+// JSON document — profile (which holds the notification preferences), tracking,
+// the full interaction history, and the notices.
 func (s *Service) ExportAccountData(ctx context.Context, id uuid.UUID) ([]byte, error) {
 	user, err := s.repo.GetUserByID(ctx, id)
 	if err != nil {
@@ -106,12 +114,20 @@ func (s *Service) ExportAccountData(ctx context.Context, id uuid.UUID) ([]byte, 
 	if events == nil {
 		events = []interactions.Interaction{}
 	}
+	notices, err := s.notices.ListAll(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if notices == nil {
+		notices = []notifications.Notification{}
+	}
 
 	return json.MarshalIndent(struct {
-		User         *User                      `json:"user"`
-		Tracking     []tracking.Entry           `json:"tracking"`
-		Interactions []interactions.Interaction `json:"interactions"`
-	}{user, entries, events}, "", "  ")
+		User          *User                        `json:"user"`
+		Tracking      []tracking.Entry             `json:"tracking"`
+		Interactions  []interactions.Interaction   `json:"interactions"`
+		Notifications []notifications.Notification `json:"notifications"`
+	}{user, entries, events, notices}, "", "  ")
 }
 
 // csvCell keeps a value from running as a formula when the file is opened in a

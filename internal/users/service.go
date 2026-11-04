@@ -68,10 +68,11 @@ type Service struct {
 	deleter AccountDeleter
 	bucket  string
 
-	// tracking + interactions feed the export endpoints; wired via
+	// tracking, interactions and notices feed the export endpoints; wired via
 	// WithExportSources. Always present in the assembled server.
 	tracking     TrackingReader
 	interactions InteractionReader
+	notices      NoticeReader
 
 	// ensured remembers users whose row already exists, so the middleware
 	// skips its upsert round trip. The TTL re-checks now and then, in case a
@@ -157,6 +158,9 @@ type UpdateProfileRequest struct {
 	// Birthday is tri-state: absent = unchanged, null = clear, value = set.
 	// Kept raw so absent and null stay distinguishable; parsed in UpdateMe.
 	Birthday json.RawMessage `json:"birthday"`
+	// NotifyPremieres and NotifyReleases are absent when unchanged.
+	NotifyPremieres *bool `json:"notify_premieres"`
+	NotifyReleases  *bool `json:"notify_releases"`
 }
 
 // UpdateMe applies a profile patch. A username, when provided, must pass
@@ -189,6 +193,9 @@ func (s *Service) UpdateMe(ctx context.Context, id uuid.UUID, req UpdateProfileR
 		Bio:      req.Bio,
 		Settings: req.Settings,
 		Birthday: birthday,
+
+		NotifyPremieres: req.NotifyPremieres,
+		NotifyReleases:  req.NotifyReleases,
 	})
 }
 

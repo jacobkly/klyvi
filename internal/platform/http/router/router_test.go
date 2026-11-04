@@ -141,6 +141,32 @@ func TestSimilarIsPublicAndCacheable(t *testing.T) {
 	}
 }
 
+// Notices are personal, so both routes sit behind the auth middleware.
+func TestNotificationRoutesRequireAuth(t *testing.T) {
+	r := router.New(router.Services{
+		Users: users.NewService(nil),
+		AuthMW: func(http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
+		},
+	})
+
+	cases := []struct {
+		method, path string
+	}{
+		{http.MethodGet, "/v1/notifications"},
+		{http.MethodPost, "/v1/notifications/read"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401", rec.Code)
+			}
+		})
+	}
+}
+
 // TMDB's own recommendation lists stopped being served when "More like this"
 // moved to Klyvi's ranking, so these paths must stay gone.
 func TestTMDBRecommendationRoutesAreGone(t *testing.T) {

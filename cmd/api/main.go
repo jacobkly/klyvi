@@ -14,6 +14,7 @@ import (
 	"klyvi-api/internal/imports"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
+	"klyvi-api/internal/notifications"
 	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/http/middleware"
@@ -86,8 +87,10 @@ func main() {
 		WithFeedInvalidator(feedCache).
 		WithSeriesEnsurer(tvService)
 
+	notificationsService := notifications.NewService(notifications.NewRepository(dbConn))
+
 	userService := users.NewService(userRepo).
-		WithExportSources(trackingService, interactionsService).
+		WithExportSources(trackingService, interactionsService, notificationsService).
 		WithFeedInvalidator(feedCache)
 	if supabaseClient != nil {
 		userService = userService.
@@ -174,6 +177,7 @@ func main() {
 		Onboarding:     onboardingService,
 		Rankings:       rankingsService,
 		Imports:        importsService,
+		Notifications:  notificationsService,
 		SimilarMovies:  similarMovies,
 		SimilarTV:      similarTV,
 		AuthMW:         authMW,

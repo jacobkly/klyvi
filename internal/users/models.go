@@ -26,6 +26,10 @@ type User struct {
 	// toggles, list preferences, …). The server validates only shape and
 	// size; the client owns the schema and the merge.
 	Settings json.RawMessage `db:"settings" json:"settings"`
+	// NotifyPremieres and NotifyReleases choose which notices the nightly job
+	// creates for this user. Unlike Settings, the server acts on them.
+	NotifyPremieres bool `db:"notify_premieres" json:"notify_premieres"`
+	NotifyReleases  bool `db:"notify_releases" json:"notify_releases"`
 	IsActive          bool             `db:"is_active" json:"is_active"`
 	CreatedAt         time.Time        `db:"created_at" json:"created_at"`
 	UpdatedAt         time.Time        `db:"updated_at" json:"updated_at"`

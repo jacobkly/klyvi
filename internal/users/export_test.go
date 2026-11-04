@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"klyvi-api/internal/interactions"
+	"klyvi-api/internal/notifications"
 	"klyvi-api/internal/tracking"
 	"klyvi-api/internal/users"
 )
@@ -19,6 +20,11 @@ import (
 type fakeExportSource struct {
 	entries      []tracking.Entry
 	interactions []interactions.Interaction
+	notices      []notifications.Notification
+}
+
+func (f *fakeExportSource) ListAll(context.Context, uuid.UUID) ([]notifications.Notification, error) {
+	return f.notices, nil
 }
 
 func (f *fakeExportSource) List(context.Context, uuid.UUID, tracking.ListFilters) ([]tracking.Entry, error) {
@@ -40,12 +46,15 @@ func exportFixture() *fakeExportSource {
 		interactions: []interactions.Interaction{
 			{MediaID: 1, MediaType: "movie", Kind: "rated", Rating: &score},
 		},
+		notices: []notifications.Notification{
+			{ID: 1, Kind: notifications.KindFilmRelease, MediaType: "movie", Title: title},
+		},
 	}
 }
 
 func exportSvc(src *fakeExportSource) *users.Service {
 	repo := &fakeUserRepo{user: &users.User{ID: uuid.New(), Username: "jacob"}}
-	return users.NewService(repo).WithExportSources(src, src)
+	return users.NewService(repo).WithExportSources(src, src, src)
 }
 
 // The CSV export is a spreadsheet the user opens elsewhere, so its header row
@@ -104,12 +113,12 @@ func TestExportJSON(t *testing.T) {
 	}
 }
 
-// The GDPR bundle is the whole account: profile, tracking, interactions —
-// enough for a user to see everything held about them.
+// The GDPR bundle is the whole account: profile, tracking, interactions, notices
+// — enough for a user to see everything held about them.
 func TestExportAccountData(t *testing.T) {
 	src := exportFixture()
-	repo := &fakeUserRepo{user: &users.User{ID: uuid.New(), Username: "jacob"}}
-	svc := users.NewService(repo).WithExportSources(src, src)
+	repo := &fakeUserRepo{user: &users.User{ID: uuid.New(), Username: "jacob", NotifyReleases: true}}
+	svc := users.NewService(repo).WithExportSources(src, src, src)
 
 	data, err := svc.ExportAccountData(context.Background(), repo.user.ID)
 	if err != nil {
@@ -117,15 +126,22 @@ func TestExportAccountData(t *testing.T) {
 	}
 
 	var bundle struct {
-		User         json.RawMessage   `json:"user"`
-		Tracking     []json.RawMessage `json:"tracking"`
-		Interactions []json.RawMessage `json:"interactions"`
+		User          json.RawMessage   `json:"user"`
+		Tracking      []json.RawMessage `json:"tracking"`
+		Interactions  []json.RawMessage `json:"interactions"`
+		Notifications []json.RawMessage `json:"notifications"`
 	}
 	if err := json.Unmarshal(data, &bundle); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if len(bundle.User) == 0 {
 		t.Error("bundle missing user")
+	}
+	if !strings.Contains(string(bundle.User), `"notify_releases": true`) {
+		t.Errorf("bundle user missing its preferences: %s", bundle.User)
+	}
+	if len(bundle.Notifications) != 1 {
+		t.Errorf("notifications = %d, want 1", len(bundle.Notifications))
 	}
 	if len(bundle.Tracking) != 1 {
 		t.Errorf("tracking entries = %d, want 1", len(bundle.Tracking))

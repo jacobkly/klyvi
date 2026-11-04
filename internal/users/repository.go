@@ -273,6 +273,10 @@ type UpdateProfilePatch struct {
 	Settings *json.RawMessage
 	// Birthday is tri-state — see OptionalDate.
 	Birthday OptionalDate
+	// NotifyPremieres and NotifyReleases are nil when the patch leaves them
+	// alone, so saving one switch can't change the other.
+	NotifyPremieres *bool
+	NotifyReleases  *bool
 }
 
 // UpdateProfile applies a partial patch to the user row using COALESCE — only
@@ -313,6 +317,31 @@ func (r *Repository) UpdateProfile(ctx context.Context, id uuid.UUID, patch Upda
 			return nil, ErrUsernameTaken
 		}
 		return nil, fmt.Errorf("update profile: %w", err)
+	}
+	if patch.NotifyPremieres == nil && patch.NotifyReleases == nil {
+		return &u, nil
+	}
+	return r.updateNotifyPrefs(ctx, id, patch.NotifyPremieres, patch.NotifyReleases)
+}
+
+// updateNotifyPrefs is its own statement so that a profile edit never names
+// these columns. The API can then go live before the migration that adds them
+// without breaking ordinary edits, which keeps the deploy order forgiving.
+func (r *Repository) updateNotifyPrefs(ctx context.Context, id uuid.UUID, premieres, releases *bool) (*User, error) {
+	var u User
+	err := r.db.QueryRowxContext(ctx, `
+		update users set
+			notify_premieres = coalesce($2, notify_premieres),
+			notify_releases  = coalesce($3, notify_releases),
+			updated_at       = now()
+		where id = $1
+		returning *
+	`, id, premieres, releases).StructScan(&u)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("update notification preferences: %w", err)
 	}
 	return &u, nil
 }

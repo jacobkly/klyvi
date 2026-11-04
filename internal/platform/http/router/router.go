@@ -12,6 +12,7 @@ import (
 	"klyvi-api/internal/imports"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
+	"klyvi-api/internal/notifications"
 	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/rankings"
@@ -24,16 +25,17 @@ import (
 )
 
 type Services struct {
-	Movies       *movies.Service
-	TV           *tv.Service
-	Search       *search.Service
-	Users        *users.Service
-	Tracking     *tracking.Service
-	Interactions *interactions.Service
-	Reco         *reco.Orchestrator
-	Onboarding   *onboarding.Service
-	Rankings     *rankings.Service
-	Imports      *imports.Service
+	Movies        *movies.Service
+	TV            *tv.Service
+	Search        *search.Service
+	Users         *users.Service
+	Tracking      *tracking.Service
+	Interactions  *interactions.Service
+	Reco          *reco.Orchestrator
+	Onboarding    *onboarding.Service
+	Rankings      *rankings.Service
+	Imports       *imports.Service
+	Notifications *notifications.Service
 
 	// SimilarMovies and SimilarTV serve the "more like this" shelves.
 	SimilarMovies *similar.Service
@@ -199,6 +201,10 @@ func New(services Services) *chi.Mux {
 				r.Post("/", importsAPI.Create)
 				r.Get("/{id}", importsAPI.Get)
 			})
+
+			notificationsAPI := notifications.NewAPI(services.Notifications)
+			r.Get("/notifications", notificationsAPI.List)
+			r.With(middleware.MaxBodyBytes(jsonBodyCap)).Post("/notifications/read", notificationsAPI.MarkRead)
 		})
 	})
 
