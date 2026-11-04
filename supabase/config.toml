@@ -107,7 +107,7 @@ openai_api_key = "env(OPENAI_API_KEY)"
 # Email testing server. Emails sent with the local dev setup are not actually sent - rather, they
 # are monitored, and you can view the emails that would have been sent from the web interface.
 [local_smtp]
-enabled = false
+enabled = true
 # Port to use for the email testing server web interface.
 port = 54424
 # Uncomment to expose additional ports for testing user applications that send emails.
@@ -247,16 +247,29 @@ otp_expiry = 3600
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
-# Uncomment to customize email template
-# [auth.email.template.invite]
-# subject = "You have been invited"
-# content_path = "./supabase/templates/invite.html"
+# These only drive the local stack. The hosted project keeps its own copy,
+# pasted into the dashboard, so change both together.
+[auth.email.template.confirmation]
+subject = "Confirm your email for Klyvi"
+content_path = "./supabase/templates/confirmation.html"
 
-# Uncomment to customize notification email template
-# [auth.email.notification.password_changed]
-# enabled = true
-# subject = "Your password has been changed"
-# content_path = "./supabase/templates/password_changed_notification.html"
+[auth.email.template.recovery]
+subject = "Reset your Klyvi password"
+content_path = "./supabase/templates/recovery.html"
+
+[auth.email.template.email_change]
+subject = "Confirm your new email for Klyvi"
+content_path = "./supabase/templates/email_change.html"
+
+[auth.email.notification.password_changed]
+enabled = true
+subject = "Your Klyvi password was changed"
+content_path = "./supabase/templates/password_changed_notification.html"
+
+[auth.email.notification.email_changed]
+enabled = true
+subject = "Your Klyvi email was changed"
+content_path = "./supabase/templates/email_changed_notification.html"
 
 [auth.sms]
 # Allow/disallow new user signups via SMS to your project.
