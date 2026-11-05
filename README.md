@@ -216,17 +216,22 @@ To test the scripts themselves, run `sh deploy/scripts_test.sh`. It uses stand-i
 Restore into an empty Supabase project, where `TARGET` is its session pooler connection string:
 
 ```bash
-# The app's tables, along with their row level security and grants.
-pg_restore --no-owner --clean --if-exists --schema=public -d "$TARGET" klyvi-<UTC time>.dump
+# The app's tables, along with their row level security.
+pg_restore --no-owner --no-privileges --clean --if-exists --schema=public -d "$TARGET" klyvi-<UTC time>.dump
+
+# Takes back the access a new project gives anon and authenticated, and recreates backup_job.
+psql "$TARGET" --single-transaction -v ON_ERROR_STOP=1 -f deploy/after-restore.sql
 
 # The accounts. Users go first, since identities point at them.
 pg_restore --no-owner --data-only --schema=auth --table=users -d "$TARGET" klyvi-<UTC time>.dump
 pg_restore --no-owner --data-only --schema=auth --table=identities -d "$TARGET" klyvi-<UTC time>.dump
 ```
 
-Everyone has to sign in again, since live sessions aren't in the backup. Migrations pick up where the dump left off, since `goose_db_version` is restored with the rest of `public`.
+Don't skip `after-restore.sql`. A new Supabase project opens every new table in `public` to `anon` and `authenticated`, which the dump can't undo. goose won't undo it either, since `goose_db_version` is restored with the rest of `public` and says those migrations already ran. Later migrations pick up from there.
 
-These steps have been rehearsed on plain Postgres 17 with a stand-in `auth` schema, not on a real Supabase project. Try them on a spare project before you need them.
+Everyone has to sign in again, since live sessions aren't in the backup. `backup_job` comes back unable to sign in, so run the `ALTER ROLE` line from the section above and update `deploy/.env.backup` before the next nightly run.
+
+These steps have been rehearsed on a real Supabase stack running locally, not on a hosted project. Try them on a spare project before you need them.
 
 ### Local database (rehearsing migrations)
 
