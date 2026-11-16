@@ -1,6 +1,6 @@
 #!/bin/sh
-# Tests for backup.sh and nightly.sh, using stand-ins for pg_dump, pg_restore and
-# docker. Touches nothing outside a temp folder. Run from anywhere:
+# Tests for backup.sh, nightly.sh and speedtest.sh, using stand-ins for pg_dump,
+# pg_restore, docker and curl. Touches nothing outside a temp folder. Run from anywhere:
 #
 #   sh deploy/scripts_test.sh
 
@@ -9,7 +9,7 @@ set -u
 deploy=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 # A missing script exits non-zero, which the failure cases would count as a pass.
-for script in backup.sh nightly.sh; do
+for script in backup.sh nightly.sh speedtest.sh; do
   if [ ! -f "$deploy/$script" ]; then
     echo "FAIL  $script does not exist"
     exit 1
@@ -315,6 +315,86 @@ elif ls -1 "$case_dir/nas" | grep -q '\.dump$'; then
   ok "failed notices exit non-zero and the backup still lands"
 else
   bad "failed notices must not stop the backup"
+fi
+
+# --- speedtest.sh ----------------------------------------------------------
+
+# A stand-in curl: answers with a fixed timing, the status in $case_dir/status
+# (200 by default) and the Server-Timing header in $case_dir/timing, if any.
+setup_speed() {
+  case_dir=$(mktemp -d "$root/case.XXXXXX")
+  mkdir "$case_dir/bin"
+  cp "$deploy/speedtest.sh" "$case_dir/"
+  : >"$case_dir/calls"
+  cat >"$case_dir/bin/curl" <<EOF
+#!/bin/sh
+echo "curl \$*" >>"$case_dir/calls"
+hdr=""; url=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -D) hdr=\$2; shift ;;
+    -w|-o|-H|--max-time) shift ;;
+    *) url=\$1 ;;
+  esac
+  shift
+done
+case "\$url" in telnet://*) printf '0.025'; exit 0 ;; esac
+code=200
+[ -f "$case_dir/status" ] && code=\$(cat "$case_dir/status")
+{
+  printf 'HTTP/2 %s\r\n' "\$code"
+  [ -f "$case_dir/timing" ] && printf 'server-timing: %s\r\n' "\$(cat "$case_dir/timing")"
+  printf '\r\n'
+} >"\$hdr"
+printf '%s 0.010 0.020 0.300 0.320' "\$code"
+EOF
+  chmod +x "$case_dir/bin/curl"
+}
+
+run_speed() {
+  PATH="$case_dir/bin:$PATH" sh "$case_dir/speedtest.sh" https://api.example.test/ 3 >"$case_dir/out" 2>&1
+}
+
+setup_speed
+echo 'db;desc="8 queries";dur=210.4, tmdb;desc="1 calls";dur=12, total;dur=250' >"$case_dir/timing"
+if run_speed && grep -Eq '^health +10 +20 +300 +320 +250 +210 +50$' "$case_dir/out"; then
+  ok "speedtest splits a request into server, database and network time"
+else
+  bad "speedtest should split server, database and network time: $(cat "$case_dir/out")"
+fi
+
+setup_speed
+if run_speed && grep -Eq '^search +10 +20 +300 +320 +- +- +-$' "$case_dir/out"; then
+  ok "speedtest still times an API without Server-Timing"
+else
+  bad "speedtest should show - for an API without Server-Timing: $(cat "$case_dir/out")"
+fi
+
+setup_speed
+echo 503 >"$case_dir/status"
+if run_speed; then
+  bad "speedtest should exit non-zero when every request fails"
+elif grep -q 'health .*failed, last status 503' "$case_dir/out"; then
+  ok "speedtest reports failed requests and exits non-zero"
+else
+  bad "speedtest should name the failing status: $(cat "$case_dir/out")"
+fi
+
+setup_speed
+if KLYVI_TOKEN=secret-token-123 run_speed && grep -q '^your feed ' "$case_dir/out" \
+  && grep -q 'Authorization: Bearer secret-token-123 .*/v1/reco/feed' "$case_dir/calls" \
+  && ! grep -q 'secret-token-123' "$case_dir/out"; then
+  ok "speedtest times the feed with the token and never prints it"
+else
+  bad "speedtest should time the feed with the token, unprinted: $(cat "$case_dir/out")"
+fi
+
+setup_speed
+if DB_ADDR=db.example.test:5432 run_speed && grep -Eq '^database connect +25 ms' "$case_dir/out" \
+  && grep -q '175 ms of it' "$case_dir/out" && grep -q 'telnet://db.example.test:5432' "$case_dir/calls"; then
+  ok "speedtest times the database connect and scales it to the feed"
+else
+  bad "speedtest should time the database connect: $(cat "$case_dir/out")"
 fi
 
 echo
