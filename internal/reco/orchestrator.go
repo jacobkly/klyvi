@@ -100,6 +100,10 @@ type Orchestrator struct {
 	tier2 Scorer
 
 	cache *FeedCache // nil ranks every request afresh
+
+	// reasonIDF weighs the keywords a "because" reason is chosen by. It is
+	// loaded whether or not scoring uses IDF. nil counts every keyword the same.
+	reasonIDF *MediaIDF
 }
 
 func NewOrchestrator(catalog CatalogRepository, signal SignalRepository, seen SeenRepository, cfg Config) *Orchestrator {
@@ -121,6 +125,9 @@ func (o *Orchestrator) WithTier2(s Scorer) *Orchestrator { o.tier2 = s; return o
 // WithFeedCache ranks each user's feed to full depth once and serves every
 // page from the cache until it expires or is invalidated.
 func (o *Orchestrator) WithFeedCache(c *FeedCache) *Orchestrator { o.cache = c; return o }
+
+// WithReasonIDF sets the IDF tables "because you liked" reasons are weighed by.
+func (o *Orchestrator) WithReasonIDF(idf *MediaIDF) *Orchestrator { o.reasonIDF = idf; return o }
 
 // Wait blocks until every scorer's background writes finish.
 func (o *Orchestrator) Wait() {
@@ -234,7 +241,7 @@ func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, media FeedMed
 		return []Scored{}, nil
 	}
 
-	user, err := o.buildUserContext(ctx, userID, signal, seen)
+	user, history, err := o.buildUserContext(ctx, userID, signal, seen)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +277,9 @@ func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, media FeedMed
 	// score order. Rank down to `depth` (the deepest item the caller needs);
 	// MMR's greedy order is prefix-stable, so ranking deeper never disturbs
 	// earlier pages.
-	return MMRReorderWithin(scored, depth, cfg.MMRLambda, FeedTypeBound(cfg, user.Liked)), nil
+	ranked := MMRReorderWithin(scored, depth, cfg.MMRLambda, FeedTypeBound(cfg, user.Liked))
+	AddBecauseReasons(ranked, Anchors(interactions, user.Liked, history), o.reasonIDF)
+	return ranked, nil
 }
 
 // resolveReasonNames mutates the scored slice, filling in Reason.Name
@@ -372,8 +381,9 @@ func (o *Orchestrator) pickScorer(signalVolume int) Scorer {
 // buildUserContext turns the aggregated signal into the SignalItem slices a
 // Scorer consumes. Looks up MediaFeatures from the catalog for every media id
 // in it (films, and series for rolled-up seasons) — the cost is bounded by
-// the user's interaction count (typically <100).
-func (o *Orchestrator) buildUserContext(ctx context.Context, userID uuid.UUID, signal map[int]float64, seen map[int]bool) (*UserContext, error) {
+// the user's interaction count (typically <100). It also returns those
+// titles' catalog rows by media id, which name the "because" reasons.
+func (o *Orchestrator) buildUserContext(ctx context.Context, userID uuid.UUID, signal map[int]float64, seen map[int]bool) (*UserContext, map[int]Candidate, error) {
 	liked, disliked := SplitLikedDisliked(signal)
 
 	ids := make([]int, 0, len(liked)+len(disliked))
@@ -385,12 +395,14 @@ func (o *Orchestrator) buildUserContext(ctx context.Context, userID uuid.UUID, s
 	}
 
 	featByID := map[int]*MediaFeatures{}
+	history := map[int]Candidate{}
 	if len(ids) > 0 {
 		cands, err := o.catalog.CandidatesByMediaIDs(ctx, ids)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, c := range cands {
+			history[c.MediaID] = c
 			if c.Features != nil {
 				featByID[c.MediaID] = c.Features
 			}
@@ -411,5 +423,5 @@ func (o *Orchestrator) buildUserContext(ctx context.Context, userID uuid.UUID, s
 		Liked:        likedItems,
 		Disliked:     dislikedItems,
 		SeenMediaIDs: seen,
-	}, nil
+	}, history, nil
 }

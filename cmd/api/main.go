@@ -130,14 +130,19 @@ func main() {
 	// (identity) and its scoring is unchanged. Films and series each get their
 	// own table. A catalog reseed needs a restart to pick up refreshed
 	// weights — the lifecycle the rest of the catalog follows.
+	//
+	// The "because you liked X" reasons always weigh shared keywords by IDF,
+	// so the tables load either way, and scoring reads them only when on.
+	featureTables := &reco.MediaIDF{
+		Movie: recoFeatureIDF(movieRepo, "movie", reco.NewFeatureIDF),
+		TV:    recoFeatureIDF(movieRepo, "tv", reco.NewTVFeatureIDF),
+	}
 	var featureIDF *reco.MediaIDF
 	if cfg.Reco.UseIDF {
-		featureIDF = &reco.MediaIDF{
-			Movie: recoFeatureIDF(movieRepo, "movie", reco.NewFeatureIDF),
-			TV:    recoFeatureIDF(movieRepo, "tv", reco.NewTVFeatureIDF),
-		}
+		featureIDF = featureTables
+		log.Println("reco: IDF weighting on in scoring")
 	} else {
-		log.Println("reco: IDF weighting off (set RECO_USE_IDF=true to enable)")
+		log.Println("reco: IDF weighting off in scoring (set RECO_USE_IDF=true to enable), on for reasons")
 	}
 
 	// The feed draws its candidate pool from an in-memory copy of the catalog,
@@ -163,6 +168,7 @@ func main() {
 	}
 
 	recoOrchestrator := newRecoOrchestrator(dbConn, recoCatalog, recoCfg, featureIDF).
+		WithReasonIDF(featureTables).
 		WithFeedCache(feedCache)
 
 	// The similar shelves always weigh a feature by how rare it is: a shared
@@ -252,15 +258,19 @@ func main() {
 // feature of that type the same.
 func recoFeatureIDF(repo *movies.Repository, mediaType string,
 	build func(genreDF, keywordDF map[int]int, corpus int) *reco.FeatureIDF) *reco.FeatureIDF {
-	genreDF, keywordDF, corpus, err := repo.LoadFeatureStats(context.Background(), mediaType)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	genreDF, keywordDF, corpus, err := repo.LoadFeatureStats(ctx, mediaType)
 	if err != nil {
-		log.Fatalf("load %s feature stats: %v", mediaType, err)
+		// Unweighted scoring and reasons still work, so this is not fatal.
+		log.Printf("reco: load %s feature stats, weighing every feature the same: %v", mediaType, err)
+		return nil
 	}
 	idf := build(genreDF, keywordDF, corpus)
 	if idf == nil {
-		log.Printf("reco: RECO_USE_IDF set but %s feature_stats empty, run seed-catalog -refresh-feature-stats", mediaType)
+		log.Printf("reco: %s feature_stats empty, run seed-catalog -refresh-feature-stats", mediaType)
 	} else {
-		log.Printf("reco: %s IDF weighting active (corpus=%d genres=%d keywords=%d)", mediaType, corpus, len(genreDF), len(keywordDF))
+		log.Printf("reco: %s IDF tables loaded (corpus=%d genres=%d keywords=%d)", mediaType, corpus, len(genreDF), len(keywordDF))
 	}
 	return idf
 }

@@ -95,6 +95,8 @@ func seriesToCandidates(rows []tv.RecoCandidateRow) []reco.Candidate {
 		cands = append(cands, reco.Candidate{
 			MediaID:   row.MediaID,
 			MediaType: "tv",
+			TMDBID:    row.TVID,
+			Title:     deref(row.Name),
 			Features: &reco.MediaFeatures{
 				MediaID:     row.MediaID,
 				MediaType:   "tv",
@@ -119,6 +121,8 @@ func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 		cands = append(cands, reco.Candidate{
 			MediaID:   row.MediaID,
 			MediaType: "movie",
+			TMDBID:    row.MovieID,
+			Title:     deref(row.Title),
 			Features: &reco.MediaFeatures{
 				MediaID:     row.MediaID,
 				MediaType:   "movie",
@@ -131,4 +135,12 @@ func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 		})
 	}
 	return cands
+}
+
+// deref returns the string pointed to, or "" if the pointer is nil.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

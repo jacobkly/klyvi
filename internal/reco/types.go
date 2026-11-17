@@ -68,7 +68,9 @@ type Scored struct {
 }
 
 // Reason is a single explainability token attached to a Scored item.
-// Kind is "keyword" or "genre"; ID is the TMDB feature id; Name is the
+// Kind "because" names a title the user rated highly that the pick shares
+// keywords with: ID is that title's TMDB id and Name its title, always set.
+// Otherwise Kind is "keyword" or "genre"; ID is the TMDB feature id; Name is the
 // human-readable label resolved server-side from the movies cache (empty
 // when the catalog doesn't carry the name for that id — frontend can
 // render the id as a fallback or hide it).

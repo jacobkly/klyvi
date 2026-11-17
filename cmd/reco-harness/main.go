@@ -433,10 +433,11 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, i
 	// round-trips. Holding the pools fixed across trials — and across weight
 	// configs — is exactly what a fair comparison of scorer weights needs.
 	fullSignal := reco.AggregateSignal(cfg, interactions)
-	featByID, err := signalFeatures(ctx, catalog, fullSignal)
+	history, err := signalHistory(ctx, catalog, fullSignal)
 	if err != nil {
 		return userLOO{}, err
 	}
+	featByID := featuresOf(history)
 	fullLiked, _ := reco.SplitLikedDisliked(fullSignal)
 	feeds := map[reco.FeedMedia]reco.Config{reco.FeedAll: cfg}
 	for _, u := range likes {
@@ -512,12 +513,12 @@ func rankPool(ctx context.Context, scorer *reco.Tier1, cfg reco.Config, user *re
 	return reco.MMRReorderWithin(scored, depth, cfg.MMRLambda, reco.FeedTypeBound(cfg, user.Liked)), nil
 }
 
-// signalFeatures looks up the features of every film and series in the
+// signalHistory looks up the catalog row of every film and series in the
 // signal, keyed by media id.
-func signalFeatures(ctx context.Context, catalog *catalogAdapter, signal map[int]float64) (map[int]*reco.MediaFeatures, error) {
-	feats := map[int]*reco.MediaFeatures{}
+func signalHistory(ctx context.Context, catalog *catalogAdapter, signal map[int]float64) (map[int]reco.Candidate, error) {
+	history := map[int]reco.Candidate{}
 	if len(signal) == 0 {
-		return feats, nil
+		return history, nil
 	}
 	ids := make([]int, 0, len(signal))
 	for id := range signal {
@@ -528,11 +529,21 @@ func signalFeatures(ctx context.Context, catalog *catalogAdapter, signal map[int
 		return nil, err
 	}
 	for _, c := range cands {
+		history[c.MediaID] = c
+	}
+	return history, nil
+}
+
+// featuresOf keys the features of a history's titles by media id, leaving out
+// titles without features.
+func featuresOf(history map[int]reco.Candidate) map[int]*reco.MediaFeatures {
+	feats := make(map[int]*reco.MediaFeatures, len(history))
+	for id, c := range history {
 		if c.Features != nil {
-			feats[c.MediaID] = c.Features
+			feats[id] = c.Features
 		}
 	}
-	return feats, nil
+	return feats
 }
 
 // signalItems pairs each weight with its features, nil when they did not
@@ -633,7 +644,8 @@ func liveFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf
 		return nil, diag, fmt.Errorf("load interactions: %w", err)
 	}
 	signal := reco.AggregateSignal(cfg, interactions)
-	featByID, err := signalFeatures(ctx, catalog, signal)
+	history, err := signalHistory(ctx, catalog, signal)
+	featByID := featuresOf(history)
 	if err != nil {
 		return nil, diag, fmt.Errorf("signal features: %w", err)
 	}
@@ -676,7 +688,12 @@ func liveFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf
 	}
 
 	ranked, err := rankPool(ctx, reco.NewTier1(cfg).WithIDF(idf), cfg, user, pool, seen, depth)
-	return ranked, diag, err
+	if err != nil {
+		return nil, diag, err
+	}
+	// The live feed names reasons with IDF whether or not it scores with it.
+	reco.AddBecauseReasons(ranked, reco.Anchors(interactions, user.Liked, history), idf)
+	return ranked, diag, nil
 }
 
 func printSampleFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.MediaIDF, cfg reco.Config, userID uuid.UUID, k int) {
