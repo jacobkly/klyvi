@@ -535,3 +535,50 @@ func TestRecoCrew_KeepsTheGivenJobs(t *testing.T) {
 		t.Errorf("a film with only producers has crew %v, want it left out", ids)
 	}
 }
+
+// The related-keyword term reads every voted film's keywords. A film nobody
+// voted on, or with one keyword, has nothing to count.
+func TestRecoKeywordSets(t *testing.T) {
+	repo, dbConn := openTestRepo(t)
+	ctx := context.Background()
+	voted := 2_000_000_000 + rand.Intn(100_000_000)
+	unvoted, single := voted+1, voted+2
+	cleanupTestMovies(t, dbConn, voted, unvoted, single)
+	if err := repo.InsertMovies(ctx, []*movies.Movie{
+		testMovie(voted, true), testMovie(unvoted, true), testMovie(single, true),
+	}); err != nil {
+		t.Fatalf("InsertMovies: %v", err)
+	}
+	for _, m := range []struct {
+		id, votes int
+		keywords  []int
+	}{
+		{voted, 10, []int{2100000911, 2100000912}},
+		{unvoted, 0, []int{2100000911, 2100000913}},
+		{single, 10, []int{2100000914}},
+	} {
+		if _, err := dbConn.ExecContext(ctx,
+			`update movies set vote_count = $2,
+			        keywords = (select jsonb_agg(jsonb_build_object('id', k, 'name', 'test')) from unnest($3::int[]) k)
+			  where movie_id = $1`,
+			m.id, m.votes, db.IntArray(m.keywords)); err != nil {
+			t.Fatalf("set keywords: %v", err)
+		}
+	}
+
+	sets, err := repo.RecoKeywordSets(ctx)
+	if err != nil {
+		t.Fatalf("RecoKeywordSets: %v", err)
+	}
+	var found []int
+	for _, set := range sets {
+		for _, k := range set {
+			if k >= 2100000911 && k <= 2100000914 {
+				found = append(found, k)
+			}
+		}
+	}
+	if want := []int{2100000911, 2100000912}; !reflect.DeepEqual(found, want) {
+		t.Errorf("test keywords read = %v, want only the voted film's %v", found, want)
+	}
+}

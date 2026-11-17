@@ -55,6 +55,9 @@ func (t *Tier2) WithFacts(facts *FactIndex) *Tier2 { t.side.facts = facts; retur
 // WithCrew is Tier1.WithCrew for this tier.
 func (t *Tier2) WithCrew(crew *FactIndex) *Tier2 { t.side.crew = crew; return t }
 
+// WithRelatedKeywords is Tier1.WithRelatedKeywords for this tier.
+func (t *Tier2) WithRelatedKeywords(r *RelatedKeywords) *Tier2 { t.side.related = r; return t }
+
 func (t *Tier2) Name() string { return "tier2" }
 
 func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([]Scored, error) {
@@ -64,7 +67,7 @@ func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 
 	profile := BuildProfile(u.UserID, u.Liked, u.Disliked, t.idf)
 	t.saveProfile(profile)
-	side := t.side.pool(u.Liked)
+	side := t.side.pool(u.Liked, profile.KeywordWeights)
 
 	out := make([]Scored, 0, len(cands))
 	for _, c := range cands {

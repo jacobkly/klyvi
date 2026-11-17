@@ -15,19 +15,28 @@ import (
 	"klyvi-api/internal/tv"
 )
 
+// recoSides are the indexes the optional side terms score with. Each is nil
+// when its term is off.
+type recoSides struct {
+	facts, crew *reco.FactIndex
+	related     *reco.RelatedKeywords
+}
+
 // newRecoOrchestrator wires the tier cascade to the DB-backed adapters and
 // the given catalog: the database adapter, or the in-memory cachedCatalog in
 // front of it. It is the one place production builds the recommender, so
 // tests that measure the feed measure exactly what the server runs.
-func newRecoOrchestrator(dbConn *sqlx.DB, catalog reco.CatalogRepository, cfg reco.Config, idf *reco.MediaIDF, facts, crew *reco.FactIndex) *reco.Orchestrator {
+func newRecoOrchestrator(dbConn *sqlx.DB, catalog reco.CatalogRepository, cfg reco.Config, idf *reco.MediaIDF, sides recoSides) *reco.Orchestrator {
 	return reco.NewOrchestrator(
 		catalog,
 		newSignalAdapter(dbConn),
 		newSeenAdapter(dbConn),
 		cfg,
 	).WithTier0(reco.NewTier0()).
-		WithTier1(reco.NewTier1(cfg).WithIDF(idf).WithFacts(facts).WithCrew(crew)).
-		WithTier2(reco.NewTier2(cfg, newProfileAdapter(dbConn)).WithIDF(idf).WithFacts(facts).WithCrew(crew))
+		WithTier1(reco.NewTier1(cfg).WithIDF(idf).
+			WithFacts(sides.facts).WithCrew(sides.crew).WithRelatedKeywords(sides.related)).
+		WithTier2(reco.NewTier2(cfg, newProfileAdapter(dbConn)).WithIDF(idf).
+			WithFacts(sides.facts).WithCrew(sides.crew).WithRelatedKeywords(sides.related))
 }
 
 // catalogAdapter wraps the movies and series repositories to satisfy

@@ -98,23 +98,28 @@ var CrewJobs = []string{
 	"Original Music Composer", "Music",
 }
 
-// sideIndexes are the id sets scored beside genres and keywords, each with its
-// own weight in Config: the Wikidata facts and the crew.
+// sideIndexes are the indexes scored beside genres and keywords, each with its
+// own weight in Config: the Wikidata facts, the crew and the related keywords.
 type sideIndexes struct {
-	facts *FactIndex
-	crew  *FactIndex
+	facts   *FactIndex
+	crew    *FactIndex
+	related *RelatedKeywords
 }
 
 // sideWeights are the liked (or disliked) titles' pooled side ids.
 type sideWeights struct {
-	fact map[int]float64
-	crew map[int]float64
+	fact    map[int]float64
+	crew    map[int]float64
+	related map[int]float64
 }
 
-func (s sideIndexes) pool(items []SignalItem) sideWeights {
+// pool sums the items' side ids. keywordW is the same items' pooled keyword
+// weights, which the related keywords spread out from.
+func (s sideIndexes) pool(items []SignalItem, keywordW map[int]float64) sideWeights {
 	return sideWeights{
-		fact: pooledIndexWeights(items, s.facts, func(f *MediaFeatures) []int { return f.FactIDs }),
-		crew: pooledIndexWeights(items, s.crew, func(f *MediaFeatures) []int { return f.CrewIDs }),
+		fact:    pooledIndexWeights(items, s.facts, func(f *MediaFeatures) []int { return f.FactIDs }),
+		crew:    pooledIndexWeights(items, s.crew, func(f *MediaFeatures) []int { return f.CrewIDs }),
+		related: s.related.Expand(keywordW),
 	}
 }
 
@@ -127,6 +132,9 @@ func (w sideWeights) score(cfg Config, f *MediaFeatures) float64 {
 	}
 	if cfg.CrewWeight != 0 {
 		s += cfg.CrewWeight * overlapScore(f.CrewIDs, w.crew)
+	}
+	if cfg.RelatedKeywordWeight != 0 {
+		s += cfg.RelatedKeywordWeight * overlapScore(f.KeywordIDs, w.related)
 	}
 	return s
 }

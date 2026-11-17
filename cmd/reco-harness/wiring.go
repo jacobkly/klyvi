@@ -20,6 +20,15 @@ type catalogAdapter struct {
 	tvRepo *tv.Repository
 	facts  *reco.FactIndex
 	crew   *reco.FactIndex
+	// related is the related-keyword index the harness scorer uses. It is
+	// not on the features, so it rides here only for tier1.
+	related *reco.RelatedKeywords
+}
+
+// tier1 is the scorer the harness evaluates, with every side index the
+// catalog holds.
+func (a *catalogAdapter) tier1(cfg reco.Config, idf *reco.MediaIDF) *reco.Tier1 {
+	return reco.NewTier1(cfg).WithIDF(idf).WithFacts(a.facts).WithCrew(a.crew).WithRelatedKeywords(a.related)
 }
 
 func newCatalogAdapter(repo *movies.Repository, tvRepo *tv.Repository, facts, crew *reco.FactIndex) *catalogAdapter {

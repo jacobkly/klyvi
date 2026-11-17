@@ -155,6 +155,12 @@ type Config struct {
 	// a candidate shares with the user's likes, weighted by rarity. Titles
 	// with no cached credits score the same at any weight. 0 turns it off.
 	CrewWeight float64
+
+	// RelatedKeywordWeight gives partial credit for keywords that often tag
+	// the same titles as the user's liked keywords ("bank robbery" for
+	// "heist"), scaled by how often. An exact match gets none on top. 0 turns
+	// it off.
+	RelatedKeywordWeight float64
 }
 
 // DefaultConfig is the starting point. All values are tunable via

@@ -148,3 +148,44 @@ func TestRecoCrew_AddsCreators(t *testing.T) {
 		t.Errorf("a series with only producers has crew %v, want it left out", ids)
 	}
 }
+
+// Series keyword sets skip series nobody voted on and series with one keyword.
+func TestRecoKeywordSets(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB integration test in short mode")
+	}
+	_, repo, dbh := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const voted, unvoted, single = 2_100_000_032, 2_100_000_033, 2_100_000_034
+	cleanup := func() {
+		cleanupExec(dbh, `delete from tv_series where tv_id = any($1)`, []int{voted, unvoted, single})
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	if _, err := dbh.ExecContext(ctx, `
+		insert into tv_series (tv_id, vote_count, keywords) values
+		($1, 10, '[{"id": 2100000921}, {"id": 2100000922}]'),
+		($2, 0, '[{"id": 2100000921}, {"id": 2100000923}]'),
+		($3, 10, '[{"id": 2100000924}]')`, voted, unvoted, single); err != nil {
+		t.Fatalf("insert series: %v", err)
+	}
+
+	sets, err := repo.RecoKeywordSets(ctx)
+	if err != nil {
+		t.Fatalf("RecoKeywordSets: %v", err)
+	}
+	var found []int
+	for _, set := range sets {
+		for _, k := range set {
+			if k >= 2100000921 && k <= 2100000924 {
+				found = append(found, k)
+			}
+		}
+	}
+	if want := []int{2100000921, 2100000922}; !reflect.DeepEqual(found, want) {
+		t.Errorf("test keywords read = %v, want only the voted series' %v", found, want)
+	}
+}

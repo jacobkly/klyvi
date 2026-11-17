@@ -412,3 +412,18 @@ func (r *Repository) RecoCrew(ctx context.Context, jobs []string) (map[int][]int
 	}
 	return out, nil
 }
+
+// RecoKeywordSets is movies.Repository.RecoKeywordSets for series.
+func (r *Repository) RecoKeywordSets(ctx context.Context) ([][]int, error) {
+	var rows []db.IntArray
+	if err := r.db.SelectContext(ctx, &rows, `
+		select keyword_ids from tv_series
+		where vote_count > 0 and cardinality(keyword_ids) > 1`); err != nil {
+		return nil, fmt.Errorf("reco keyword sets: %w", err)
+	}
+	out := make([][]int, len(rows))
+	for i, row := range rows {
+		out[i] = row
+	}
+	return out, nil
+}

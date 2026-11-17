@@ -724,3 +724,20 @@ func (r *Repository) RecoCrew(ctx context.Context, jobs []string) (map[int][]int
 	}
 	return out, nil
 }
+
+// RecoKeywordSets returns the keyword ids of every cached film with a vote and
+// at least two keywords, one slice per film. The related-keyword term counts
+// which keywords tag the same films.
+func (r *Repository) RecoKeywordSets(ctx context.Context) ([][]int, error) {
+	var rows []db.IntArray
+	if err := r.db.SelectContext(ctx, &rows, `
+		select keyword_ids from movies
+		where vote_count > 0 and cardinality(keyword_ids) > 1`); err != nil {
+		return nil, fmt.Errorf("reco keyword sets: %w", err)
+	}
+	out := make([][]int, len(rows))
+	for i, row := range rows {
+		out[i] = row
+	}
+	return out, nil
+}

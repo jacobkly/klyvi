@@ -31,6 +31,10 @@ func (t *Tier1) WithFacts(facts *FactIndex) *Tier1 { t.side.facts = facts; retur
 // Without it every shared person weighs 1.
 func (t *Tier1) WithCrew(crew *FactIndex) *Tier1 { t.side.crew = crew; return t }
 
+// WithRelatedKeywords attaches the index the related-keyword term spreads
+// liked keywords over. Without it the term adds nothing.
+func (t *Tier1) WithRelatedKeywords(r *RelatedKeywords) *Tier1 { t.side.related = r; return t }
+
 func (t *Tier1) Name() string { return "tier1" }
 
 func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([]Scored, error) {
@@ -42,12 +46,12 @@ func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 	posGenre := pooledFeatureWeights(u.Liked, genreKeyset, (*FeatureIDF).GenreWeight, t.idf)
 	posKeyword := pooledFeatureWeights(u.Liked, keywordKeyset, (*FeatureIDF).KeywordWeight, t.idf)
 	posEra := pooledEraWeights(u.Liked)
-	posSide := t.side.pool(u.Liked)
+	posSide := t.side.pool(u.Liked, posKeyword)
 
 	negGenre := pooledFeatureWeights(u.Disliked, genreKeyset, (*FeatureIDF).GenreWeight, t.idf)
 	negKeyword := pooledFeatureWeights(u.Disliked, keywordKeyset, (*FeatureIDF).KeywordWeight, t.idf)
 	negEra := pooledEraWeights(u.Disliked)
-	negSide := t.side.pool(u.Disliked)
+	negSide := t.side.pool(u.Disliked, negKeyword)
 
 	out := make([]Scored, 0, len(cands))
 	for _, c := range cands {

@@ -128,6 +128,7 @@ func main() {
 	recoCfg.CalibrationWeight = cfg.Reco.CalibrationWeight
 	recoCfg.FactWeight = cfg.Reco.FactWeight
 	recoCfg.CrewWeight = cfg.Reco.CrewWeight
+	recoCfg.RelatedKeywordWeight = cfg.Reco.RelatedKeywordWeight
 
 	// Global IDF tables, gated by RECO_USE_IDF and loaded once at startup: they
 	// damp catalog-ubiquitous features so a diverse taste leans on its
@@ -173,21 +174,24 @@ func main() {
 		log.Println("reco catalog: in-memory catalog off (RECO_CATALOG_REFRESH=0), the feed reads the database")
 	}
 
-	// The Wikidata facts and the crew load only when their term is on. Like
-	// the IDF tables, they are read once, so a title cached later carries
-	// neither until the next restart.
-	var facts, crew *reco.FactIndex
+	// The Wikidata facts, the crew and the related keywords load only when
+	// their term is on. Like the IDF tables, they are read once, so a title
+	// cached later counts toward none of them until the next restart.
+	var sides recoSides
 	if recoCfg.FactWeight > 0 {
-		facts = loadRecoFacts(dbConn)
+		sides.facts = loadRecoFacts(dbConn)
 	}
 	if recoCfg.CrewWeight > 0 {
-		crew = loadRecoCrew(movieRepo, tvRepo)
+		sides.crew = loadRecoCrew(movieRepo, tvRepo)
 	}
-	if facts != nil || crew != nil {
-		recoCatalog = reco.NewFactCatalog(recoCatalog, facts, crew)
+	if sides.facts != nil || sides.crew != nil {
+		recoCatalog = reco.NewFactCatalog(recoCatalog, sides.facts, sides.crew)
+	}
+	if recoCfg.RelatedKeywordWeight > 0 {
+		sides.related = loadRelatedKeywords(movieRepo, tvRepo)
 	}
 
-	recoOrchestrator := newRecoOrchestrator(dbConn, recoCatalog, recoCfg, featureIDF, facts, crew).
+	recoOrchestrator := newRecoOrchestrator(dbConn, recoCatalog, recoCfg, featureIDF, sides).
 		WithReasonIDF(featureTables).
 		WithFeedCache(feedCache)
 
@@ -326,6 +330,20 @@ func loadRecoCrew(films, series reco.CrewSource) *reco.FactIndex {
 	}
 	log.Printf("reco: crew loaded for %d titles", crew.Len())
 	return crew
+}
+
+// loadRelatedKeywords counts which keywords tag the same titles. A failed load
+// returns an empty index, so every title scores as it would with the term off.
+func loadRelatedKeywords(films, series reco.KeywordSource) *reco.RelatedKeywords {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	related, err := reco.LoadRelatedKeywords(ctx, films, series)
+	if err != nil {
+		log.Printf("reco: %v", err)
+		return reco.NewRelatedKeywords(nil)
+	}
+	log.Printf("reco: related keywords counted for %d keywords", related.Len())
+	return related
 }
 
 // loadFeatureIDF reads one media type's feature stats into an IDF table. A

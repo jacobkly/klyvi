@@ -48,6 +48,11 @@ type ConfReco struct {
 	// loaded at all.
 	CrewWeight float64 `env:"RECO_CREW_WEIGHT,default=0"`
 
+	// RelatedKeywordWeight gives partial credit for keywords that often tag
+	// the same titles as the user's liked keywords. 0 is off, and then the
+	// keyword counts are not loaded at all.
+	RelatedKeywordWeight float64 `env:"RECO_RELATED_KEYWORD_WEIGHT,default=0"`
+
 	// UseIDF turns on global inverse-document-frequency weighting of taste
 	// features — it damps catalog-ubiquitous genres/keywords so a diverse taste
 	// leans on its discriminative signal. Off by default: the offline
