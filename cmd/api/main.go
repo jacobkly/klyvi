@@ -25,6 +25,7 @@ import (
 	"klyvi-api/internal/platform/http/router"
 	"klyvi-api/internal/platform/supabase"
 	"klyvi-api/internal/platform/tmdb"
+	"klyvi-api/internal/plots"
 	"klyvi-api/internal/rankings"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/search"
@@ -134,6 +135,7 @@ func main() {
 	recoCfg.WalkBeta = cfg.Reco.WalkBeta
 	recoCfg.CoLikedWeight = cfg.Reco.CoLikedWeight
 	recoCfg.CoLikedShrink = cfg.Reco.CoLikedShrink
+	recoCfg.PlotWeight = cfg.Reco.PlotWeight
 
 	// Global IDF tables, gated by RECO_USE_IDF and loaded once at startup: they
 	// damp catalog-ubiquitous features so a diverse taste leans on its
@@ -193,8 +195,16 @@ func main() {
 	if recoCfg.WalkWeight > 0 {
 		cast, sides.walk = loadRecoWalk(movieRepo, tvRepo)
 	}
-	if sides.facts != nil || sides.crew != nil || cast != nil {
-		recoCatalog = reco.NewFactCatalog(recoCatalog, reco.CatalogSides{Facts: sides.facts, Crew: sides.crew, Cast: cast})
+	var plotVecs *reco.PlotIndex
+	if recoCfg.PlotWeight > 0 || cfg.Reco.SimilarPlotWeight > 0 {
+		plotVecs = loadRecoPlots(dbConn)
+	}
+	feedPlots := plotVecs
+	if recoCfg.PlotWeight <= 0 {
+		feedPlots = nil // loaded for the shelves alone
+	}
+	if sides.facts != nil || sides.crew != nil || cast != nil || feedPlots != nil {
+		recoCatalog = reco.NewFactCatalog(recoCatalog, reco.CatalogSides{Facts: sides.facts, Crew: sides.crew, Cast: cast, Plots: feedPlots})
 	}
 	if recoCfg.RelatedKeywordWeight > 0 {
 		sides.related = loadRelatedKeywords(movieRepo, tvRepo)
@@ -219,9 +229,11 @@ func main() {
 		MinVotes:      recoCfg.QualityFloorVotes,
 	}
 	similarMovies := similar.NewMovieService(similar.NewMovieCatalog(dbConn), movieService.EnsureCached,
-		cachedTMDB, loadFeatureIDF(movieRepo, "movie"), similarCfg)
+		cachedTMDB, loadFeatureIDF(movieRepo, "movie"), similarCfg).
+		WithPlots(plotVecs, cfg.Reco.SimilarPlotWeight)
 	similarTV := similar.NewTVService(similar.NewTVCatalog(dbConn), tvService.EnsureSeries,
-		cachedTMDB, loadFeatureIDF(movieRepo, "tv"), similarCfg)
+		cachedTMDB, loadFeatureIDF(movieRepo, "tv"), similarCfg).
+		WithPlots(plotVecs, cfg.Reco.SimilarPlotWeight)
 
 	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
 		JWKSURL:  cfg.Supabase.JWKSURL,
@@ -330,6 +342,29 @@ func loadRecoFacts(dbConn *sqlx.DB) *reco.FactIndex {
 		log.Printf("reco: wikidata facts loaded for %d titles", facts.Len())
 	}
 	return facts
+}
+
+// loadRecoPlots reads the Wikipedia plot vectors the plot term compares
+// stories by. A failed or empty load returns an empty index, so every title
+// scores as it would with the term off.
+func loadRecoPlots(dbConn *sqlx.DB) *reco.PlotIndex {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	vecs, err := plots.NewRepository(dbConn).Vectors(ctx)
+	if err != nil {
+		log.Printf("reco: load plot vectors: %v", err)
+	}
+	titles := make([]reco.TitlePlot, len(vecs))
+	for i, v := range vecs {
+		titles[i] = reco.TitlePlot{MediaType: v.MediaType, TMDBID: v.TMDBID, Vector: v.Embedding}
+	}
+	idx := reco.NewPlotIndex(titles)
+	if idx.Len() == 0 {
+		log.Println("reco: no plot vectors, run /plots (the plot term scores nothing until then)")
+	} else {
+		log.Printf("reco: plot vectors loaded for %d titles", idx.Len())
+	}
+	return idx
 }
 
 // loadRecoCrew reads the crew the feed matches titles on. A failed load

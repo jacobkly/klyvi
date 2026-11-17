@@ -107,6 +107,8 @@ func (noCatalog) Candidates(context.Context, *similar.Source, int, int) ([]simil
 
 func (noCatalog) Resolve(context.Context, []int) (map[int]similar.Resolved, error) { return nil, nil }
 
+func (noCatalog) ByTMDBIDs(context.Context, []int, int) ([]similar.Candidate, error) { return nil, nil }
+
 type oneTitleTMDB struct{}
 
 func (oneTitleTMDB) TMDBRequest(context.Context, string, string, interface{}) (map[string]interface{}, error) {

@@ -94,6 +94,9 @@ type Catalog interface {
 	// Candidates returns up to limit titles with at least minVotes votes
 	// that share a keyword with src, most shared keywords first.
 	Candidates(ctx context.Context, src *Source, minVotes, limit int) ([]Candidate, error)
+	// ByTMDBIDs returns the titles among tmdbIDs with at least minVotes
+	// votes, in no set order.
+	ByTMDBIDs(ctx context.Context, tmdbIDs []int, minVotes int) ([]Candidate, error)
 	// Resolve returns the cached titles among tmdbIDs, keyed by TMDB id.
 	Resolve(ctx context.Context, tmdbIDs []int) (map[int]Resolved, error)
 }
@@ -123,6 +126,10 @@ type Service struct {
 	idf       *reco.FeatureIDF // nil weighs every feature the same
 	cfg       Config
 	shelves   *cache.TTL[[]Item]
+
+	// plots and plotWeight blend in how alike the stories are (see WithPlots).
+	plots      *reco.PlotIndex
+	plotWeight float64
 }
 
 // NewMovieService builds shelves for movies.
@@ -145,6 +152,17 @@ func newService(mediaType string, catalog Catalog, ensure EnsureCached, client T
 		cfg:       cfg,
 		shelves:   cache.NewTTL[[]Item](cacheEntries, cacheTTL),
 	}
+}
+
+// WithPlots blends Wikipedia plot similarity into the shelf at weight, beside
+// the keyword and genre weights: the titles whose plots are nearest the
+// source's join the pool even when they share no keyword, and a title's
+// score counts how alike its story is. A title with no plot vector, or a
+// source without one, scores as it would without plots. A weight of 0 or a
+// nil index leaves every shelf as it was. Set it before the first request.
+func (s *Service) WithPlots(idx *reco.PlotIndex, weight float64) *Service {
+	s.plots, s.plotWeight = idx, weight
+	return s
 }
 
 // Similar returns up to limit titles like the one with tmdbID, best first.
@@ -196,16 +214,26 @@ func (s *Service) compute(ctx context.Context, tmdbID int) (shelf []Item, comple
 		}
 	}
 
+	var near map[int]float64
+	if src != nil && s.plotWeight > 0 {
+		near = s.plotNeighbours(tmdbID)
+	}
+
 	var overlap []entry
-	if src != nil && len(src.KeywordIDs) > 0 {
+	if src != nil && (len(src.KeywordIDs) > 0 || len(near) > 0) {
 		pool, err := s.catalog.Candidates(ctx, src, s.cfg.MinVotes, poolSize)
 		if err != nil {
 			return nil, false, fmt.Errorf("load candidates for %s %d: %w", s.mediaType, tmdbID, err)
 		}
-		overlap = s.rank(src, pool)
+		if pool, err = s.withPlotNeighbours(ctx, pool, near); err != nil {
+			return nil, false, fmt.Errorf("load plot neighbours for %s %d: %w", s.mediaType, tmdbID, err)
+		}
+		overlap = s.rank(src, pool, near)
 	}
 
-	keywordRich := src != nil && len(src.KeywordIDs) >= minSourceKeywords
+	// A source with a plot vector has a story to match on even with few
+	// keywords, so its own ranking leads its shelf too.
+	keywordRich := src != nil && (len(src.KeywordIDs) >= minSourceKeywords || len(near) > 0)
 	if keywordRich {
 		if shelf := assemble(tmdbID, overlap); len(shelf) >= MaxLimit {
 			return shelf, true, nil
@@ -234,14 +262,58 @@ func (s *Service) compute(ctx context.Context, tmdbID int) (shelf []Item, comple
 	return assemble(tmdbID, fill, overlap), src != nil, nil
 }
 
+// plotPool is how many of the source's nearest plots join its pool.
+const plotPool = 100
+
+// plotNeighbours are the cosines of the titles whose plots are nearest the
+// source's, by TMDB id, empty when it has no plot vector.
+func (s *Service) plotNeighbours(tmdbID int) map[int]float64 {
+	out := map[int]float64{}
+	for _, n := range s.plots.Nearest(s.mediaType, tmdbID, plotPool) {
+		out[n.TMDBID] = n.Sim
+	}
+	return out
+}
+
+// withPlotNeighbours adds to the pool the plot neighbours it lacks.
+func (s *Service) withPlotNeighbours(ctx context.Context, pool []Candidate, near map[int]float64) ([]Candidate, error) {
+	if len(near) == 0 {
+		return pool, nil
+	}
+	have := make(map[int]bool, len(pool))
+	for _, c := range pool {
+		have[c.TMDBID] = true
+	}
+	var missing []int
+	for id := range near {
+		if !have[id] {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return pool, nil
+	}
+	slices.Sort(missing)
+	extra, err := s.catalog.ByTMDBIDs(ctx, missing, s.cfg.MinVotes)
+	if err != nil {
+		return nil, err
+	}
+	// Nearest story first, so ties in score keep that order.
+	slices.SortStableFunc(extra, func(a, b Candidate) int { return cmp.Compare(near[b.TMDBID], near[a.TMDBID]) })
+	return append(pool, extra...), nil
+}
+
 // rank scores each candidate against the source and orders them best first.
 // A candidate's score blends the cosine similarity of its keywords and of its
 // genres with the source's, each feature weighted by its IDF so a rare shared
-// keyword counts for more than one half the catalog carries.
-func (s *Service) rank(src *Source, pool []Candidate) []entry {
+// keyword counts for more than one half the catalog carries. With plots on
+// and a source plot (near not empty), a candidate with a plot vector also
+// blends in the cosine of the two plots, and one without scores as before.
+func (s *Service) rank(src *Source, pool []Candidate, near map[int]float64) []entry {
 	srcKeywords := s.weigh(src.KeywordIDs, s.idf.KeywordWeight)
 	srcGenres := s.weigh(src.GenreIDs, s.idf.GenreWeight)
 	total := s.cfg.KeywordWeight + s.cfg.GenreWeight
+	plotsOn := len(near) > 0
 
 	type scored struct {
 		entry
@@ -253,13 +325,22 @@ func (s *Service) rank(src *Source, pool []Candidate) []entry {
 			continue
 		}
 		kSim := cosine(srcKeywords, s.weigh(c.KeywordIDs, s.idf.KeywordWeight))
-		if kSim == 0 {
+		hasPlot := plotsOn && s.plots.Vector(s.mediaType, c.TMDBID) != nil
+		var pSim float64
+		if hasPlot {
+			pSim = s.plots.Similarity(s.mediaType, src.TMDBID, c.TMDBID)
+		}
+		if kSim == 0 && pSim == 0 {
 			continue
 		}
 		gSim := cosine(srcGenres, s.weigh(c.GenreIDs, s.idf.GenreWeight))
 		score := kSim
 		if total > 0 {
 			score = (s.cfg.KeywordWeight*kSim + s.cfg.GenreWeight*gSim) / total
+		}
+		if hasPlot {
+			score = (s.cfg.KeywordWeight*kSim + s.cfg.GenreWeight*gSim + s.plotWeight*pSim) /
+				(total + s.plotWeight)
 		}
 		score = math.Min(1, math.Round(score*1000)/1000)
 

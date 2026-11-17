@@ -46,6 +46,7 @@ import (
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/opendata"
 	"klyvi-api/internal/platform/db"
+	"klyvi-api/internal/plots"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/tv"
 )
@@ -72,6 +73,7 @@ func main() {
 	relatedWeight := flag.Float64("related", -1, "override reco RelatedKeywordWeight, the related-keyword term (0 is off)")
 	walkWeight := flag.Float64("walk", -1, "override reco WalkWeight, the random walk over keywords and cast (0 is off)")
 	walkBeta := flag.Float64("walk-beta", -1, "override reco WalkBeta, how hard the walk discounts famous titles")
+	plotWeight := flag.Float64("plot", -1, "override reco PlotWeight, the Wikipedia plot similarity term (0 is off)")
 	report := flag.String("report", "", "also run each scorer variant and write a Markdown table of their numbers to this file")
 	flag.Parse()
 	sampleFeed, ok := reco.ParseFeedMedia(*sampleMedia)
@@ -135,13 +137,16 @@ func main() {
 	if *walkWeight >= 0 {
 		recoCfg.WalkWeight = *walkWeight
 	}
+	if *plotWeight >= 0 {
+		recoCfg.PlotWeight = *plotWeight
+	}
 	if *walkBeta >= 0 {
 		recoCfg.WalkBeta = *walkBeta
 	}
-	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d tv_share=%.2f calibration=%.2f facts=%.2f crew=%.2f related=%.2f walk=%.2f walk_beta=%.2f",
+	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d tv_share=%.2f calibration=%.2f facts=%.2f crew=%.2f related=%.2f walk=%.2f walk_beta=%.2f plot=%.2f",
 		recoCfg.KeywordWeight, recoCfg.GenreWeight, recoCfg.EraWeight,
 		recoCfg.NegativeSimWeight, recoCfg.QualityFloorVotes, recoCfg.TVShare, recoCfg.CalibrationWeight,
-		recoCfg.FactWeight, recoCfg.CrewWeight, recoCfg.RelatedKeywordWeight, recoCfg.WalkWeight, recoCfg.WalkBeta)
+		recoCfg.FactWeight, recoCfg.CrewWeight, recoCfg.RelatedKeywordWeight, recoCfg.WalkWeight, recoCfg.WalkBeta, recoCfg.PlotWeight)
 
 	// The Wikidata facts load whatever the weight, so -report can sweep it.
 	// A weight of 0 leaves every score as it was.
@@ -182,10 +187,23 @@ func main() {
 	walk := reco.NewWalkGraph(keywordSets, cast.Sets())
 	log.Printf("walk: cast for %d titles, %d nodes", cast.Len(), walk.Len())
 
+	// The plot vectors load whatever the weight too, so -report can sweep it.
+	vecs, err := plots.NewRepository(dbConn).Vectors(context.Background())
+	if err != nil {
+		log.Fatalf("load plot vectors: %v", err)
+	}
+	titlePlots := make([]reco.TitlePlot, len(vecs))
+	for i, v := range vecs {
+		titlePlots[i] = reco.TitlePlot{MediaType: v.MediaType, TMDBID: v.TMDBID, Vector: v.Embedding}
+	}
+	plotIndex := reco.NewPlotIndex(titlePlots)
+	log.Printf("plots: %d titles carry a wikipedia plot vector (run go run ./cmd/plots if 0)", plotIndex.Len())
+
 	catalog := newCatalogAdapter(movieRepo, tvRepo, facts, crew)
 	catalog.related = related
 	catalog.cast = cast
 	catalog.walk = walk
+	catalog.plots = plotIndex
 
 	// Diagnostics: the size of the eligible candidate universe. A small or
 	// mainstream-only catalog caps recommendation quality regardless of the
@@ -445,8 +463,19 @@ func reportVariants(cfg reco.Config, idf *reco.MediaIDF) []variant {
 			out = append(out, variant{fmt.Sprintf("walk beta %.2f", b), r, idf})
 		}
 	}
+	for _, w := range plotSweep {
+		if w == cfg.PlotWeight {
+			continue
+		}
+		p := cfg
+		p.PlotWeight = w
+		out = append(out, variant{fmt.Sprintf("plot %.2f", w), p, idf})
+	}
 	return out
 }
+
+// plotSweep is the plot weights -report compares, 0 being off.
+var plotSweep = []float64{0, 0.1, 0.2, 0.4, 0.8, 1.6}
 
 func saveReport(path string, results []variantResult, pop popularity) error {
 	f, err := os.Create(path)

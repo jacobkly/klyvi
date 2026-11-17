@@ -66,6 +66,17 @@ type ConfReco struct {
 	CoLikedWeight float64 `env:"RECO_COLIKED_WEIGHT,default=0"`
 	CoLikedShrink float64 `env:"RECO_COLIKED_SHRINK,default=10"`
 
+	// PlotWeight scores how alike a title's story is to the stories of the
+	// user's liked titles, from the Wikipedia plot vectors the weekly /plots
+	// job stores. 0 is off, and then the vectors are not loaded at all. They
+	// cost about 1.5 KB a title, some 25 MB for the catalog.
+	PlotWeight float64 `env:"RECO_PLOT_WEIGHT,default=0"`
+
+	// SimilarPlotWeight blends how alike two stories are into the "more like
+	// this" shelves, beside the keyword (0.9) and genre (0.2) weights, and lets
+	// the titles with the nearest plots join a shelf. 0 is off.
+	SimilarPlotWeight float64 `env:"RECO_SIMILAR_PLOT_WEIGHT,default=0"`
+
 	// UseIDF turns on global inverse-document-frequency weighting of taste
 	// features — it damps catalog-ubiquitous genres/keywords so a diverse taste
 	// leans on its discriminative signal. Off by default: the offline

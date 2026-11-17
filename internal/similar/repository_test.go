@@ -193,6 +193,22 @@ func TestMovieCatalog(t *testing.T) {
 			t.Errorf("resolved = %+v, want only the indexed title with its collection", got)
 		}
 	})
+
+	t.Run("by id returns indexed titles over the floor, keywords shared or not", func(t *testing.T) {
+		got, err := cat.ByTMDBIDs(ctx, []int{base + 6, base + 4, base + 5, base + 3, base + 98}, 25)
+		if err != nil {
+			t.Fatalf("ByTMDBIDs: %v", err)
+		}
+		if !sameInts(offsets(got), []int{3, 6}) {
+			t.Fatalf("by id = %v, want [3 6]", offsets(got))
+		}
+		if got[0].MediaID == 0 || got[0].Title != "movie 3" || got[0].CollectionID != base+90 {
+			t.Errorf("by id = %+v, want its row's fields", got[0])
+		}
+		if none, err := cat.ByTMDBIDs(ctx, nil, 25); err != nil || none == nil || len(none) != 0 {
+			t.Errorf("no ids = %v, %v; want an empty list", none, err)
+		}
+	})
 }
 
 func TestTVCatalog(t *testing.T) {
@@ -243,5 +259,13 @@ func TestTVCatalog(t *testing.T) {
 	}
 	if len(resolved) != 1 || resolved[base+1].MediaID == 0 {
 		t.Errorf("resolved = %+v, want the indexed series", resolved)
+	}
+
+	byID, err := cat.ByTMDBIDs(ctx, []int{base, base + 1, base + 98}, 25)
+	if err != nil {
+		t.Fatalf("ByTMDBIDs: %v", err)
+	}
+	if len(byID) != 2 || byID[1].Title != "match" || byID[1].MediaID == 0 {
+		t.Errorf("by id = %+v, want both indexed series", byID)
 	}
 }

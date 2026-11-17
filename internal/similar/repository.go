@@ -19,7 +19,7 @@ type SQLCatalog struct {
 }
 
 type catalogQueries struct {
-	source, candidates, resolve string
+	source, candidates, byIDs, resolve string
 }
 
 // NewMovieCatalog reads movies. A movie's collection comes from its
@@ -46,6 +46,16 @@ func NewMovieCatalog(dbConn *sqlx.DB) *SQLCatalog {
 			order by (select count(*) from unnest(m.keyword_ids) k where k = any($2::int[])) desc,
 			         m.vote_count desc, m.movie_id
 			limit $4`,
+		byIDs: `
+			select m.movie_id as tmdb_id, mi.media_id,
+			       coalesce(m.title, '') as title, coalesce(m.poster_path, '') as poster_path,
+			       coalesce(extract(year from m.release_date)::int, 0) as year,
+			       m.genre_ids, m.keyword_ids,
+			       coalesce((m.belongs_to_collection->>'id')::int, 0) as collection_id
+			from movies m
+			join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
+			where m.vote_count >= $1 and m.movie_id = any($2::int[])
+			order by m.movie_id`,
 		resolve: `
 			select mi.id as tmdb_id, mi.media_id,
 			       coalesce((m.belongs_to_collection->>'id')::int, 0) as collection_id
@@ -75,6 +85,15 @@ func NewTVCatalog(dbConn *sqlx.DB) *SQLCatalog {
 			order by (select count(*) from unnest(s.keyword_ids) k where k = any($2::int[])) desc,
 			         s.vote_count desc, s.tv_id
 			limit $4`,
+		byIDs: `
+			select s.tv_id as tmdb_id, mi.media_id,
+			       coalesce(s.name, '') as title, coalesce(s.poster_path, '') as poster_path,
+			       coalesce(extract(year from s.first_air_date)::int, 0) as year,
+			       s.genre_ids, s.keyword_ids, 0 as collection_id
+			from tv_series s
+			join media_index mi on mi.id = s.tv_id and mi.media_type = 'tv'
+			where s.vote_count >= $1 and s.tv_id = any($2::int[])
+			order by s.tv_id`,
 		resolve: `
 			select mi.id as tmdb_id, mi.media_id, 0 as collection_id
 			from media_index mi
@@ -132,6 +151,23 @@ func (c *SQLCatalog) Candidates(ctx context.Context, src *Source, minVotes, limi
 	if err := c.db.SelectContext(ctx, &rows, c.q.candidates, minVotes, []int(src.KeywordIDs), src.TMDBID, limit); err != nil {
 		return nil, err
 	}
+	return toCandidates(rows), nil
+}
+
+// ByTMDBIDs returns the indexed titles among tmdbIDs with at least minVotes
+// votes, by TMDB id.
+func (c *SQLCatalog) ByTMDBIDs(ctx context.Context, tmdbIDs []int, minVotes int) ([]Candidate, error) {
+	if len(tmdbIDs) == 0 {
+		return []Candidate{}, nil
+	}
+	var rows []candidateRow
+	if err := c.db.SelectContext(ctx, &rows, c.q.byIDs, minVotes, tmdbIDs); err != nil {
+		return nil, err
+	}
+	return toCandidates(rows), nil
+}
+
+func toCandidates(rows []candidateRow) []Candidate {
 	out := make([]Candidate, len(rows))
 	for i, r := range rows {
 		out[i] = Candidate{
@@ -145,7 +181,7 @@ func (c *SQLCatalog) Candidates(ctx context.Context, src *Source, minVotes, limi
 			CollectionID: r.CollectionID,
 		}
 	}
-	return out, nil
+	return out
 }
 
 // Resolve returns the indexed titles among tmdbIDs, keyed by TMDB id.

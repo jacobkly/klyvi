@@ -81,7 +81,8 @@ func TestFactCatalog(t *testing.T) {
 	})
 	crew := NewFactIndex([]TitleFacts{{MediaType: "movie", TMDBID: 550, IDs: []int{7467}}})
 	cast := NewFactIndex([]TitleFacts{{MediaType: "movie", TMDBID: 550, IDs: []int{287}}})
-	cat := NewFactCatalog(inner, CatalogSides{Facts: x, Crew: crew, Cast: cast})
+	plots := NewPlotIndex([]TitlePlot{{MediaType: "movie", TMDBID: 550, Vector: unit(1, 0)}, {MediaType: "tv", TMDBID: 550, Vector: unit(0, 1)}})
+	cat := NewFactCatalog(inner, CatalogSides{Facts: x, Crew: crew, Cast: cast, Plots: plots})
 	ctx := context.Background()
 
 	reads := map[string]func() ([]Candidate, error){
@@ -105,6 +106,9 @@ func TestFactCatalog(t *testing.T) {
 		if ids := got[0].Features.CastIDs; !reflect.DeepEqual(ids, []int{287}) {
 			t.Errorf("%s: matched film cast = %v, want [287]", name, ids)
 		}
+		if got[0].Features.Plot == nil || got[1].Features.Plot != nil {
+			t.Errorf("%s: plot vectors on the wrong titles", name)
+		}
 		if got[0].Features.KeywordIDs[0] != 5 {
 			t.Errorf("%s: the film lost its other features", name)
 		}
@@ -115,7 +119,7 @@ func TestFactCatalog(t *testing.T) {
 			t.Errorf("%s: a title without features gained some", name)
 		}
 	}
-	if shared.FactIDs != nil || shared.CrewIDs != nil || shared.CastIDs != nil || inner.cands[0].Features != shared {
+	if shared.FactIDs != nil || shared.CrewIDs != nil || shared.CastIDs != nil || shared.Plot != nil || inner.cands[0].Features != shared {
 		t.Error("the inner catalog's titles were changed in place")
 	}
 }

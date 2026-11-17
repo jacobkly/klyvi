@@ -28,6 +28,9 @@ type MediaFeatures struct {
 	// CastIDs are the TMDB person ids of the title's top CastTop billed cast,
 	// nil when its credits are not cached or the walk is off.
 	CastIDs []int `json:"-"`
+	// Plot is the title's centered unit plot vector (see PlotIndex), nil
+	// when its Wikipedia article has no plot section or the plot term is off.
+	Plot []float32 `json:"-"`
 }
 
 // Candidate is a media item the orchestrator may rank for a user. Features
@@ -178,6 +181,12 @@ type Config struct {
 	// users share it. With no counts it adds nothing. 0 turns it off.
 	CoLikedWeight float64
 	CoLikedShrink float64
+
+	// PlotWeight scores how alike a candidate's story is to the stories of
+	// the liked titles nearest it, from their Wikipedia plot vectors (see
+	// plotScore), 0 to 1 before the weight. Titles without a plot vector
+	// score the same at any weight. 0 turns it off.
+	PlotWeight float64
 }
 
 // DefaultConfig is the starting point. All values are tunable via

@@ -81,6 +81,25 @@ func TestRepository(t *testing.T) {
 	if first > -0.79 || first < -0.81 {
 		t.Errorf("stored second component %.4f, want about -0.8", first)
 	}
+	vecs, err := repo.Vectors(ctx)
+	if err != nil {
+		t.Fatalf("Vectors: %v", err)
+	}
+	var mine *Vector
+	for i := range vecs {
+		if vecs[i].TMDBID == testID1 {
+			mine = &vecs[i]
+		}
+	}
+	// The local DB may hold real vectors of the job's model, which outnumber
+	// this test's one row of model "m". Only an empty table makes it the
+	// most held.
+	if len(vecs) == 1 && (mine == nil || len(mine.Embedding) != 384 || mine.Embedding[1] > -0.79) {
+		t.Errorf("Vectors read back %+v", vecs)
+	}
+	if len(vecs) > 1 && mine != nil {
+		t.Error("Vectors mixed two models")
+	}
 
 	if err := repo.Save(ctx, "movie", []Plot{{TMDBID: testID1, RevisionID: 8, Model: "m", Words: 12}}); err != nil {
 		t.Fatalf("Save without a plot: %v", err)
@@ -112,5 +131,17 @@ func TestRepository(t *testing.T) {
 func TestVectorLiteral(t *testing.T) {
 	if got := vectorLiteral([]float32{0.5, -1, 0.25}); got != "[0.5,-1,0.25]" {
 		t.Errorf("vectorLiteral = %q", got)
+	}
+}
+
+func TestParseVector(t *testing.T) {
+	got, err := parseVector("[0.5,-1, 0.25]")
+	if err != nil || len(got) != 3 || got[0] != 0.5 || got[1] != -1 || got[2] != 0.25 {
+		t.Errorf("parseVector = %v, %v", got, err)
+	}
+	for _, bad := range []string{"", "0.5,1", "[0.5,x]"} {
+		if _, err := parseVector(bad); err == nil {
+			t.Errorf("parseVector(%q) took a malformed vector", bad)
+		}
 	}
 }

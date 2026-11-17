@@ -23,6 +23,11 @@ type fakeCatalog struct {
 	// for a title that was not cached yet.
 	cachedOnEnsure *similar.Source
 
+	// byID are the titles ByTMDBIDs can return, and byIDReads how often it
+	// was asked.
+	byID      []similar.Candidate
+	byIDReads int
+
 	poolReads int
 	minVotes  int
 }
@@ -41,6 +46,19 @@ func (c *fakeCatalog) Candidates(_ context.Context, _ *similar.Source, minVotes,
 		return c.pool[:limit], nil
 	}
 	return c.pool, nil
+}
+
+func (c *fakeCatalog) ByTMDBIDs(_ context.Context, tmdbIDs []int, _ int) ([]similar.Candidate, error) {
+	c.byIDReads++
+	var out []similar.Candidate
+	for _, cand := range c.byID {
+		for _, id := range tmdbIDs {
+			if cand.TMDBID == id {
+				out = append(out, cand)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (c *fakeCatalog) Resolve(_ context.Context, tmdbIDs []int) (map[int]similar.Resolved, error) {
@@ -406,5 +424,79 @@ func TestSimilar_TVAsksTMDBForTheSeriesList(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Title != "A Show" || got[0].Year != 2008 || got[0].MediaType != "tv" {
 		t.Errorf("got %+v, want the series named from TMDB's name field", got)
+	}
+}
+
+func plotVec(v ...float32) []float32 { return v }
+
+// plotShelf is a keyword-rich source, 1, whose story is nearly that of title
+// 3, which shares none of its keywords. Title 2 shares a keyword and has an
+// unrelated story, and title 4 shares a keyword and has no plot vector.
+func plotShelf() (*fakeCatalog, *reco.PlotIndex) {
+	c := &fakeCatalog{
+		source: &similar.Source{TMDBID: 1, KeywordIDs: []int{10, 11, 12}, GenreIDs: []int{18}},
+		pool: []similar.Candidate{
+			candidate(2, []int{10}, []int{18}),
+			candidate(4, []int{10}, []int{18}),
+		},
+		byID: []similar.Candidate{candidate(3, []int{99}, []int{18})},
+	}
+	idx := reco.NewPlotIndex([]reco.TitlePlot{
+		{MediaType: "movie", TMDBID: 1, Vector: plotVec(1, 0, 0)},
+		{MediaType: "movie", TMDBID: 3, Vector: plotVec(0.998, 0.05, 0)},
+		{MediaType: "movie", TMDBID: 2, Vector: plotVec(0, 1, 0)},
+		{MediaType: "movie", TMDBID: 5, Vector: plotVec(0, 0, 1)},
+		{MediaType: "movie", TMDBID: 6, Vector: plotVec(-0.577, -0.577, -0.577)},
+	})
+	return c, idx
+}
+
+func TestSimilar_PlotNeighboursJoinTheShelf(t *testing.T) {
+	ctx := context.Background()
+
+	offCat, idx := plotShelf()
+	off, err := newMovieService(offCat, &fakeTMDB{}, nil).WithPlots(idx, 0).Similar(ctx, 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameInts(tmdbIDs(off), []int{2, 4}) || offCat.byIDReads != 0 {
+		t.Errorf("weight 0: shelf %v after %d plot reads, want [2 4] and none", tmdbIDs(off), offCat.byIDReads)
+	}
+
+	onCat, idx := plotShelf()
+	// At weight 2 the story counts for more than the keywords (0.9), so a
+	// near-identical plot outranks a title sharing one keyword of three.
+	on, err := newMovieService(onCat, &fakeTMDB{}, nil).WithPlots(idx, 2).Similar(ctx, 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := tmdbIDs(on); len(ids) != 3 || ids[0] != 3 {
+		t.Fatalf("plot on: shelf %v, want the same-story title 3 first", ids)
+	}
+	score := func(items []similar.Item, id int) float64 {
+		for _, it := range items {
+			if it.TMDBID == id {
+				return it.Score
+			}
+		}
+		return -1
+	}
+	if score(on, 4) != score(off, 4) {
+		t.Errorf("a title with no plot vector moved: %v off, %v on", score(off, 4), score(on, 4))
+	}
+	if on[0].Score <= 0 || on[0].Score > 1 {
+		t.Errorf("a plot neighbour's score %v is outside (0, 1]", on[0].Score)
+	}
+}
+
+func TestSimilar_PlotsWithoutASourceVectorChangeNothing(t *testing.T) {
+	c, idx := plotShelf()
+	c.source.TMDBID = 7 // no plot vector
+	got, err := newMovieService(c, &fakeTMDB{}, nil).WithPlots(idx, 1).Similar(context.Background(), 7, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameInts(tmdbIDs(got), []int{2, 4}) || c.byIDReads != 0 {
+		t.Errorf("shelf %v after %d plot reads, want today's [2 4]", tmdbIDs(got), c.byIDReads)
 	}
 }

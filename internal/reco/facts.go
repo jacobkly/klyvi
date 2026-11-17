@@ -114,6 +114,7 @@ type sideWeights struct {
 	fact    map[int]float64
 	crew    map[int]float64
 	related map[int]float64
+	plots   [][]float32
 }
 
 // pool sums the items' side ids. keywordW is the same items' pooled keyword
@@ -123,6 +124,7 @@ func (s sideIndexes) pool(items []SignalItem, keywordW map[int]float64) sideWeig
 		fact:    pooledIndexWeights(items, s.facts, func(f *MediaFeatures) []int { return f.FactIDs }),
 		crew:    pooledIndexWeights(items, s.crew, func(f *MediaFeatures) []int { return f.CrewIDs }),
 		related: s.related.Expand(keywordW),
+		plots:   pooledPlots(items),
 	}
 }
 
@@ -138,6 +140,9 @@ func (w sideWeights) score(cfg Config, f *MediaFeatures) float64 {
 	}
 	if cfg.RelatedKeywordWeight != 0 {
 		s += cfg.RelatedKeywordWeight * overlapScore(f.KeywordIDs, w.related)
+	}
+	if cfg.PlotWeight != 0 {
+		s += cfg.PlotWeight * plotScore(f.Plot, w.plots)
 	}
 	return s
 }
@@ -157,16 +162,17 @@ func pooledIndexWeights(items []SignalItem, x *FactIndex, ids func(*MediaFeature
 	return out
 }
 
-// CatalogSides are the per-title ids a fact catalog puts on its candidates'
-// features. Any may be nil.
+// CatalogSides are the per-title ids and plot vectors a fact catalog puts on
+// its candidates' features. Any may be nil.
 type CatalogSides struct {
 	Facts *FactIndex
 	Crew  *FactIndex
 	Cast  *FactIndex
+	Plots *PlotIndex
 }
 
-// factCatalog puts each title's open-data facts, crew and top-billed cast on
-// the features of every candidate the catalog returns. It copies a title's
+// factCatalog puts each title's open-data facts, crew, top-billed cast and
+// plot vector on the features of every candidate the catalog returns. It copies a title's
 // features before adding them, since the catalog underneath may share them
 // between requests.
 type factCatalog struct {
@@ -188,11 +194,13 @@ func (c factCatalog) withFacts(cands []Candidate, err error) ([]Candidate, error
 		facts := c.sides.Facts.IDs(cand.MediaType, cand.TMDBID)
 		crew := c.sides.Crew.IDs(cand.MediaType, cand.TMDBID)
 		cast := c.sides.Cast.IDs(cand.MediaType, cand.TMDBID)
-		if (facts != nil || crew != nil || cast != nil) && cand.Features != nil {
+		plot := c.sides.Plots.Vector(cand.MediaType, cand.TMDBID)
+		if (facts != nil || crew != nil || cast != nil || plot != nil) && cand.Features != nil {
 			f := *cand.Features
 			f.FactIDs = facts
 			f.CrewIDs = crew
 			f.CastIDs = cast
+			f.Plot = plot
 			cand.Features = &f
 		}
 		out[i] = cand

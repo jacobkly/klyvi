@@ -142,6 +142,63 @@ func (r *Repository) TableBytes(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
+// Vector is one title's stored plot vector.
+type Vector struct {
+	MediaType string
+	TMDBID    int
+	Embedding []float32
+}
+
+// Vectors reads every stored plot vector of one model: the model most rows
+// hold, so while a new model's run is under way the feed keeps the old one's
+// vectors until the new one holds the most, and never compares across two.
+func (r *Repository) Vectors(ctx context.Context) ([]Vector, error) {
+	var rows []struct {
+		MediaType string `db:"media_type"`
+		TMDBID    int    `db:"tmdb_id"`
+		Embedding string `db:"embedding"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		select media_type, tmdb_id, embedding::text as embedding
+		  from wikipedia_plots
+		 where embedding is not null
+		   and model = (select model from wikipedia_plots where embedding is not null
+		                 group by model order by count(*) desc, model limit 1)`); err != nil {
+		return nil, fmt.Errorf("plot vectors: %w", err)
+	}
+	out := make([]Vector, 0, len(rows))
+	for _, row := range rows {
+		v, err := parseVector(row.Embedding)
+		if err != nil {
+			return nil, fmt.Errorf("plot vector of %s %d: %w", row.MediaType, row.TMDBID, err)
+		}
+		out = append(out, Vector{MediaType: row.MediaType, TMDBID: row.TMDBID, Embedding: v})
+	}
+	return out, nil
+}
+
+// parseVector reads pgvector's text form, [1,2,3].
+func parseVector(s string) ([]float32, error) {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 || s[0] != '[' || s[len(s)-1] != ']' {
+		return nil, fmt.Errorf("not a vector: %.20q", s)
+	}
+	s = s[1 : len(s)-1]
+	if s == "" {
+		return []float32{}, nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]float32, len(parts))
+	for i, p := range parts {
+		f, err := strconv.ParseFloat(strings.TrimSpace(p), 32)
+		if err != nil {
+			return nil, fmt.Errorf("vector component %d: %w", i, err)
+		}
+		out[i] = float32(f)
+	}
+	return out, nil
+}
+
 // vectorLiteral writes v in pgvector's text form, [1,2,3].
 func vectorLiteral(v []float32) string {
 	var b strings.Builder
