@@ -272,12 +272,13 @@ func (o *Orchestrator) rank(ctx context.Context, userID uuid.UUID, media FeedMed
 
 	// MMR rerank trades a little relevance for a noticeably more varied
 	// feed, and holds films and series to their shares of it so neither
-	// takes over. Tier 0 candidates have nil Features in the synthetic test
+	// takes over. With calibration on it also holds the genre mix near the
+	// mix of the user's likes. Tier 0 candidates have nil Features in the synthetic test
 	// path, in which case their similarity is 0 and MMR degenerates to plain
 	// score order. Rank down to `depth` (the deepest item the caller needs);
 	// MMR's greedy order is prefix-stable, so ranking deeper never disturbs
 	// earlier pages.
-	ranked := MMRReorderWithin(scored, depth, cfg.MMRLambda, FeedTypeBound(cfg, user.Liked))
+	ranked := MMRReorderCalibrated(scored, depth, cfg.MMRLambda, FeedTypeBound(cfg, user.Liked), FeedCalibration(cfg, user.Liked))
 	AddBecauseReasons(ranked, Anchors(interactions, user.Liked, history), o.reasonIDF)
 	return ranked, nil
 }

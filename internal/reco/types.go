@@ -132,6 +132,11 @@ type Config struct {
 	// ranked feed, so shows cannot take over a film lover's feed (see
 	// FeedTypeBound). 0 is the films-only feed and 1 the series-only feed.
 	TVShare float64
+
+	// CalibrationWeight holds the feed's genre mix near the mix of the user's
+	// likes. MMR pays this much, times the pool's top score, per nat of KL
+	// divergence between the two (see Calibration). 0 turns it off.
+	CalibrationWeight float64
 }
 
 // DefaultConfig is the starting point. All values are tunable via

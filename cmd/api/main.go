@@ -122,6 +122,7 @@ func main() {
 	recoCfg.NegativeSimWeight = cfg.Reco.NegativeSimWeight
 	recoCfg.QualityFloorVotes = cfg.Reco.QualityFloorVotes
 	recoCfg.TVShare = cfg.Reco.TVShare
+	recoCfg.CalibrationWeight = cfg.Reco.CalibrationWeight
 
 	// Global IDF tables, gated by RECO_USE_IDF and loaded once at startup: they
 	// damp catalog-ubiquitous features so a diverse taste leans on its

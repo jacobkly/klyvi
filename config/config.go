@@ -33,6 +33,11 @@ type ConfReco struct {
 	// 0 is the films-only feed and 1 the series-only feed.
 	TVShare float64 `env:"RECO_TV_SHARE,default=0.4"`
 
+	// CalibrationWeight holds the feed's genre mix near the mix of what the
+	// user likes, as a cost per nat of KL divergence scaled by the top score.
+	// 0 is off.
+	CalibrationWeight float64 `env:"RECO_CALIBRATION_WEIGHT,default=0"`
+
 	// UseIDF turns on global inverse-document-frequency weighting of taste
 	// features — it damps catalog-ubiquitous genres/keywords so a diverse taste
 	// leans on its discriminative signal. Off by default: the offline

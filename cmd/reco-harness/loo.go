@@ -100,6 +100,10 @@ type trialResult struct {
 	mixedRank        int
 	ownRank          int
 	mixedTop, ownTop []int
+
+	// mixedCalib and ownCalib are each feed's top-10 calibration error, the
+	// KL divergence of its genre mix from the mix of the trial's likes.
+	mixedCalib, ownCalib float64
 }
 
 // feedStats is a set of trials counted in the mixed feed and in each hidden

@@ -65,6 +65,7 @@ func main() {
 	qFloor := flag.Int("quality-floor", -1, "override reco QualityFloorVotes")
 	tvShare := flag.Float64("tv-share", -1, "override reco TVShare, the pool share kept for series (0 is the films-only pool)")
 	useIDF := flag.Bool("idf", true, "apply global IDF feature weighting (set -idf=false to A/B against the raw-sum baseline)")
+	calibration := flag.Float64("calibration", -1, "override reco CalibrationWeight, the genre calibration cost (0 is off)")
 	report := flag.String("report", "", "also run each scorer variant and write a Markdown table of their numbers to this file")
 	flag.Parse()
 	sampleFeed, ok := reco.ParseFeedMedia(*sampleMedia)
@@ -113,9 +114,12 @@ func main() {
 	if *tvShare >= 0 {
 		recoCfg.TVShare = *tvShare
 	}
-	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d tv_share=%.2f",
+	if *calibration >= 0 {
+		recoCfg.CalibrationWeight = *calibration
+	}
+	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d tv_share=%.2f calibration=%.2f",
 		recoCfg.KeywordWeight, recoCfg.GenreWeight, recoCfg.EraWeight,
-		recoCfg.NegativeSimWeight, recoCfg.QualityFloorVotes, recoCfg.TVShare)
+		recoCfg.NegativeSimWeight, recoCfg.QualityFloorVotes, recoCfg.TVShare, recoCfg.CalibrationWeight)
 
 	catalog := newCatalogAdapter(movieRepo, tv.NewRepository(dbConn))
 
@@ -298,6 +302,9 @@ type variant struct {
 	idf  *reco.MediaIDF
 }
 
+// calibrationSweep is the calibration weights -report compares, 0 being off.
+var calibrationSweep = []float64{0, 0.25, 0.5, 1, 2}
+
 // reportVariants are the setups -report runs beside the current config. Each
 // later scoring change adds its own on and off pair here.
 func reportVariants(cfg reco.Config, idf *reco.MediaIDF) []variant {
@@ -308,6 +315,14 @@ func reportVariants(cfg reco.Config, idf *reco.MediaIDF) []variant {
 	noMMR := cfg
 	noMMR.MMRLambda = 1
 	out = append(out, variant{"no MMR", noMMR, idf})
+	for _, w := range calibrationSweep {
+		if w == cfg.CalibrationWeight {
+			continue
+		}
+		cal := cfg
+		cal.CalibrationWeight = w
+		out = append(out, variant{fmt.Sprintf("calibration %.2f", w), cal, idf})
+	}
 	return out
 }
 
@@ -464,10 +479,10 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, i
 		seen := seenIn(held)
 		own := hidden.feed()
 		tr := trialResult{hiddenType: hidden.MediaType}
-		if tr.mixedRank, tr.mixedTop, err = rankOf(ctx, scorer, feeds[reco.FeedAll], user, pools[reco.FeedAll], seen, hidden.MediaID); err != nil {
+		if tr.mixedRank, tr.mixedTop, tr.mixedCalib, err = rankOf(ctx, scorer, feeds[reco.FeedAll], user, pools[reco.FeedAll], seen, hidden.MediaID); err != nil {
 			return userLOO{}, err
 		}
-		if tr.ownRank, tr.ownTop, err = rankOf(ctx, scorer, feeds[own], user, pools[own], seen, hidden.MediaID); err != nil {
+		if tr.ownRank, tr.ownTop, tr.ownCalib, err = rankOf(ctx, scorer, feeds[own], user, pools[own], seen, hidden.MediaID); err != nil {
 			return userLOO{}, err
 		}
 		res.trials = append(res.trials, tr)
@@ -476,12 +491,14 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, i
 }
 
 // rankOf is target's 1-based rank in the feed cfg ranks from the pool, or 0
-// when it misses the feed, and the media ids of the feed's top 10.
-func rankOf(ctx context.Context, scorer *reco.Tier1, cfg reco.Config, user *reco.UserContext, pool []reco.Candidate, seen map[int]bool, target int) (int, []int, error) {
+// when it misses the feed, the media ids of the feed's top 10, and how far
+// the top 10's genre mix sits from the mix of the user's likes.
+func rankOf(ctx context.Context, scorer *reco.Tier1, cfg reco.Config, user *reco.UserContext, pool []reco.Candidate, seen map[int]bool, target int) (int, []int, float64, error) {
 	ranked, err := rankPool(ctx, scorer, cfg, user, pool, seen, cfg.FeedSize)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, 0, err
 	}
+	calib := reco.CalibrationError(reco.GenreTarget(user.Liked), ranked[:min(10, len(ranked))])
 	top := make([]int, 0, 10)
 	rank := 0
 	for i, s := range ranked {
@@ -492,12 +509,13 @@ func rankOf(ctx context.Context, scorer *reco.Tier1, cfg reco.Config, user *reco
 			rank = i + 1
 		}
 	}
-	return rank, top, nil
+	return rank, top, calib, nil
 }
 
 // rankPool ranks the pool's unseen candidates as the orchestrator does: score,
 // sort, then the MMR rerank that holds films and series to their shares of
-// the feed, down to depth.
+// the feed and, with calibration on, the genre mix near the likes, down to
+// depth.
 func rankPool(ctx context.Context, scorer *reco.Tier1, cfg reco.Config, user *reco.UserContext, pool []reco.Candidate, seen map[int]bool, depth int) ([]reco.Scored, error) {
 	unseen := make([]reco.Candidate, 0, len(pool))
 	for _, c := range pool {
@@ -510,7 +528,7 @@ func rankPool(ctx context.Context, scorer *reco.Tier1, cfg reco.Config, user *re
 		return nil, err
 	}
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
-	return reco.MMRReorderWithin(scored, depth, cfg.MMRLambda, reco.FeedTypeBound(cfg, user.Liked)), nil
+	return reco.MMRReorderCalibrated(scored, depth, cfg.MMRLambda, reco.FeedTypeBound(cfg, user.Liked), reco.FeedCalibration(cfg, user.Liked)), nil
 }
 
 // signalHistory looks up the catalog row of every film and series in the

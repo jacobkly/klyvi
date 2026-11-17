@@ -124,10 +124,21 @@ func (e exposure) novelty() float64 {
 	return e.placeSum / float64(e.placed)
 }
 
-// feedEval is one feed's numbers over a set of trials.
+// feedEval is one feed's numbers over a set of trials. calibSum totals each
+// trial's top-10 calibration error.
 type feedEval struct {
-	stats looStats
-	exp   exposure
+	stats    looStats
+	exp      exposure
+	calibSum float64
+}
+
+// calibration is the mean top-10 calibration error over the trials. 0 is a
+// genre mix that matches the likes.
+func (f *feedEval) calibration() float64 {
+	if f.stats.trials == 0 {
+		return 0
+	}
+	return f.calibSum / float64(f.stats.trials)
 }
 
 // viewOrder names the feeds the metrics print for, as the ?media= filter: the
@@ -148,12 +159,14 @@ func newViews() views {
 func (v views) add(tr trialResult, pop popularity) {
 	v["all"].stats.add(tr.mixedRank)
 	v["all"].exp.add(tr.mixedTop, pop)
+	v["all"].calibSum += tr.mixedCalib
 	own := v["movie"]
 	if tr.hiddenType == "tv" {
 		own = v["tv"]
 	}
 	own.stats.add(tr.ownRank)
 	own.exp.add(tr.ownTop, pop)
+	own.calibSum += tr.ownCalib
 }
 
 // catalogFor is the coverage denominator of a feed.
@@ -169,12 +182,12 @@ func (p popularity) catalogFor(view string) int {
 
 // printViews prints the per-feed table under the aggregate.
 func printViews(w io.Writer, v views, pop popularity) {
-	fmt.Fprintln(w, "feed   trials  recall@10 recall@50   MRR  NDCG@10  coverage  novelty")
+	fmt.Fprintln(w, "feed   trials  recall@10 recall@50   MRR  NDCG@10  coverage  novelty  calib@10")
 	for _, name := range viewOrder {
 		f := v[name]
-		fmt.Fprintf(w, "%-6s %6d  %9.3f %9.3f %5.3f %8.3f %9.4f %8.3f\n", name, f.stats.trials,
+		fmt.Fprintf(w, "%-6s %6d  %9.3f %9.3f %5.3f %8.3f %9.4f %8.3f %9.3f\n", name, f.stats.trials,
 			f.stats.recall10(), f.stats.recall50(), f.stats.mrr(), f.stats.ndcg10(),
-			f.exp.coverage(pop.catalogFor(name)), f.exp.novelty())
+			f.exp.coverage(pop.catalogFor(name)), f.exp.novelty(), f.calibration())
 	}
 }
 
@@ -186,18 +199,18 @@ type variantResult struct {
 
 // writeReport writes a Markdown table with a row per variant and feed.
 func writeReport(w io.Writer, results []variantResult, pop popularity) error {
-	if _, err := fmt.Fprintln(w, "| variant | feed | trials | recall@10 | recall@50 | MRR | NDCG@10 | coverage | novelty |"); err != nil {
+	if _, err := fmt.Fprintln(w, "| variant | feed | trials | recall@10 | recall@50 | MRR | NDCG@10 | coverage | novelty | calib@10 |"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "|---|---|---:|---:|---:|---:|---:|---:|---:|"); err != nil {
+	if _, err := fmt.Fprintln(w, "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"); err != nil {
 		return err
 	}
 	for _, r := range results {
 		for _, name := range viewOrder {
 			f := r.views[name]
-			if _, err := fmt.Fprintf(w, "| %s | %s | %d | %.3f | %.3f | %.3f | %.3f | %.4f | %.3f |\n",
+			if _, err := fmt.Fprintf(w, "| %s | %s | %d | %.3f | %.3f | %.3f | %.3f | %.4f | %.3f | %.3f |\n",
 				r.name, name, f.stats.trials, f.stats.recall10(), f.stats.recall50(), f.stats.mrr(),
-				f.stats.ndcg10(), f.exp.coverage(pop.catalogFor(name)), f.exp.novelty()); err != nil {
+				f.stats.ndcg10(), f.exp.coverage(pop.catalogFor(name)), f.exp.novelty(), f.calibration()); err != nil {
 				return err
 			}
 		}

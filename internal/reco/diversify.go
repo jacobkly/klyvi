@@ -58,6 +58,15 @@ func MMRReorder(scored []Scored, k int, lambda float64) []Scored {
 // feed and never shortens it. Each pick depends only on the picks before it,
 // so the order stays prefix-stable.
 func MMRReorderWithin(scored []Scored, k int, lambda float64, bound TypeBound) []Scored {
+	return MMRReorderCalibrated(scored, k, lambda, bound, Calibration{})
+}
+
+// MMRReorderCalibrated is MMRReorderWithin with each pick also paying for how
+// far it would pull the feed's genre mix from the calibration target. The
+// first pick pays too, so a user whose likes are mostly comedy opens on one.
+// The cost of a pick depends only on the picks before it, so the order stays
+// prefix-stable.
+func MMRReorderCalibrated(scored []Scored, k int, lambda float64, bound TypeBound, cal Calibration) []Scored {
 	if len(scored) == 0 || k <= 0 {
 		return nil
 	}
@@ -77,11 +86,36 @@ func MMRReorderWithin(scored []Scored, k int, lambda float64, bound TypeBound) [
 	maxSim := make([]float64, len(scored))
 	taken := make([]bool, len(scored))
 
+	// Calibration costs Weight per nat of divergence, scaled by the pool's
+	// top score so the weight reads the same at every tier.
+	var mix *genreMix
+	penalty := 0.0
+	if cal.on() {
+		top := scored[0].Score
+		for _, s := range scored {
+			top = max(top, s.Score)
+		}
+		if top > 0 {
+			mix, penalty = newGenreMix(cal.Target), cal.Weight*top
+			mix.prepare()
+		}
+	}
+	cost := func(i int) float64 {
+		if mix == nil {
+			return 0
+		}
+		return penalty * mix.divergenceWith(scored[i].Features)
+	}
+
 	selected := make([]Scored, 0, k)
 	var tvPicked, moviePicked int
 	pick := func(idx int) {
 		taken[idx] = true
 		selected = append(selected, scored[idx])
+		if mix != nil {
+			mix.add(scored[idx].Features)
+			mix.prepare()
+		}
 		if isTV[idx] {
 			tvPicked++
 		} else {
@@ -113,12 +147,14 @@ func MMRReorderWithin(scored []Scored, k int, lambda float64, bound TypeBound) [
 	// sorted by Score desc when MMRReorder is called by the orchestrator, but
 	// we don't rely on that), else the highest score.
 	bestIdx, fallback := -1, -1
+	bestVal, fallbackVal := 0.0, 0.0
 	for i := range scored {
-		if fallback < 0 || scored[i].Score > scored[fallback].Score {
-			fallback = i
+		v := scored[i].Score - cost(i)
+		if fallback < 0 || v > fallbackVal {
+			fallback, fallbackVal = i, v
 		}
-		if room(i) && (bestIdx < 0 || scored[i].Score > scored[bestIdx].Score) {
-			bestIdx = i
+		if room(i) && (bestIdx < 0 || v > bestVal) {
+			bestIdx, bestVal = i, v
 		}
 	}
 	if bestIdx < 0 {
@@ -135,7 +171,7 @@ func MMRReorderWithin(scored []Scored, k int, lambda float64, bound TypeBound) [
 			if taken[i] {
 				continue
 			}
-			mmr := lambda*scored[i].Score - (1-lambda)*maxSim[i]
+			mmr := lambda*scored[i].Score - (1-lambda)*maxSim[i] - cost(i)
 			if mmr > fallbackMMR {
 				fallbackMMR = mmr
 				fallback = i
