@@ -61,6 +61,9 @@ func (t *Tier2) WithRelatedKeywords(r *RelatedKeywords) *Tier2 { t.side.related 
 // WithWalk is Tier1.WithWalk for this tier.
 func (t *Tier2) WithWalk(g *WalkGraph) *Tier2 { t.side.walk = g; return t }
 
+// WithCoLiked is Tier1.WithCoLiked for this tier.
+func (t *Tier2) WithCoLiked(src CoLikedSource) *Tier2 { t.side.coLiked = src; return t }
+
 func (t *Tier2) Name() string { return "tier2" }
 
 func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([]Scored, error) {
@@ -72,6 +75,7 @@ func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 	t.saveProfile(profile)
 	side := t.side.pool(u.Liked, profile.KeywordWeights)
 	walk := t.side.walkScores(t.cfg, u.Liked, cands)
+	co := t.side.coLikedScores(ctx, t.cfg, u.Liked)
 
 	out := make([]Scored, 0, len(cands))
 	for i, c := range cands {
@@ -91,6 +95,7 @@ func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 		if walk != nil {
 			score += t.cfg.WalkWeight * walk[i]
 		}
+		score += t.cfg.CoLikedWeight * co[c.MediaID]
 		if score <= 0 {
 			continue
 		}

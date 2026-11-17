@@ -99,13 +99,14 @@ var CrewJobs = []string{
 }
 
 // sideIndexes are the indexes scored beside genres and keywords, each with its
-// own weight in Config: the Wikidata facts, the crew, the related keywords and
-// the random walk.
+// own weight in Config: the Wikidata facts, the crew, the related keywords,
+// the random walk and the titles other users liked along with yours.
 type sideIndexes struct {
 	facts   *FactIndex
 	crew    *FactIndex
 	related *RelatedKeywords
 	walk    *WalkGraph
+	coLiked CoLikedSource
 }
 
 // sideWeights are the liked (or disliked) titles' pooled side ids.

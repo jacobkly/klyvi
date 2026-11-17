@@ -59,6 +59,13 @@ type ConfReco struct {
 	WalkWeight float64 `env:"RECO_WALK_WEIGHT,default=0"`
 	WalkBeta   float64 `env:"RECO_WALK_BETA,default=0.5"`
 
+	// CoLikedWeight credits titles other users liked along with the user's
+	// liked titles, from the co_liked table the nightly /coliked job fills.
+	// 0 is off, and then the table is never read. CoLikedShrink is the k in
+	// n/(n+k) that keeps a pair few users share from counting much.
+	CoLikedWeight float64 `env:"RECO_COLIKED_WEIGHT,default=0"`
+	CoLikedShrink float64 `env:"RECO_COLIKED_SHRINK,default=10"`
+
 	// UseIDF turns on global inverse-document-frequency weighting of taste
 	// features — it damps catalog-ubiquitous genres/keywords so a diverse taste
 	// leans on its discriminative signal. Off by default: the offline

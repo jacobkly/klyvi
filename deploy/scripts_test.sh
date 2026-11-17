@@ -318,6 +318,27 @@ else
 fi
 
 setup
+run_nightly
+refresh=$(grep -n -- "--entrypoint /seed-catalog klyvi-api" "$case_dir/calls" | cut -d: -f1)
+coliked=$(grep -n -- "--entrypoint /coliked klyvi-api" "$case_dir/calls" | cut -d: -f1)
+notify=$(grep -n -- "--entrypoint /notify klyvi-api" "$case_dir/calls" | cut -d: -f1)
+if [ -n "$refresh" ] && [ -n "$coliked" ] && [ -n "$notify" ] && [ "$refresh" -lt "$coliked" ] && [ "$coliked" -lt "$notify" ]; then
+  ok "the co-liked counts rebuild after the refresh and before notices"
+else
+  bad "the co-liked counts rebuild after the refresh and before notices: $(cat "$case_dir/calls")"
+fi
+
+setup
+echo "/coliked" >"$case_dir/docker_fails"
+if run_nightly; then
+  bad "failed co-liked counts make the nightly run exit non-zero"
+elif grep -q "/notify" "$case_dir/calls" && ls -1 "$case_dir/nas" | grep -q '\.dump$'; then
+  ok "failed co-liked counts exit non-zero and notices and the backup still run"
+else
+  bad "failed co-liked counts must not stop notices or the backup: $(cat "$case_dir/calls")"
+fi
+
+setup
 NIGHTLY_WEEKDAY=7 run_nightly
 notify=$(grep -n -- "--entrypoint /notify klyvi-api" "$case_dir/calls" | cut -d: -f1)
 opendata=$(grep -n -- "--entrypoint /opendata klyvi-api -timeout 1h" "$case_dir/calls" | cut -d: -f1)

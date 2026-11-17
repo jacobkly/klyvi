@@ -21,6 +21,7 @@ type recoSides struct {
 	facts, crew *reco.FactIndex
 	related     *reco.RelatedKeywords
 	walk        *reco.WalkGraph
+	coLiked     reco.CoLikedSource
 }
 
 // newRecoOrchestrator wires the tier cascade to the DB-backed adapters and
@@ -36,10 +37,10 @@ func newRecoOrchestrator(dbConn *sqlx.DB, catalog reco.CatalogRepository, cfg re
 	).WithTier0(reco.NewTier0()).
 		WithTier1(reco.NewTier1(cfg).WithIDF(idf).
 			WithFacts(sides.facts).WithCrew(sides.crew).WithRelatedKeywords(sides.related).
-			WithWalk(sides.walk)).
+			WithWalk(sides.walk).WithCoLiked(sides.coLiked)).
 		WithTier2(reco.NewTier2(cfg, newProfileAdapter(dbConn)).WithIDF(idf).
 			WithFacts(sides.facts).WithCrew(sides.crew).WithRelatedKeywords(sides.related).
-			WithWalk(sides.walk))
+			WithWalk(sides.walk).WithCoLiked(sides.coLiked))
 }
 
 // catalogAdapter wraps the movies and series repositories to satisfy

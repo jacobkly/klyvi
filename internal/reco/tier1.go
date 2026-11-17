@@ -39,6 +39,10 @@ func (t *Tier1) WithRelatedKeywords(r *RelatedKeywords) *Tier1 { t.side.related 
 // Without it the walk counts every keyword and cast member once.
 func (t *Tier1) WithWalk(g *WalkGraph) *Tier1 { t.side.walk = g; return t }
 
+// WithCoLiked attaches the co-liked counts. Without them the term adds
+// nothing.
+func (t *Tier1) WithCoLiked(src CoLikedSource) *Tier1 { t.side.coLiked = src; return t }
+
 func (t *Tier1) Name() string { return "tier1" }
 
 func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([]Scored, error) {
@@ -57,6 +61,7 @@ func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 	negEra := pooledEraWeights(u.Disliked)
 	negSide := t.side.pool(u.Disliked, negKeyword)
 	walk := t.side.walkScores(t.cfg, u.Liked, cands)
+	co := t.side.coLikedScores(ctx, t.cfg, u.Liked)
 
 	out := make([]Scored, 0, len(cands))
 	for i, c := range cands {
@@ -73,6 +78,7 @@ func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 		if walk != nil {
 			score += t.cfg.WalkWeight * walk[i]
 		}
+		score += t.cfg.CoLikedWeight * co[c.MediaID]
 
 		if score <= 0 {
 			continue

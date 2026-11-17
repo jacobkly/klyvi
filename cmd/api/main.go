@@ -13,6 +13,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"klyvi-api/config"
+	"klyvi-api/internal/coliked"
 	"klyvi-api/internal/imports"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
@@ -131,6 +132,8 @@ func main() {
 	recoCfg.RelatedKeywordWeight = cfg.Reco.RelatedKeywordWeight
 	recoCfg.WalkWeight = cfg.Reco.WalkWeight
 	recoCfg.WalkBeta = cfg.Reco.WalkBeta
+	recoCfg.CoLikedWeight = cfg.Reco.CoLikedWeight
+	recoCfg.CoLikedShrink = cfg.Reco.CoLikedShrink
 
 	// Global IDF tables, gated by RECO_USE_IDF and loaded once at startup: they
 	// damp catalog-ubiquitous features so a diverse taste leans on its
@@ -195,6 +198,11 @@ func main() {
 	}
 	if recoCfg.RelatedKeywordWeight > 0 {
 		sides.related = loadRelatedKeywords(movieRepo, tvRepo)
+	}
+	// The co-liked counts are read per request, so the nightly rebuild
+	// reaches the feed without a restart.
+	if recoCfg.CoLikedWeight > 0 {
+		sides.coLiked = coliked.NewRepository(dbConn)
 	}
 
 	recoOrchestrator := newRecoOrchestrator(dbConn, recoCatalog, recoCfg, featureIDF, sides).

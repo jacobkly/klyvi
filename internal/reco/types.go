@@ -172,6 +172,12 @@ type Config struct {
 	// WalkBeta is how hard the walk discounts famous titles: a title's walk
 	// score is divided by its vote count to this power. 0 does not discount.
 	WalkBeta float64
+
+	// CoLikedWeight credits titles other Klyvi users liked along with the
+	// user's liked titles, each pair trusted n/(n+CoLikedShrink) by how many
+	// users share it. With no counts it adds nothing. 0 turns it off.
+	CoLikedWeight float64
+	CoLikedShrink float64
 }
 
 // DefaultConfig is the starting point. All values are tunable via
@@ -193,6 +199,7 @@ func DefaultConfig() Config {
 		NegativeSimWeight: 0.6,
 		QualityFloorVotes: 25,
 		WalkBeta:          0.5,
+		CoLikedShrink:     10,
 		GenreWeight:       0.2,
 		KeywordWeight:     0.9,
 		EraWeight:         0.1,
