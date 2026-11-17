@@ -35,8 +35,8 @@ type ConfReco struct {
 
 	// CalibrationWeight holds the feed's genre mix near the mix of what the
 	// user likes, as a cost per nat of KL divergence scaled by the top score.
-	// 0 is off.
-	CalibrationWeight float64 `env:"RECO_CALIBRATION_WEIGHT,default=0"`
+	// 0 is off. 0.5 lifts MRR with crew on and keeps films-only ranking level.
+	CalibrationWeight float64 `env:"RECO_CALIBRATION_WEIGHT,default=0.5"`
 
 	// FactWeight scores the Wikidata facts a title shares with what the user
 	// likes: directors, subjects, settings and source material. 0 is off, and
@@ -45,8 +45,8 @@ type ConfReco struct {
 
 	// CrewWeight scores the directors, writers, composers and show creators a
 	// title shares with what the user likes. 0 is off, and then the crew is not
-	// loaded at all.
-	CrewWeight float64 `env:"RECO_CREW_WEIGHT,default=0"`
+	// loaded at all. The index costs about 3 MB.
+	CrewWeight float64 `env:"RECO_CREW_WEIGHT,default=0.8"`
 
 	// RelatedKeywordWeight gives partial credit for keywords that often tag
 	// the same titles as the user's liked keywords. 0 is off, and then the
