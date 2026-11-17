@@ -1,6 +1,7 @@
 #!/bin/sh
 # The one nightly cron entry: catalog refresh, then the co-liked counts, then
-# notices, then on Sundays the open-data refresh from Wikidata, then the backup.
+# notices, then on Sundays the open-data refresh from Wikidata and the plot
+# vectors from Wikipedia, then the backup.
 #
 #   30 3 * * * sh /path/to/deploy/nightly.sh > /var/log/klyvi-nightly.log 2>&1
 #
@@ -38,8 +39,11 @@ step "catalog refresh" job /seed-catalog -refresh-older-than 150d -timeout 2h
 step "co-liked counts" job /coliked
 step "notices" job /notify
 # Wikidata changes slowly, so its facts refresh once a week (day 7 is Sunday, UTC).
+# The plot vectors follow, since they read the Wikipedia links the facts hold.
+# Only changed articles are embedded, so after the first run this is quick.
 if [ "${NIGHTLY_WEEKDAY:-$(date -u +%u)}" = 7 ]; then
   step "open data" job /opendata -timeout 1h
+  step "plot vectors" job /plots -timeout 3h
 fi
 step "backup" sh "$here/backup.sh"
 

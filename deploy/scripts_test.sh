@@ -350,11 +350,32 @@ else
 fi
 
 setup
-NIGHTLY_WEEKDAY=3 run_nightly
-if grep -q "/opendata" "$case_dir/calls"; then
-  bad "the open-data refresh only runs on Sundays"
+NIGHTLY_WEEKDAY=7 run_nightly
+opendata=$(grep -n -- "--entrypoint /opendata klyvi-api" "$case_dir/calls" | cut -d: -f1)
+plots=$(grep -n -- "--entrypoint /plots klyvi-api -timeout 3h" "$case_dir/calls" | cut -d: -f1)
+dump=$(grep -n "^pg_dump " "$case_dir/calls" | cut -d: -f1)
+if [ -n "$plots" ] && [ -n "$opendata" ] && [ -n "$dump" ] && [ "$opendata" -lt "$plots" ] && [ "$plots" -lt "$dump" ]; then
+  ok "on Sundays the plot vectors refresh after the open data and before the backup"
 else
-  ok "the open-data refresh only runs on Sundays"
+  bad "on Sundays the plot vectors refresh after the open data and before the backup: $(cat "$case_dir/calls")"
+fi
+
+setup
+echo "/plots" >"$case_dir/docker_fails"
+if NIGHTLY_WEEKDAY=7 run_nightly; then
+  bad "failed plot vectors make the nightly run exit non-zero"
+elif ls -1 "$case_dir/nas" | grep -q '\.dump$'; then
+  ok "failed plot vectors exit non-zero and the backup still lands"
+else
+  bad "failed plot vectors must not stop the backup"
+fi
+
+setup
+NIGHTLY_WEEKDAY=3 run_nightly
+if grep -q "/opendata\|/plots" "$case_dir/calls"; then
+  bad "the open-data and plot refreshes only run on Sundays"
+else
+  ok "the open-data and plot refreshes only run on Sundays"
 fi
 
 # --- speedtest.sh ----------------------------------------------------------
