@@ -23,12 +23,17 @@ type catalogAdapter struct {
 	// related is the related-keyword index the harness scorer uses. It is
 	// not on the features, so it rides here only for tier1.
 	related *reco.RelatedKeywords
+	// cast is each title's top-billed cast, put on its features like the
+	// crew, and walk the node degrees the walk term splits its steps by.
+	cast *reco.FactIndex
+	walk *reco.WalkGraph
 }
 
 // tier1 is the scorer the harness evaluates, with every side index the
 // catalog holds.
 func (a *catalogAdapter) tier1(cfg reco.Config, idf *reco.MediaIDF) *reco.Tier1 {
-	return reco.NewTier1(cfg).WithIDF(idf).WithFacts(a.facts).WithCrew(a.crew).WithRelatedKeywords(a.related)
+	return reco.NewTier1(cfg).WithIDF(idf).WithFacts(a.facts).WithCrew(a.crew).
+		WithRelatedKeywords(a.related).WithWalk(a.walk)
 }
 
 func newCatalogAdapter(repo *movies.Repository, tvRepo *tv.Repository, facts, crew *reco.FactIndex) *catalogAdapter {
@@ -121,6 +126,7 @@ func (a *catalogAdapter) seriesToCandidates(rows []tv.RecoCandidateRow) []reco.C
 				VoteCount:   row.VoteCount,
 				FactIDs:     a.facts.IDs("tv", row.TVID),
 				CrewIDs:     a.crew.IDs("tv", row.TVID),
+				CastIDs:     a.cast.IDs("tv", row.TVID),
 			},
 		})
 	}
@@ -149,6 +155,7 @@ func (a *catalogAdapter) rowsToCandidates(rows []movies.RecoCandidateRow) []reco
 				VoteCount:   row.VoteCount,
 				FactIDs:     a.facts.IDs("movie", row.MovieID),
 				CrewIDs:     a.crew.IDs("movie", row.MovieID),
+				CastIDs:     a.cast.IDs("movie", row.MovieID),
 			},
 		})
 	}

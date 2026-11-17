@@ -70,6 +70,8 @@ func main() {
 	factWeight := flag.Float64("facts", -1, "override reco FactWeight, the Wikidata fact overlap term (0 is off)")
 	crewWeight := flag.Float64("crew", -1, "override reco CrewWeight, the crew overlap term (0 is off)")
 	relatedWeight := flag.Float64("related", -1, "override reco RelatedKeywordWeight, the related-keyword term (0 is off)")
+	walkWeight := flag.Float64("walk", -1, "override reco WalkWeight, the random walk over keywords and cast (0 is off)")
+	walkBeta := flag.Float64("walk-beta", -1, "override reco WalkBeta, how hard the walk discounts famous titles")
 	report := flag.String("report", "", "also run each scorer variant and write a Markdown table of their numbers to this file")
 	flag.Parse()
 	sampleFeed, ok := reco.ParseFeedMedia(*sampleMedia)
@@ -130,10 +132,16 @@ func main() {
 	if *relatedWeight >= 0 {
 		recoCfg.RelatedKeywordWeight = *relatedWeight
 	}
-	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d tv_share=%.2f calibration=%.2f facts=%.2f crew=%.2f related=%.2f",
+	if *walkWeight >= 0 {
+		recoCfg.WalkWeight = *walkWeight
+	}
+	if *walkBeta >= 0 {
+		recoCfg.WalkBeta = *walkBeta
+	}
+	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d tv_share=%.2f calibration=%.2f facts=%.2f crew=%.2f related=%.2f walk=%.2f walk_beta=%.2f",
 		recoCfg.KeywordWeight, recoCfg.GenreWeight, recoCfg.EraWeight,
 		recoCfg.NegativeSimWeight, recoCfg.QualityFloorVotes, recoCfg.TVShare, recoCfg.CalibrationWeight,
-		recoCfg.FactWeight, recoCfg.CrewWeight, recoCfg.RelatedKeywordWeight)
+		recoCfg.FactWeight, recoCfg.CrewWeight, recoCfg.RelatedKeywordWeight, recoCfg.WalkWeight, recoCfg.WalkBeta)
 
 	// The Wikidata facts load whatever the weight, so -report can sweep it.
 	// A weight of 0 leaves every score as it was.
@@ -158,8 +166,26 @@ func main() {
 	}
 	log.Printf("related keywords: %d keywords have a near neighbour", related.Len())
 
+	// The walk steps through the top-billed cast and the keywords.
+	cast, err := reco.LoadCastIndex(context.Background(), movieRepo, tvRepo)
+	if err != nil {
+		log.Fatalf("load cast: %v", err)
+	}
+	var keywordSets [][]int
+	for _, src := range []reco.KeywordSource{movieRepo, tvRepo} {
+		sets, err := src.RecoKeywordSets(context.Background())
+		if err != nil {
+			log.Fatalf("load keyword sets: %v", err)
+		}
+		keywordSets = append(keywordSets, sets...)
+	}
+	walk := reco.NewWalkGraph(keywordSets, cast.Sets())
+	log.Printf("walk: cast for %d titles, %d nodes", cast.Len(), walk.Len())
+
 	catalog := newCatalogAdapter(movieRepo, tvRepo, facts, crew)
 	catalog.related = related
+	catalog.cast = cast
+	catalog.walk = walk
 
 	// Diagnostics: the size of the eligible candidate universe. A small or
 	// mainstream-only catalog caps recommendation quality regardless of the
@@ -346,6 +372,13 @@ var calibrationSweep = []float64{0, 0.25, 0.5, 1, 2}
 // factSweep is the Wikidata fact weights -report compares, 0 being off.
 var factSweep = []float64{0, 0.2, 0.4, 0.8, 1.6, 3.2}
 
+// walkSweep and walkBetaSweep are the walk weights and popularity discounts
+// -report compares, a weight of 0 being off.
+var (
+	walkSweep     = []float64{0, 0.1, 0.2, 0.4, 0.8, 1.6}
+	walkBetaSweep = []float64{0, 0.25, 0.5, 0.75, 1}
+)
+
 // relatedSweep is the related-keyword weights -report compares, 0 being off.
 var relatedSweep = []float64{0, 0.1, 0.2, 0.4, 0.8, 1.6}
 
@@ -393,6 +426,24 @@ func reportVariants(cfg reco.Config, idf *reco.MediaIDF) []variant {
 		r := cfg
 		r.RelatedKeywordWeight = w
 		out = append(out, variant{fmt.Sprintf("related %.2f", w), r, idf})
+	}
+	for _, w := range walkSweep {
+		if w == cfg.WalkWeight {
+			continue
+		}
+		r := cfg
+		r.WalkWeight = w
+		out = append(out, variant{fmt.Sprintf("walk %.2f", w), r, idf})
+	}
+	if cfg.WalkWeight > 0 {
+		for _, b := range walkBetaSweep {
+			if b == cfg.WalkBeta {
+				continue
+			}
+			r := cfg
+			r.WalkBeta = b
+			out = append(out, variant{fmt.Sprintf("walk beta %.2f", b), r, idf})
+		}
 	}
 	return out
 }

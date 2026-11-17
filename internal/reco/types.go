@@ -25,6 +25,9 @@ type MediaFeatures struct {
 	// composers and, for a series, creators (see CrewJobs), nil when its
 	// credits are not cached or the crew term is off.
 	CrewIDs []int `json:"-"`
+	// CastIDs are the TMDB person ids of the title's top CastTop billed cast,
+	// nil when its credits are not cached or the walk is off.
+	CastIDs []int `json:"-"`
 }
 
 // Candidate is a media item the orchestrator may rank for a user. Features
@@ -161,6 +164,14 @@ type Config struct {
 	// "heist"), scaled by how often. An exact match gets none on top. 0 turns
 	// it off.
 	RelatedKeywordWeight float64
+
+	// WalkWeight adds a random walk from the user's liked titles through
+	// shared keywords and top-billed cast to other titles (RP3beta), scaled
+	// so the best title in the pool gets the whole weight. 0 turns it off.
+	WalkWeight float64
+	// WalkBeta is how hard the walk discounts famous titles: a title's walk
+	// score is divided by its vote count to this power. 0 does not discount.
+	WalkBeta float64
 }
 
 // DefaultConfig is the starting point. All values are tunable via
@@ -181,6 +192,7 @@ func DefaultConfig() Config {
 		// recall without starving genre breadth. Overridable via RECO_* env.
 		NegativeSimWeight: 0.6,
 		QualityFloorVotes: 25,
+		WalkBeta:          0.5,
 		GenreWeight:       0.2,
 		KeywordWeight:     0.9,
 		EraWeight:         0.1,

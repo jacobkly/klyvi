@@ -741,3 +741,33 @@ func (r *Repository) RecoKeywordSets(ctx context.Context) ([][]int, error) {
 	}
 	return out, nil
 }
+
+// RecoCast returns the TMDB person ids of each cached film's first top billed
+// cast, keyed by movie id, sorted and without repeats. Films with no cached
+// cast are left out. The recommender's random walk steps through them.
+func (r *Repository) RecoCast(ctx context.Context, top int) (map[int][]int, error) {
+	var rows []struct {
+		ID  int         `db:"id"`
+		IDs db.IntArray `db:"ids"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		select id, ids from (
+			select movie_id as id,
+			       array(select distinct (c->>'id')::int
+			               from jsonb_array_elements(case when jsonb_typeof(credits->'cast') = 'array'
+			                                              then credits->'cast' else '[]'::jsonb end) c
+			              where jsonb_typeof(c->'id') = 'number' and jsonb_typeof(c->'order') = 'number'
+			                and (c->>'order')::int < $1
+			              order by 1) as ids
+			  from movies
+			 where credits is not null
+		) t
+		where cardinality(ids) > 0`, top); err != nil {
+		return nil, fmt.Errorf("reco cast: %w", err)
+	}
+	out := make(map[int][]int, len(rows))
+	for _, row := range rows {
+		out[row.ID] = row.IDs
+	}
+	return out, nil
+}

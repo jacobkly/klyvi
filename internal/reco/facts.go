@@ -99,11 +99,13 @@ var CrewJobs = []string{
 }
 
 // sideIndexes are the indexes scored beside genres and keywords, each with its
-// own weight in Config: the Wikidata facts, the crew and the related keywords.
+// own weight in Config: the Wikidata facts, the crew, the related keywords and
+// the random walk.
 type sideIndexes struct {
 	facts   *FactIndex
 	crew    *FactIndex
 	related *RelatedKeywords
+	walk    *WalkGraph
 }
 
 // sideWeights are the liked (or disliked) titles' pooled side ids.
@@ -154,19 +156,26 @@ func pooledIndexWeights(items []SignalItem, x *FactIndex, ids func(*MediaFeature
 	return out
 }
 
-// factCatalog puts each title's open-data facts and crew on the features of
-// every candidate the catalog returns. It copies a title's features before
-// adding them, since the catalog underneath may share them between requests.
-type factCatalog struct {
-	CatalogRepository
-	facts *FactIndex
-	crew  *FactIndex
+// CatalogSides are the per-title ids a fact catalog puts on its candidates'
+// features. Any may be nil.
+type CatalogSides struct {
+	Facts *FactIndex
+	Crew  *FactIndex
+	Cast  *FactIndex
 }
 
-// NewFactCatalog wraps a catalog so its candidates carry their facts and
-// crew. Either index may be nil.
-func NewFactCatalog(catalog CatalogRepository, facts, crew *FactIndex) CatalogRepository {
-	return factCatalog{CatalogRepository: catalog, facts: facts, crew: crew}
+// factCatalog puts each title's open-data facts, crew and top-billed cast on
+// the features of every candidate the catalog returns. It copies a title's
+// features before adding them, since the catalog underneath may share them
+// between requests.
+type factCatalog struct {
+	CatalogRepository
+	sides CatalogSides
+}
+
+// NewFactCatalog wraps a catalog so its candidates carry their side ids.
+func NewFactCatalog(catalog CatalogRepository, sides CatalogSides) CatalogRepository {
+	return factCatalog{CatalogRepository: catalog, sides: sides}
 }
 
 func (c factCatalog) withFacts(cands []Candidate, err error) ([]Candidate, error) {
@@ -175,12 +184,14 @@ func (c factCatalog) withFacts(cands []Candidate, err error) ([]Candidate, error
 	}
 	out := make([]Candidate, len(cands))
 	for i, cand := range cands {
-		facts := c.facts.IDs(cand.MediaType, cand.TMDBID)
-		crew := c.crew.IDs(cand.MediaType, cand.TMDBID)
-		if (facts != nil || crew != nil) && cand.Features != nil {
+		facts := c.sides.Facts.IDs(cand.MediaType, cand.TMDBID)
+		crew := c.sides.Crew.IDs(cand.MediaType, cand.TMDBID)
+		cast := c.sides.Cast.IDs(cand.MediaType, cand.TMDBID)
+		if (facts != nil || crew != nil || cast != nil) && cand.Features != nil {
 			f := *cand.Features
 			f.FactIDs = facts
 			f.CrewIDs = crew
+			f.CastIDs = cast
 			cand.Features = &f
 		}
 		out[i] = cand

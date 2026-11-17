@@ -58,6 +58,9 @@ func (t *Tier2) WithCrew(crew *FactIndex) *Tier2 { t.side.crew = crew; return t 
 // WithRelatedKeywords is Tier1.WithRelatedKeywords for this tier.
 func (t *Tier2) WithRelatedKeywords(r *RelatedKeywords) *Tier2 { t.side.related = r; return t }
 
+// WithWalk is Tier1.WithWalk for this tier.
+func (t *Tier2) WithWalk(g *WalkGraph) *Tier2 { t.side.walk = g; return t }
+
 func (t *Tier2) Name() string { return "tier2" }
 
 func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([]Scored, error) {
@@ -68,9 +71,10 @@ func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 	profile := BuildProfile(u.UserID, u.Liked, u.Disliked, t.idf)
 	t.saveProfile(profile)
 	side := t.side.pool(u.Liked, profile.KeywordWeights)
+	walk := t.side.walkScores(t.cfg, u.Liked, cands)
 
 	out := make([]Scored, 0, len(cands))
-	for _, c := range cands {
+	for i, c := range cands {
 		if c.Features == nil {
 			continue
 		}
@@ -84,6 +88,9 @@ func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 
 		score := t.cfg.GenreWeight*gSim + t.cfg.KeywordWeight*kSim + t.cfg.EraWeight*eSim +
 			side.score(t.cfg, c.Features)
+		if walk != nil {
+			score += t.cfg.WalkWeight * walk[i]
+		}
 		if score <= 0 {
 			continue
 		}

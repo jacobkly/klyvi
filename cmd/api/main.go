@@ -129,6 +129,8 @@ func main() {
 	recoCfg.FactWeight = cfg.Reco.FactWeight
 	recoCfg.CrewWeight = cfg.Reco.CrewWeight
 	recoCfg.RelatedKeywordWeight = cfg.Reco.RelatedKeywordWeight
+	recoCfg.WalkWeight = cfg.Reco.WalkWeight
+	recoCfg.WalkBeta = cfg.Reco.WalkBeta
 
 	// Global IDF tables, gated by RECO_USE_IDF and loaded once at startup: they
 	// damp catalog-ubiquitous features so a diverse taste leans on its
@@ -174,18 +176,22 @@ func main() {
 		log.Println("reco catalog: in-memory catalog off (RECO_CATALOG_REFRESH=0), the feed reads the database")
 	}
 
-	// The Wikidata facts, the crew and the related keywords load only when
-	// their term is on. Like the IDF tables, they are read once, so a title
-	// cached later counts toward none of them until the next restart.
+	// The Wikidata facts, the crew, the related keywords and the walk load
+	// only when their term is on. Like the IDF tables, they are read once, so
+	// a title cached later counts toward none of them until the next restart.
 	var sides recoSides
+	var cast *reco.FactIndex
 	if recoCfg.FactWeight > 0 {
 		sides.facts = loadRecoFacts(dbConn)
 	}
 	if recoCfg.CrewWeight > 0 {
 		sides.crew = loadRecoCrew(movieRepo, tvRepo)
 	}
-	if sides.facts != nil || sides.crew != nil {
-		recoCatalog = reco.NewFactCatalog(recoCatalog, sides.facts, sides.crew)
+	if recoCfg.WalkWeight > 0 {
+		cast, sides.walk = loadRecoWalk(movieRepo, tvRepo)
+	}
+	if sides.facts != nil || sides.crew != nil || cast != nil {
+		recoCatalog = reco.NewFactCatalog(recoCatalog, reco.CatalogSides{Facts: sides.facts, Crew: sides.crew, Cast: cast})
 	}
 	if recoCfg.RelatedKeywordWeight > 0 {
 		sides.related = loadRelatedKeywords(movieRepo, tvRepo)
@@ -330,6 +336,37 @@ func loadRecoCrew(films, series reco.CrewSource) *reco.FactIndex {
 	}
 	log.Printf("reco: crew loaded for %d titles", crew.Len())
 	return crew
+}
+
+// walkSource is what the walk reads from each media type's repository.
+type walkSource interface {
+	reco.CastSource
+	reco.KeywordSource
+}
+
+// loadRecoWalk reads the top-billed cast and counts the walk's node degrees
+// over it and the keywords. A failed load returns an empty cast and a nil
+// graph, so the walk steps through keywords alone, each counted once.
+func loadRecoWalk(films, series walkSource) (*reco.FactIndex, *reco.WalkGraph) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cast, err := reco.LoadCastIndex(ctx, films, series)
+	if err != nil {
+		log.Printf("reco: %v", err)
+		return reco.NewFactIndex(nil), nil
+	}
+	var keywords [][]int
+	for _, src := range []reco.KeywordSource{films, series} {
+		sets, err := src.RecoKeywordSets(ctx)
+		if err != nil {
+			log.Printf("reco: walk keywords: %v", err)
+			return cast, nil
+		}
+		keywords = append(keywords, sets...)
+	}
+	g := reco.NewWalkGraph(keywords, cast.Sets())
+	log.Printf("reco: walk graph holds %d keywords and cast members, cast for %d titles", g.Len(), cast.Len())
+	return cast, g
 }
 
 // loadRelatedKeywords counts which keywords tag the same titles. A failed load

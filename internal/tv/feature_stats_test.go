@@ -189,3 +189,40 @@ func TestRecoKeywordSets(t *testing.T) {
 		t.Errorf("test keywords read = %v, want only the voted series' %v", found, want)
 	}
 }
+
+// Series cast keeps the first top billed and leaves out series with none.
+func TestRecoCast_KeepsTheTopBilled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB integration test in short mode")
+	}
+	_, repo, dbh := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const withCast, bare = 2_100_000_035, 2_100_000_036
+	cleanup := func() {
+		cleanupExec(dbh, `delete from tv_series where tv_id = any($1)`, []int{withCast, bare})
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	if _, err := dbh.ExecContext(ctx, `
+		insert into tv_series (tv_id, credits) values
+		($1, '{"crew": [], "cast": [{"id": 2100000942, "order": 1}, {"id": 2100000941, "order": 0},
+		                            {"id": 2100000943, "order": 2}]}'::jsonb),
+		($2, '{"crew": [], "cast": []}'::jsonb)`,
+		withCast, bare); err != nil {
+		t.Fatalf("insert series: %v", err)
+	}
+
+	got, err := repo.RecoCast(ctx, 2)
+	if err != nil {
+		t.Fatalf("RecoCast: %v", err)
+	}
+	if want := []int{2100000941, 2100000942}; !reflect.DeepEqual(got[withCast], want) {
+		t.Errorf("cast = %v, want %v", got[withCast], want)
+	}
+	if ids, ok := got[bare]; ok {
+		t.Errorf("a series with no cast has cast %v, want it left out", ids)
+	}
+}

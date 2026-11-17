@@ -582,3 +582,39 @@ func TestRecoKeywordSets(t *testing.T) {
 		t.Errorf("test keywords read = %v, want only the voted film's %v", found, want)
 	}
 }
+
+// The walk steps through the first top billed cast only, and a film with no
+// cast is left out.
+func TestRecoCast_KeepsTheTopBilled(t *testing.T) {
+	repo, dbConn := openTestRepo(t)
+	ctx := context.Background()
+	withCast := 2_000_000_000 + rand.Intn(100_000_000)
+	noCast := withCast + 1
+	cleanupTestMovies(t, dbConn, withCast, noCast)
+
+	a := testMovie(withCast, true)
+	cast := json.RawMessage(`{"crew":[],"cast":[
+		{"id":2100000932,"order":1},
+		{"id":2100000931,"order":0},
+		{"id":2100000933,"order":2},
+		{"order":0},
+		{"id":2100000934}]}`)
+	a.Credits = &cast
+	b := testMovie(noCast, true)
+	empty := json.RawMessage(`{"cast":[],"crew":[{"id":2100000935,"job":"Director"}]}`)
+	b.Credits = &empty
+	if err := repo.InsertMovies(ctx, []*movies.Movie{a, b}); err != nil {
+		t.Fatalf("InsertMovies: %v", err)
+	}
+
+	got, err := repo.RecoCast(ctx, 2)
+	if err != nil {
+		t.Fatalf("RecoCast: %v", err)
+	}
+	if want := []int{2100000931, 2100000932}; !reflect.DeepEqual(got[withCast], want) {
+		t.Errorf("cast = %v, want %v", got[withCast], want)
+	}
+	if ids, ok := got[noCast]; ok {
+		t.Errorf("a film with no cast has cast %v, want it left out", ids)
+	}
+}

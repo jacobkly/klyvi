@@ -35,6 +35,10 @@ func (t *Tier1) WithCrew(crew *FactIndex) *Tier1 { t.side.crew = crew; return t 
 // liked keywords over. Without it the term adds nothing.
 func (t *Tier1) WithRelatedKeywords(r *RelatedKeywords) *Tier1 { t.side.related = r; return t }
 
+// WithWalk attaches the node degrees the walk term splits its steps by.
+// Without it the walk counts every keyword and cast member once.
+func (t *Tier1) WithWalk(g *WalkGraph) *Tier1 { t.side.walk = g; return t }
+
 func (t *Tier1) Name() string { return "tier1" }
 
 func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([]Scored, error) {
@@ -52,9 +56,10 @@ func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 	negKeyword := pooledFeatureWeights(u.Disliked, keywordKeyset, (*FeatureIDF).KeywordWeight, t.idf)
 	negEra := pooledEraWeights(u.Disliked)
 	negSide := t.side.pool(u.Disliked, negKeyword)
+	walk := t.side.walkScores(t.cfg, u.Liked, cands)
 
 	out := make([]Scored, 0, len(cands))
-	for _, c := range cands {
+	for i, c := range cands {
 		if c.Features == nil {
 			continue
 		}
@@ -65,6 +70,9 @@ func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 		pos := t.scoreAgainst(c.Features, posGenre, posKeyword, posEra, posSide)
 		neg := t.scoreAgainst(c.Features, negGenre, negKeyword, negEra, negSide)
 		score := pos - t.cfg.NegativeSimWeight*neg
+		if walk != nil {
+			score += t.cfg.WalkWeight * walk[i]
+		}
 
 		if score <= 0 {
 			continue

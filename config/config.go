@@ -53,6 +53,12 @@ type ConfReco struct {
 	// keyword counts are not loaded at all.
 	RelatedKeywordWeight float64 `env:"RECO_RELATED_KEYWORD_WEIGHT,default=0"`
 
+	// WalkWeight adds a random walk from liked titles through shared keywords
+	// and top-billed cast. 0 is off, and then the cast is not loaded at all.
+	// WalkBeta is how hard the walk discounts famous titles.
+	WalkWeight float64 `env:"RECO_WALK_WEIGHT,default=0"`
+	WalkBeta   float64 `env:"RECO_WALK_BETA,default=0.5"`
+
 	// UseIDF turns on global inverse-document-frequency weighting of taste
 	// features — it damps catalog-ubiquitous genres/keywords so a diverse taste
 	// leans on its discriminative signal. Off by default: the offline
