@@ -75,6 +75,8 @@ func main() {
 	walkBeta := flag.Float64("walk-beta", -1, "override reco WalkBeta, how hard the walk discounts famous titles")
 	plotWeight := flag.Float64("plot", -1, "override reco PlotWeight, the Wikipedia plot similarity term (0 is off)")
 	report := flag.String("report", "", "also run each scorer variant and write a Markdown table of their numbers to this file")
+	shelves := flag.String("shelves", "", "print the more-like-this shelves of these titles (movie:550,tv:1396) without and with plots, then exit")
+	shelfPlot := flag.Float64("shelf-plot", 1, "the plot weight -shelves compares against none")
 	flag.Parse()
 	sampleFeed, ok := reco.ParseFeedMedia(*sampleMedia)
 	if !ok {
@@ -198,6 +200,17 @@ func main() {
 	}
 	plotIndex := reco.NewPlotIndex(titlePlots)
 	log.Printf("plots: %d titles carry a wikipedia plot vector (run go run ./cmd/plots if 0)", plotIndex.Len())
+
+	if *shelves != "" {
+		targets, err := parseShelves(*shelves)
+		if err != nil {
+			log.Fatalf("-shelves: %v", err)
+		}
+		if err := printShelves(context.Background(), dbConn, movieRepo, plotIndex, targets, recoCfg, *shelfPlot); err != nil {
+			log.Fatalf("shelves: %v", err)
+		}
+		return
+	}
 
 	catalog := newCatalogAdapter(movieRepo, tvRepo, facts, crew)
 	catalog.related = related
