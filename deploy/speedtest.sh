@@ -114,7 +114,9 @@ if [ -n "${DB_ADDR:-}" ]; then
   i=0
   while [ "$i" -lt "$rounds" ]; do
     i=$((i + 1))
-    t=$(curl -s -o /dev/null --max-time 5 -w '%{time_connect}' "telnet://$DB_ADDR" < /dev/null)
+    # curl holds a telnet connection open until --max-time, so keep it short. The
+    # connect time is recorded either way.
+    t=$(curl -s -o /dev/null --max-time 1 -w '%{time_connect}' "telnet://$DB_ADDR" < /dev/null)
     t=$(awk -v s="${t:-0}" 'BEGIN { print s * 1000 }')
     [ "$t" != "0" ] && samples="$samples $t"
   done
