@@ -1,5 +1,6 @@
 #!/bin/sh
-# The one nightly cron entry: catalog refresh, then notices, then the backup.
+# The one nightly cron entry: catalog refresh, then notices, then on Sundays the
+# open-data refresh from Wikidata, then the backup.
 #
 #   30 3 * * * sh /path/to/deploy/nightly.sh > /var/log/klyvi-nightly.log 2>&1
 #
@@ -35,6 +36,10 @@ job() {
 
 step "catalog refresh" job /seed-catalog -refresh-older-than 150d -timeout 2h
 step "notices" job /notify
+# Wikidata changes slowly, so its facts refresh once a week (day 7 is Sunday, UTC).
+if [ "${NIGHTLY_WEEKDAY:-$(date -u +%u)}" = 7 ]; then
+  step "open data" job /opendata -timeout 1h
+fi
 step "backup" sh "$here/backup.sh"
 
 echo "== $(date -u +%H:%M:%S) done, failed=$failed"

@@ -317,6 +317,25 @@ else
   bad "failed notices must not stop the backup"
 fi
 
+setup
+NIGHTLY_WEEKDAY=7 run_nightly
+notify=$(grep -n -- "--entrypoint /notify klyvi-api" "$case_dir/calls" | cut -d: -f1)
+opendata=$(grep -n -- "--entrypoint /opendata klyvi-api -timeout 1h" "$case_dir/calls" | cut -d: -f1)
+dump=$(grep -n "^pg_dump " "$case_dir/calls" | cut -d: -f1)
+if [ -n "$opendata" ] && [ -n "$notify" ] && [ -n "$dump" ] && [ "$notify" -lt "$opendata" ] && [ "$opendata" -lt "$dump" ]; then
+  ok "on Sundays the open-data refresh runs after notices and before the backup"
+else
+  bad "on Sundays the open-data refresh runs after notices and before the backup: $(cat "$case_dir/calls")"
+fi
+
+setup
+NIGHTLY_WEEKDAY=3 run_nightly
+if grep -q "/opendata" "$case_dir/calls"; then
+  bad "the open-data refresh only runs on Sundays"
+else
+  ok "the open-data refresh only runs on Sundays"
+fi
+
 # --- speedtest.sh ----------------------------------------------------------
 
 # A stand-in curl: answers with a fixed timing, the status in $case_dir/status
