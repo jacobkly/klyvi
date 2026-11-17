@@ -93,11 +93,13 @@ func historyGroup(units []likedUnit) string {
 }
 
 // trialResult is one hidden film or show's rank in the mixed feed and in the
-// feed of its own type, the ?media= filter, with 0 a miss.
+// feed of its own type, the ?media= filter, with 0 a miss, and the media ids
+// each feed put in its top 10.
 type trialResult struct {
-	hiddenType string
-	mixedRank  int
-	ownRank    int
+	hiddenType       string
+	mixedRank        int
+	ownRank          int
+	mixedTop, ownTop []int
 }
 
 // feedStats is a set of trials counted in the mixed feed and in each hidden
@@ -115,7 +117,7 @@ func (s *feedStats) add(tr trialResult) {
 // 1-based place in the feed, and 0 is a miss.
 type looStats struct {
 	trials, hits10, hits50 int
-	rrSum                  float64
+	rrSum, ndcgSum         float64
 }
 
 func (s *looStats) add(rank int) {
@@ -130,6 +132,7 @@ func (s *looStats) add(rank int) {
 		s.hits50++
 	}
 	s.rrSum += 1 / float64(rank)
+	s.ndcgSum += ndcgAt(rank, 10)
 }
 
 func (s *looStats) merge(o looStats) {
@@ -137,6 +140,7 @@ func (s *looStats) merge(o looStats) {
 	s.hits10 += o.hits10
 	s.hits50 += o.hits50
 	s.rrSum += o.rrSum
+	s.ndcgSum += o.ndcgSum
 }
 
 func (s looStats) ratio(n float64) float64 {
@@ -149,6 +153,7 @@ func (s looStats) ratio(n float64) float64 {
 func (s looStats) recall10() float64 { return s.ratio(float64(s.hits10)) }
 func (s looStats) recall50() float64 { return s.ratio(float64(s.hits50)) }
 func (s looStats) mrr() float64      { return s.ratio(s.rrSum) }
+func (s looStats) ndcg10() float64   { return s.ratio(s.ndcgSum) }
 
 // crossMediaHits counts the shows in a feed and returns the 1-based ranks of
 // the ones in related.

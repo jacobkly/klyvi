@@ -15,6 +15,11 @@
 //	                                            # mixed tastes, then evaluates
 //	                                            # them and checks cross-media
 //
+// Under the aggregate it prints NDCG@10, coverage (the share of the catalog
+// that ever reaches a top 10) and novelty (the picks' mean popularity place,
+// 0 the most voted title) for the mixed, films and shows feeds.
+// -report FILE also runs each scorer variant and writes a Markdown table.
+//
 // Synthetic mode is for end-to-end smoke testing of the cascade plumbing.
 // The numbers it produces are NOT a signal of recommender quality — only
 // real human ratings give that. With real ratings, recall@10 above ~0.10
@@ -60,6 +65,7 @@ func main() {
 	qFloor := flag.Int("quality-floor", -1, "override reco QualityFloorVotes")
 	tvShare := flag.Float64("tv-share", -1, "override reco TVShare, the pool share kept for series (0 is the films-only pool)")
 	useIDF := flag.Bool("idf", true, "apply global IDF feature weighting (set -idf=false to A/B against the raw-sum baseline)")
+	report := flag.String("report", "", "also run each scorer variant and write a Markdown table of their numbers to this file")
 	flag.Parse()
 	sampleFeed, ok := reco.ParseFeedMedia(*sampleMedia)
 	if !ok {
@@ -180,35 +186,13 @@ func main() {
 		os.Exit(0)
 	}
 
-	var (
-		total     looStats // the mixed feed over every trial
-		breakdown = map[string]*feedStats{}
-	)
-	for _, uid := range users {
-		res, err := runUserLOO(ctx, dbConn, catalog, featureIDF, recoCfg, uid, *maxTrials)
-		if err != nil {
-			log.Printf("user %s LOO: %v", uid, err)
-			continue
-		}
-		if len(res.trials) == 0 {
-			continue
-		}
-		var user feedStats
-		for _, tr := range res.trials {
-			user.add(tr)
-			key := breakdownKey(res.group, tr.hiddenType)
-			if breakdown[key] == nil {
-				breakdown[key] = &feedStats{}
-			}
-			breakdown[key].add(tr)
-		}
-		fmt.Printf("user=%s %-38s trials=%d recall@10=%.3f recall@50=%.3f MRR=%.3f  own-type: recall@10=%.3f recall@50=%.3f MRR=%.3f\n",
-			uid.String()[:8], userLabel(ctx, dbConn, uid)+" ("+res.group+")", user.mixed.trials,
-			user.mixed.recall10(), user.mixed.recall50(), user.mixed.mrr(),
-			user.own.recall10(), user.own.recall50(), user.own.mrr())
-		total.merge(user.mixed)
+	pop, err := loadPopularity(ctx, dbConn)
+	if err != nil {
+		log.Fatalf("%v", err)
 	}
 
+	base := evaluate(ctx, dbConn, catalog, featureIDF, recoCfg, users, *maxTrials, pop, true)
+	total, breakdown := base.total, base.breakdown
 	if total.trials == 0 {
 		log.Println("no trials run")
 		os.Exit(0)
@@ -231,6 +215,25 @@ func main() {
 			s.own.recall10(), s.own.recall50(), s.own.mrr())
 	}
 
+	// NDCG@10, coverage and novelty for the mixed feed and each type's own
+	// feed. Every trial ranks the feed's whole candidate pool, never a sample
+	// of negatives, since sampled metrics can flip which method looks better.
+	fmt.Println("---")
+	printViews(os.Stdout, base.views, pop)
+
+	if *report != "" {
+		results := []variantResult{{"current", base.views}}
+		for _, v := range reportVariants(recoCfg, featureIDF) {
+			log.Printf("report: running variant %q", v.name)
+			ev := evaluate(ctx, dbConn, catalog, v.idf, v.cfg, users, *maxTrials, pop, false)
+			results = append(results, variantResult{v.name, ev.views})
+		}
+		if err := saveReport(*report, results, pop); err != nil {
+			log.Fatalf("report: %v", err)
+		}
+		log.Printf("report: wrote %d variants to %s", len(results), *report)
+	}
+
 	if len(seeded) > 0 {
 		printCrossMedia(ctx, dbConn, catalog, featureIDF, recoCfg, seeded)
 	}
@@ -245,6 +248,79 @@ func main() {
 		fmt.Printf("Sample top-10 %s feed for user %s %s\n", sampleFeed, uid.String()[:8], userLabel(ctx, dbConn, uid))
 		printSampleFeed(ctx, dbConn, catalog, featureIDF, recoCfg.ForMedia(sampleFeed), uid, 10)
 	}
+}
+
+// evaluation is one scorer variant's leave-one-out run over every user.
+type evaluation struct {
+	total     looStats // the mixed feed over every trial
+	breakdown map[string]*feedStats
+	views     views
+}
+
+// evaluate runs leave-one-out for every user under one config. verbose prints
+// a line per user, as the main run does.
+func evaluate(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf *reco.MediaIDF, cfg reco.Config, users []uuid.UUID, maxTrials int, pop popularity, verbose bool) evaluation {
+	ev := evaluation{breakdown: map[string]*feedStats{}, views: newViews()}
+	for _, uid := range users {
+		res, err := runUserLOO(ctx, dbConn, catalog, idf, cfg, uid, maxTrials)
+		if err != nil {
+			log.Printf("user %s LOO: %v", uid, err)
+			continue
+		}
+		if len(res.trials) == 0 {
+			continue
+		}
+		var user feedStats
+		for _, tr := range res.trials {
+			user.add(tr)
+			ev.views.add(tr, pop)
+			key := breakdownKey(res.group, tr.hiddenType)
+			if ev.breakdown[key] == nil {
+				ev.breakdown[key] = &feedStats{}
+			}
+			ev.breakdown[key].add(tr)
+		}
+		if verbose {
+			fmt.Printf("user=%s %-38s trials=%d recall@10=%.3f recall@50=%.3f MRR=%.3f  own-type: recall@10=%.3f recall@50=%.3f MRR=%.3f\n",
+				uid.String()[:8], userLabel(ctx, dbConn, uid)+" ("+res.group+")", user.mixed.trials,
+				user.mixed.recall10(), user.mixed.recall50(), user.mixed.mrr(),
+				user.own.recall10(), user.own.recall50(), user.own.mrr())
+		}
+		ev.total.merge(user.mixed)
+	}
+	return ev
+}
+
+// variant is one scorer setup the report runs beside the current one.
+type variant struct {
+	name string
+	cfg  reco.Config
+	idf  *reco.MediaIDF
+}
+
+// reportVariants are the setups -report runs beside the current config. Each
+// later scoring change adds its own on and off pair here.
+func reportVariants(cfg reco.Config, idf *reco.MediaIDF) []variant {
+	var out []variant
+	if idf != nil {
+		out = append(out, variant{"no IDF", cfg, nil})
+	}
+	noMMR := cfg
+	noMMR.MMRLambda = 1
+	out = append(out, variant{"no MMR", noMMR, idf})
+	return out
+}
+
+func saveReport(path string, results []variantResult, pop popularity) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := writeReport(f, results, pop); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // breakdownRows are the per-media aggregate rows in print order: what the
@@ -387,10 +463,10 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, i
 		seen := seenIn(held)
 		own := hidden.feed()
 		tr := trialResult{hiddenType: hidden.MediaType}
-		if tr.mixedRank, err = rankOf(ctx, scorer, feeds[reco.FeedAll], user, pools[reco.FeedAll], seen, hidden.MediaID); err != nil {
+		if tr.mixedRank, tr.mixedTop, err = rankOf(ctx, scorer, feeds[reco.FeedAll], user, pools[reco.FeedAll], seen, hidden.MediaID); err != nil {
 			return userLOO{}, err
 		}
-		if tr.ownRank, err = rankOf(ctx, scorer, feeds[own], user, pools[own], seen, hidden.MediaID); err != nil {
+		if tr.ownRank, tr.ownTop, err = rankOf(ctx, scorer, feeds[own], user, pools[own], seen, hidden.MediaID); err != nil {
 			return userLOO{}, err
 		}
 		res.trials = append(res.trials, tr)
@@ -399,18 +475,23 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, i
 }
 
 // rankOf is target's 1-based rank in the feed cfg ranks from the pool, or 0
-// when it misses the feed.
-func rankOf(ctx context.Context, scorer *reco.Tier1, cfg reco.Config, user *reco.UserContext, pool []reco.Candidate, seen map[int]bool, target int) (int, error) {
+// when it misses the feed, and the media ids of the feed's top 10.
+func rankOf(ctx context.Context, scorer *reco.Tier1, cfg reco.Config, user *reco.UserContext, pool []reco.Candidate, seen map[int]bool, target int) (int, []int, error) {
 	ranked, err := rankPool(ctx, scorer, cfg, user, pool, seen, cfg.FeedSize)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
+	top := make([]int, 0, 10)
+	rank := 0
 	for i, s := range ranked {
-		if s.MediaID == target {
-			return i + 1, nil
+		if i < 10 {
+			top = append(top, s.MediaID)
+		}
+		if s.MediaID == target && rank == 0 {
+			rank = i + 1
 		}
 	}
-	return 0, nil
+	return rank, top, nil
 }
 
 // rankPool ranks the pool's unseen candidates as the orchestrator does: score,
