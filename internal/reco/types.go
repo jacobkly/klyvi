@@ -18,6 +18,9 @@ type MediaFeatures struct {
 	Year        int     `json:"year"` // 0 if unknown
 	VoteAverage float64 `json:"vote_average"`
 	VoteCount   int     `json:"vote_count"`
+	// FactIDs are the title's open-data facts (see FactIndex), nil when
+	// Wikidata did not match it or the fact term is off.
+	FactIDs []int `json:"-"`
 }
 
 // Candidate is a media item the orchestrator may rank for a user. Features
@@ -137,6 +140,12 @@ type Config struct {
 	// likes. MMR pays this much, times the pool's top score, per nat of KL
 	// divergence between the two (see Calibration). 0 turns it off.
 	CalibrationWeight float64
+
+	// FactWeight scores the open-data facts a candidate shares with the
+	// user's likes: directors, main subjects, settings and source material
+	// from Wikidata, weighted by rarity. Titles with no facts score the same
+	// at any weight. 0 turns it off.
+	FactWeight float64
 }
 
 // DefaultConfig is the starting point. All values are tunable via

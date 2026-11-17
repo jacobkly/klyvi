@@ -6,6 +6,9 @@ import (
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
+
+	"klyvi-api/internal/platform/db"
+	"klyvi-api/internal/reco"
 )
 
 // Repository owns the SQL for the wikidata_facts table.
@@ -16,6 +19,29 @@ type Repository struct {
 // NewRepository builds a Repository on an open connection.
 func NewRepository(db *sqlx.DB) *Repository {
 	return &Repository{db: db}
+}
+
+// RecoFacts returns the facts the recommender matches titles on: each title's
+// directors, main subjects, narrative locations and source material as one
+// sorted list. Titles with none of them are left out.
+func (r *Repository) RecoFacts(ctx context.Context) ([]reco.TitleFacts, error) {
+	var rows []struct {
+		MediaType string      `db:"media_type"`
+		TMDBID    int         `db:"tmdb_id"`
+		IDs       db.IntArray `db:"ids"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		select media_type, tmdb_id,
+		       array(select distinct u from unnest(directors || subjects || locations || based_on) u order by u) as ids
+		  from wikidata_facts
+		 where cardinality(directors || subjects || locations || based_on) > 0`); err != nil {
+		return nil, fmt.Errorf("reco facts: %w", err)
+	}
+	out := make([]reco.TitleFacts, len(rows))
+	for i, row := range rows {
+		out[i] = reco.TitleFacts{MediaType: row.MediaType, TMDBID: row.TMDBID, IDs: row.IDs}
+	}
+	return out, nil
 }
 
 // CatalogIDs returns the TMDB id of every catalog title of the type, in order.

@@ -38,6 +38,11 @@ type ConfReco struct {
 	// 0 is off.
 	CalibrationWeight float64 `env:"RECO_CALIBRATION_WEIGHT,default=0"`
 
+	// FactWeight scores the Wikidata facts a title shares with what the user
+	// likes: directors, subjects, settings and source material. 0 is off, and
+	// then the facts are not loaded at all. Needs the opendata job to have run.
+	FactWeight float64 `env:"RECO_FACT_WEIGHT,default=0"`
+
 	// UseIDF turns on global inverse-document-frequency weighting of taste
 	// features — it damps catalog-ubiquitous genres/keywords so a diverse taste
 	// leans on its discriminative signal. Off by default: the offline

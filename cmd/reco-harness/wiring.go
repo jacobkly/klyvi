@@ -12,13 +12,17 @@ import (
 // harness binary. Both binaries need to bridge the movies and series
 // repositories onto reco's Candidate type; extracting the wiring to a shared
 // package is future cleanup.
+//
+// facts puts each title's Wikidata facts on its features, as the API's
+// reco.NewFactCatalog does, and the scorers weigh shared facts by it.
 type catalogAdapter struct {
 	repo   *movies.Repository
 	tvRepo *tv.Repository
+	facts  *reco.FactIndex
 }
 
-func newCatalogAdapter(repo *movies.Repository, tvRepo *tv.Repository) *catalogAdapter {
-	return &catalogAdapter{repo: repo, tvRepo: tvRepo}
+func newCatalogAdapter(repo *movies.Repository, tvRepo *tv.Repository, facts *reco.FactIndex) *catalogAdapter {
+	return &catalogAdapter{repo: repo, tvRepo: tvRepo, facts: facts}
 }
 
 func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) ([]reco.Candidate, error) {
@@ -26,7 +30,7 @@ func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) (
 	if err != nil {
 		return nil, err
 	}
-	return rowsToCandidates(rows), nil
+	return a.rowsToCandidates(rows), nil
 }
 
 // CandidatesByMediaIDs looks the ids up as films, then sends the ids no film
@@ -37,7 +41,7 @@ func (a *catalogAdapter) CandidatesByMediaIDs(ctx context.Context, mediaIDs []in
 	if err != nil {
 		return nil, err
 	}
-	cands := rowsToCandidates(rows)
+	cands := a.rowsToCandidates(rows)
 
 	found := make(map[int]bool, len(cands))
 	for _, c := range cands {
@@ -56,7 +60,7 @@ func (a *catalogAdapter) CandidatesByMediaIDs(ctx context.Context, mediaIDs []in
 	if err != nil {
 		return nil, err
 	}
-	return append(cands, seriesToCandidates(seriesRows)...), nil
+	return append(cands, a.seriesToCandidates(seriesRows)...), nil
 }
 
 func (a *catalogAdapter) CandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]reco.Candidate, error) {
@@ -64,7 +68,7 @@ func (a *catalogAdapter) CandidatesByTaste(ctx context.Context, genreIDs, keywor
 	if err != nil {
 		return nil, err
 	}
-	return rowsToCandidates(rows), nil
+	return a.rowsToCandidates(rows), nil
 }
 
 func (a *catalogAdapter) SampleSeriesCandidates(ctx context.Context, limit int) ([]reco.Candidate, error) {
@@ -72,7 +76,7 @@ func (a *catalogAdapter) SampleSeriesCandidates(ctx context.Context, limit int) 
 	if err != nil {
 		return nil, err
 	}
-	return seriesToCandidates(rows), nil
+	return a.seriesToCandidates(rows), nil
 }
 
 func (a *catalogAdapter) SeriesCandidatesByTaste(ctx context.Context, genreIDs, keywordIDs []int, minVotes, limit int) ([]reco.Candidate, error) {
@@ -80,12 +84,12 @@ func (a *catalogAdapter) SeriesCandidatesByTaste(ctx context.Context, genreIDs, 
 	if err != nil {
 		return nil, err
 	}
-	return seriesToCandidates(rows), nil
+	return a.seriesToCandidates(rows), nil
 }
 
 // seriesToCandidates is rowsToCandidates for the series cache, with genres
 // read into the film genre space as the API's adapter does.
-func seriesToCandidates(rows []tv.RecoCandidateRow) []reco.Candidate {
+func (a *catalogAdapter) seriesToCandidates(rows []tv.RecoCandidateRow) []reco.Candidate {
 	cands := make([]reco.Candidate, 0, len(rows))
 	for _, row := range rows {
 		year := 0
@@ -105,13 +109,14 @@ func seriesToCandidates(rows []tv.RecoCandidateRow) []reco.Candidate {
 				Year:        year,
 				VoteAverage: row.VoteAverage,
 				VoteCount:   row.VoteCount,
+				FactIDs:     a.facts.IDs("tv", row.TVID),
 			},
 		})
 	}
 	return cands
 }
 
-func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
+func (a *catalogAdapter) rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 	cands := make([]reco.Candidate, 0, len(rows))
 	for _, row := range rows {
 		year := 0
@@ -131,6 +136,7 @@ func rowsToCandidates(rows []movies.RecoCandidateRow) []reco.Candidate {
 				Year:        year,
 				VoteAverage: row.VoteAverage,
 				VoteCount:   row.VoteCount,
+				FactIDs:     a.facts.IDs("movie", row.MovieID),
 			},
 		})
 	}

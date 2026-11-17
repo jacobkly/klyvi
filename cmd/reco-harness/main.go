@@ -44,6 +44,7 @@ import (
 
 	"klyvi-api/config"
 	"klyvi-api/internal/movies"
+	"klyvi-api/internal/opendata"
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/tv"
@@ -66,6 +67,7 @@ func main() {
 	tvShare := flag.Float64("tv-share", -1, "override reco TVShare, the pool share kept for series (0 is the films-only pool)")
 	useIDF := flag.Bool("idf", true, "apply global IDF feature weighting (set -idf=false to A/B against the raw-sum baseline)")
 	calibration := flag.Float64("calibration", -1, "override reco CalibrationWeight, the genre calibration cost (0 is off)")
+	factWeight := flag.Float64("facts", -1, "override reco FactWeight, the Wikidata fact overlap term (0 is off)")
 	report := flag.String("report", "", "also run each scorer variant and write a Markdown table of their numbers to this file")
 	flag.Parse()
 	sampleFeed, ok := reco.ParseFeedMedia(*sampleMedia)
@@ -117,11 +119,24 @@ func main() {
 	if *calibration >= 0 {
 		recoCfg.CalibrationWeight = *calibration
 	}
-	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d tv_share=%.2f calibration=%.2f",
+	if *factWeight >= 0 {
+		recoCfg.FactWeight = *factWeight
+	}
+	log.Printf("config: keyword=%.2f genre=%.2f era=%.2f neg=%.2f quality_floor=%d tv_share=%.2f calibration=%.2f facts=%.2f",
 		recoCfg.KeywordWeight, recoCfg.GenreWeight, recoCfg.EraWeight,
-		recoCfg.NegativeSimWeight, recoCfg.QualityFloorVotes, recoCfg.TVShare, recoCfg.CalibrationWeight)
+		recoCfg.NegativeSimWeight, recoCfg.QualityFloorVotes, recoCfg.TVShare, recoCfg.CalibrationWeight,
+		recoCfg.FactWeight)
 
-	catalog := newCatalogAdapter(movieRepo, tv.NewRepository(dbConn))
+	// The Wikidata facts load whatever the weight, so -report can sweep it.
+	// A weight of 0 leaves every score as it was.
+	titleFacts, err := opendata.NewRepository(dbConn).RecoFacts(context.Background())
+	if err != nil {
+		log.Fatalf("load wikidata facts: %v", err)
+	}
+	facts := reco.NewFactIndex(titleFacts)
+	log.Printf("facts: %d titles carry wikidata facts (run go run ./cmd/opendata if 0)", facts.Len())
+
+	catalog := newCatalogAdapter(movieRepo, tv.NewRepository(dbConn), facts)
 
 	// Diagnostics: the size of the eligible candidate universe. A small or
 	// mainstream-only catalog caps recommendation quality regardless of the
@@ -305,6 +320,9 @@ type variant struct {
 // calibrationSweep is the calibration weights -report compares, 0 being off.
 var calibrationSweep = []float64{0, 0.25, 0.5, 1, 2}
 
+// factSweep is the Wikidata fact weights -report compares, 0 being off.
+var factSweep = []float64{0, 0.2, 0.4, 0.8, 1.6, 3.2}
+
 // reportVariants are the setups -report runs beside the current config. Each
 // later scoring change adds its own on and off pair here.
 func reportVariants(cfg reco.Config, idf *reco.MediaIDF) []variant {
@@ -322,6 +340,14 @@ func reportVariants(cfg reco.Config, idf *reco.MediaIDF) []variant {
 		cal := cfg
 		cal.CalibrationWeight = w
 		out = append(out, variant{fmt.Sprintf("calibration %.2f", w), cal, idf})
+	}
+	for _, w := range factSweep {
+		if w == cfg.FactWeight {
+			continue
+		}
+		f := cfg
+		f.FactWeight = w
+		out = append(out, variant{fmt.Sprintf("facts %.2f", w), f, idf})
 	}
 	return out
 }
@@ -440,7 +466,7 @@ func runUserLOO(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, i
 		likes = sampled
 	}
 
-	scorer := reco.NewTier1(cfg).WithIDF(idf)
+	scorer := reco.NewTier1(cfg).WithIDF(idf).WithFacts(catalog.facts)
 
 	// Preload features for everything in the signal, and build each feed's
 	// candidate pool once from the full taste. Both are (near-)constant across
@@ -705,7 +731,7 @@ func liveFeed(ctx context.Context, dbConn *sqlx.DB, catalog *catalogAdapter, idf
 		}
 	}
 
-	ranked, err := rankPool(ctx, reco.NewTier1(cfg).WithIDF(idf), cfg, user, pool, seen, depth)
+	ranked, err := rankPool(ctx, reco.NewTier1(cfg).WithIDF(idf).WithFacts(catalog.facts), cfg, user, pool, seen, depth)
 	if err != nil {
 		return nil, diag, err
 	}

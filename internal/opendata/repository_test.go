@@ -2,6 +2,7 @@ package opendata
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/joeshaw/envdecode"
@@ -76,5 +77,22 @@ func TestRepositorySave(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("rows = %d, want the unmatched title dropped", n)
+	}
+
+	changed[0].Directors = []int{120, 99}
+	changed[0].Locations = []int{5}
+	save("the title gains a director and a setting", changed[:1], 1)
+	all, err := repo.RecoFacts(ctx)
+	if err != nil {
+		t.Fatalf("RecoFacts: %v", err)
+	}
+	var got []int
+	for _, f := range all {
+		if f.TMDBID == testID1 && f.MediaType == "movie" {
+			got = f.IDs
+		}
+	}
+	if want := []int{5, 99, 120}; !slices.Equal(got, want) {
+		t.Errorf("reco facts = %v, want director, subject and setting in one sorted list %v", got, want)
 	}
 }

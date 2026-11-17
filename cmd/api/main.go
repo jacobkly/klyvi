@@ -10,12 +10,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"klyvi-api/config"
 	"klyvi-api/internal/imports"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/notifications"
 	"klyvi-api/internal/onboarding"
+	"klyvi-api/internal/opendata"
 	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/platform/http/router"
@@ -123,6 +126,7 @@ func main() {
 	recoCfg.QualityFloorVotes = cfg.Reco.QualityFloorVotes
 	recoCfg.TVShare = cfg.Reco.TVShare
 	recoCfg.CalibrationWeight = cfg.Reco.CalibrationWeight
+	recoCfg.FactWeight = cfg.Reco.FactWeight
 
 	// Global IDF tables, gated by RECO_USE_IDF and loaded once at startup: they
 	// damp catalog-ubiquitous features so a diverse taste leans on its
@@ -168,7 +172,15 @@ func main() {
 		log.Println("reco catalog: in-memory catalog off (RECO_CATALOG_REFRESH=0), the feed reads the database")
 	}
 
-	recoOrchestrator := newRecoOrchestrator(dbConn, recoCatalog, recoCfg, featureIDF).
+	// The Wikidata facts load only when their term is on. Like the IDF tables,
+	// a refresh of the facts needs a restart.
+	var facts *reco.FactIndex
+	if recoCfg.FactWeight > 0 {
+		facts = loadRecoFacts(dbConn)
+		recoCatalog = reco.NewFactCatalog(recoCatalog, facts)
+	}
+
+	recoOrchestrator := newRecoOrchestrator(dbConn, recoCatalog, recoCfg, featureIDF, facts).
 		WithReasonIDF(featureTables).
 		WithFeedCache(feedCache)
 
@@ -274,6 +286,25 @@ func recoFeatureIDF(repo *movies.Repository, mediaType string,
 		log.Printf("reco: %s IDF tables loaded (corpus=%d genres=%d keywords=%d)", mediaType, corpus, len(genreDF), len(keywordDF))
 	}
 	return idf
+}
+
+// loadRecoFacts reads the Wikidata facts the feed matches titles on. A failed
+// or empty load returns an empty index, so every title scores as it would
+// with the term off.
+func loadRecoFacts(dbConn *sqlx.DB) *reco.FactIndex {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	titles, err := opendata.NewRepository(dbConn).RecoFacts(ctx)
+	if err != nil {
+		log.Printf("reco: load wikidata facts: %v", err)
+	}
+	facts := reco.NewFactIndex(titles)
+	if facts.Len() == 0 {
+		log.Println("reco: no wikidata facts, run /opendata (the fact term scores nothing until then)")
+	} else {
+		log.Printf("reco: wikidata facts loaded for %d titles", facts.Len())
+	}
+	return facts
 }
 
 // loadFeatureIDF reads one media type's feature stats into an IDF table. A
