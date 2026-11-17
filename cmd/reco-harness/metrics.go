@@ -65,16 +65,16 @@ func newPopularity(titles []titleVotes) popularity {
 }
 
 // loadPopularity reads the vote counts of the eligible catalog, the filters
-// catalogSize applies.
+// catalogSize applies, keyed by media id as the feeds are.
 func loadPopularity(ctx context.Context, dbConn *sqlx.DB) (popularity, error) {
 	var titles []titleVotes
 	err := dbConn.SelectContext(ctx, &titles, `
-		select m.movie_id as media_id, 'movie' as media_type, m.vote_count
+		select mi.media_id, 'movie' as media_type, m.vote_count
 		from movies m
 		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
 		where m.vote_count > 0
 		union all
-		select s.tv_id, 'tv', s.vote_count
+		select mi.media_id, 'tv', s.vote_count
 		from tv_series s
 		join media_index mi on mi.id = s.tv_id and mi.media_type = 'tv'
 		where s.vote_count > 0
