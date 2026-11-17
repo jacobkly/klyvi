@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -24,15 +25,33 @@ import (
 )
 
 // tier2FeedQueryBudget is the most DB round trips one Tier 2 feed request may
-// make. Every query is a full homelab-to-Supabase round trip. The fifth is the
-// card details lookup, which replaces a /v1/movies/{id} request per card from
-// the client. The sixth and seventh are the series draw and the series cards,
-// which run beside the film draw and the film cards, so they add round trips
-// but not a step to the feed's latency floor.
+// make on the database catalog (RECO_CATALOG_REFRESH=0). Every query is a full
+// homelab-to-Supabase round trip. The fifth is the card details lookup, which
+// replaces a /v1/movies/{id} request per card from the client. The sixth and
+// seventh are the series draw and the series cards, which run beside the film
+// draw and the film cards, so they add round trips but not a step to the
+// feed's latency floor.
 const tier2FeedQueryBudget = 7
 
+// tier2MemFeedQueryBudget is the same budget on the in-memory catalog, the
+// default. The history and the taste draws come from memory, which leaves the
+// user's own reads and the two card lookups.
+const tier2MemFeedQueryBudget = 4
+
+// openMemCatalog loads the in-memory catalog from the test database the way
+// main does at startup.
+func openMemCatalog(t *testing.T, dbConn *sqlx.DB) *cachedCatalog {
+	t.Helper()
+	movieRepo, tvRepo := movies.NewRepository(dbConn), tv.NewRepository(dbConn)
+	c := newCachedCatalog(newCatalogAdapter(movieRepo, tvRepo), repoCatalogLoader(movieRepo, tvRepo))
+	if err := c.Refresh(context.Background()); err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	return c
+}
+
 // TestTier2FeedQueryBudget builds the production recommender for a synthetic
-// Tier 2 user and counts the queries one feed page costs.
+// Tier 2 user and counts the queries one feed page costs, on each catalog.
 func TestTier2FeedQueryBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping DB-dependent test in -short mode")
@@ -40,41 +59,133 @@ func TestTier2FeedQueryBudget(t *testing.T) {
 	dbConn := openTestDB(t)
 	userID := newTier2User(t, dbConn)
 
-	orch := newRecoOrchestrator(dbConn, movies.NewRepository(dbConn), tv.NewRepository(dbConn), reco.DefaultConfig(), nil)
-	// Cleanups run last-in first-out, so background profile saves land before
-	// the user is deleted and the pool closes.
-	t.Cleanup(orch.Wait)
+	tests := []struct {
+		name    string
+		catalog func() reco.CatalogRepository
+		budget  int
+	}{
+		{"database", func() reco.CatalogRepository {
+			return newCatalogAdapter(movies.NewRepository(dbConn), tv.NewRepository(dbConn))
+		}, tier2FeedQueryBudget},
+		{"in memory", func() reco.CatalogRepository { return openMemCatalog(t, dbConn) }, tier2MemFeedQueryBudget},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			orch := newRecoOrchestrator(dbConn, tc.catalog(), reco.DefaultConfig(), nil)
+			// Cleanups run last-in first-out, so background profile saves land
+			// before the user is deleted and the pool closes.
+			t.Cleanup(orch.Wait)
 
-	// Warm the pool's connections and statement caches first, so the count
-	// and timing below match a server that has been up for a while.
-	if _, err := orch.Feed(context.Background(), userID, reco.FeedAll, 30, 0); err != nil {
-		t.Fatalf("warm-up Feed: %v", err)
+			// Warm the pool's connections and statement caches first, so the
+			// count and timing below match a server that has been up a while.
+			if _, err := orch.Feed(context.Background(), userID, reco.FeedAll, 30, 0); err != nil {
+				t.Fatalf("warm-up Feed: %v", err)
+			}
+
+			ctx, rec := timing.NewContext(context.Background())
+			page, err := orch.Feed(ctx, userID, reco.FeedAll, 30, 0)
+			if err != nil {
+				t.Fatalf("Feed: %v", err)
+			}
+			if len(page) == 0 {
+				t.Fatal("Feed returned no items; the synthetic user should get a Tier 2 feed")
+			}
+
+			snap := rec.Snapshot()
+			t.Logf("tier 2 feed page 1: %d queries, %v in the DB", snap.DBQueries, snap.DB)
+			if snap.DBQueries > tc.budget {
+				t.Fatalf("feed made %d queries, budget is %d", snap.DBQueries, tc.budget)
+			}
+
+			// The cards arrive complete, so the client never hydrates them.
+			detailed := 0
+			for _, s := range page {
+				if s.Overview != "" && len(s.Genres) > 0 {
+					detailed++
+				}
+			}
+			if detailed == 0 {
+				t.Error("no feed item carries an overview and genres")
+			}
+		})
+	}
+}
+
+// The in-memory draws must return what the SQL draws return, in the same
+// order, so moving the feed onto memory changes its speed and not its picks.
+// The taste comes from real catalog titles, at the pool's real sizes.
+func TestCachedCatalog_MatchesTheDatabase(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB-dependent test in -short mode")
+	}
+	dbConn := openTestDB(t)
+	ctx := context.Background()
+	sqlCat := newCatalogAdapter(movies.NewRepository(dbConn), tv.NewRepository(dbConn))
+	mem := openMemCatalog(t, dbConn)
+	if films, series := mem.Size(); films == 0 || series == 0 {
+		t.Skipf("catalog holds %d films and %d series; need some of each", films, series)
 	}
 
-	ctx, rec := timing.NewContext(context.Background())
-	page, err := orch.Feed(ctx, userID, reco.FeedAll, 30, 0)
-	if err != nil {
-		t.Fatalf("Feed: %v", err)
+	var filmTaste, seriesTaste struct {
+		Genres   db.IntArray `db:"genre_ids"`
+		Keywords db.IntArray `db:"keyword_ids"`
 	}
-	if len(page) == 0 {
-		t.Fatal("Feed returned no items; the synthetic user should get a Tier 2 feed")
+	if err := dbConn.GetContext(ctx, &filmTaste, `
+		select genre_ids, keyword_ids from movies
+		where cardinality(keyword_ids) >= 5 order by vote_count desc, movie_id limit 1
+	`); err != nil {
+		t.Skipf("no film with keywords: %v", err)
+	}
+	if err := dbConn.GetContext(ctx, &seriesTaste, `
+		select genre_ids, keyword_ids from tv_series
+		where cardinality(keyword_ids) >= 5 order by vote_count desc, tv_id limit 1
+	`); err != nil {
+		t.Skipf("no series with keywords: %v", err)
 	}
 
-	snap := rec.Snapshot()
-	t.Logf("tier 2 feed page 1: %d queries, %v in the DB", snap.DBQueries, snap.DB)
-	if snap.DBQueries > tier2FeedQueryBudget {
-		t.Fatalf("feed made %d queries, budget is %d", snap.DBQueries, tier2FeedQueryBudget)
+	type draw func(context.Context, reco.CatalogRepository) ([]reco.Candidate, error)
+	draws := map[string]draw{
+		"film taste": func(ctx context.Context, c reco.CatalogRepository) ([]reco.Candidate, error) {
+			return c.CandidatesByTaste(ctx, filmTaste.Genres, filmTaste.Keywords, 25, 720)
+		},
+		"film genres only": func(ctx context.Context, c reco.CatalogRepository) ([]reco.Candidate, error) {
+			return c.CandidatesByTaste(ctx, filmTaste.Genres, nil, 25, 300)
+		},
+		"series taste": func(ctx context.Context, c reco.CatalogRepository) ([]reco.Candidate, error) {
+			return c.SeriesCandidatesByTaste(ctx, seriesTaste.Genres, seriesTaste.Keywords, 25, 480)
+		},
+		"popular films": func(ctx context.Context, c reco.CatalogRepository) ([]reco.Candidate, error) {
+			return c.SampleMovieCandidates(ctx, 200)
+		},
+		"popular series": func(ctx context.Context, c reco.CatalogRepository) ([]reco.Candidate, error) {
+			return c.SampleSeriesCandidates(ctx, 200)
+		},
 	}
-
-	// The cards arrive complete, so the client never hydrates them.
-	detailed := 0
-	for _, s := range page {
-		if s.Overview != "" && len(s.Genres) > 0 {
-			detailed++
-		}
-	}
-	if detailed == 0 {
-		t.Error("no feed item carries an overview and genres")
+	for name, d := range draws {
+		t.Run(name, func(t *testing.T) {
+			want, err := d(ctx, sqlCat)
+			if err != nil {
+				t.Fatalf("database: %v", err)
+			}
+			got, err := d(ctx, mem)
+			if err != nil {
+				t.Fatalf("memory: %v", err)
+			}
+			if len(want) == 0 {
+				t.Skip("the database draw is empty")
+			}
+			if len(got) != len(want) {
+				t.Fatalf("memory drew %d, database %d", len(got), len(want))
+			}
+			for i := range want {
+				if got[i].MediaID != want[i].MediaID {
+					t.Fatalf("at %d memory drew %d, database %d", i, got[i].MediaID, want[i].MediaID)
+				}
+				if !reflect.DeepEqual(got[i].Features, want[i].Features) {
+					t.Fatalf("features of %d differ:\nmemory   %+v\ndatabase %+v", got[i].MediaID, got[i].Features, want[i].Features)
+				}
+			}
+		})
 	}
 }
 
@@ -89,7 +200,7 @@ func TestCachedFeed_LaterPagesSkipTheDBUntilARating(t *testing.T) {
 	userID := newTier2User(t, dbConn)
 
 	feedCache := reco.NewFeedCache(time.Minute, 8)
-	orch := newRecoOrchestrator(dbConn, movies.NewRepository(dbConn), tv.NewRepository(dbConn), reco.DefaultConfig(), nil).
+	orch := newRecoOrchestrator(dbConn, openMemCatalog(t, dbConn), reco.DefaultConfig(), nil).
 		WithFeedCache(feedCache)
 	t.Cleanup(orch.Wait)
 	interactionsService := interactions.NewService(

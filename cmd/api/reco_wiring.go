@@ -15,12 +15,13 @@ import (
 	"klyvi-api/internal/tv"
 )
 
-// newRecoOrchestrator wires the tier cascade to the DB-backed adapters. It is
-// the one place production builds the recommender, so tests that measure the
-// feed measure exactly what the server runs.
-func newRecoOrchestrator(dbConn *sqlx.DB, movieRepo *movies.Repository, tvRepo *tv.Repository, cfg reco.Config, idf *reco.MediaIDF) *reco.Orchestrator {
+// newRecoOrchestrator wires the tier cascade to the DB-backed adapters and
+// the given catalog: the database adapter, or the in-memory cachedCatalog in
+// front of it. It is the one place production builds the recommender, so
+// tests that measure the feed measure exactly what the server runs.
+func newRecoOrchestrator(dbConn *sqlx.DB, catalog reco.CatalogRepository, cfg reco.Config, idf *reco.MediaIDF) *reco.Orchestrator {
 	return reco.NewOrchestrator(
-		newCatalogAdapter(movieRepo, tvRepo),
+		catalog,
 		newSignalAdapter(dbConn),
 		newSeenAdapter(dbConn),
 		cfg,

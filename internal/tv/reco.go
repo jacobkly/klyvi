@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"klyvi-api/internal/platform/db"
 )
@@ -54,6 +55,20 @@ func (r *Repository) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) (
 	return rows, err
 }
 
+// RecoCandidatesChangedSince returns the feed projection of every indexed
+// series written at or after since, voted or not. The zero time reads the
+// whole catalog. It fills the in-process catalog the feed draws from.
+func (r *Repository) RecoCandidatesChangedSince(ctx context.Context, since time.Time) ([]RecoCandidateRow, error) {
+	var rows []RecoCandidateRow
+	err := r.db.SelectContext(ctx, &rows, `
+		select `+recoCandidateColumns+`
+		from tv_series s
+		join media_index mi on mi.id = s.tv_id and mi.media_type = 'tv'
+		where coalesce(s.updated_at, 'epoch') >= $1
+	`, since)
+	return rows, err
+}
+
 // ListCandidatesForReco is the popularity fallback: up to limit voted
 // series, most-voted first.
 func (r *Repository) ListCandidatesForReco(ctx context.Context, limit int) ([]RecoCandidateRow, error) {
@@ -63,7 +78,7 @@ func (r *Repository) ListCandidatesForReco(ctx context.Context, limit int) ([]Re
 		from tv_series s
 		join media_index mi on mi.id = s.tv_id and mi.media_type = 'tv'
 		where s.vote_count > 0
-		order by s.vote_count desc
+		order by s.vote_count desc, mi.media_id
 		limit $1
 	`, limit)
 	return rows, err
@@ -115,7 +130,7 @@ func (r *Repository) candidatesByOverlap(ctx context.Context, column string, ids
 		from tv_series s
 		join media_index mi on mi.id = s.tv_id and mi.media_type = 'tv'
 		where s.vote_count >= $1 and s.`+column+` && $2::int[]
-		order by s.vote_count desc
+		order by s.vote_count desc, mi.media_id
 		limit $3
 	`, minVotes, ids, limit)
 	return rows, err

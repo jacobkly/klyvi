@@ -140,7 +140,29 @@ func main() {
 		log.Println("reco: IDF weighting off (set RECO_USE_IDF=true to enable)")
 	}
 
-	recoOrchestrator := newRecoOrchestrator(dbConn, movieRepo, tvRepo, recoCfg, featureIDF).
+	// The feed draws its candidate pool from an in-memory copy of the catalog,
+	// loaded here and refreshed in the background, instead of shipping about
+	// 1,200 rows from the database per request. A failed first load leaves
+	// the feed on the database until a refresh succeeds.
+	var recoCatalog reco.CatalogRepository = newCatalogAdapter(movieRepo, tvRepo)
+	var memCatalog *cachedCatalog
+	if cfg.Reco.CatalogRefresh > 0 {
+		memCatalog = newCachedCatalog(recoCatalog, repoCatalogLoader(movieRepo, tvRepo))
+		loadCtx, cancelLoad := context.WithTimeout(context.Background(), time.Minute)
+		started := time.Now()
+		if err := memCatalog.Refresh(loadCtx); err != nil {
+			log.Printf("reco catalog: first load failed, the feed reads the database until a refresh works: %v", err)
+		} else {
+			films, series := memCatalog.Size()
+			log.Printf("reco catalog: %d films and %d series in memory, loaded in %v", films, series, time.Since(started).Round(time.Millisecond))
+		}
+		cancelLoad()
+		recoCatalog = memCatalog
+	} else {
+		log.Println("reco catalog: in-memory catalog off (RECO_CATALOG_REFRESH=0), the feed reads the database")
+	}
+
+	recoOrchestrator := newRecoOrchestrator(dbConn, recoCatalog, recoCfg, featureIDF).
 		WithFeedCache(feedCache)
 
 	// The similar shelves always weigh a feature by how rare it is: a shared
@@ -196,6 +218,10 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	if memCatalog != nil {
+		go memCatalog.Run(ctx, cfg.Reco.CatalogRefresh)
+	}
 
 	go func() {
 		log.Println("Starting server on", srv.Addr)

@@ -436,6 +436,20 @@ func (r *Repository) lookupJSONBNames(ctx context.Context, column, idColumn stri
 	return out, nil
 }
 
+// RecoCandidatesChangedSince returns the feed projection of every indexed
+// movie written at or after since, voted or not. The zero time reads the
+// whole catalog. It fills the in-process catalog the feed draws from.
+func (r *Repository) RecoCandidatesChangedSince(ctx context.Context, since time.Time) ([]RecoCandidateRow, error) {
+	var rows []RecoCandidateRow
+	err := r.db.SelectContext(ctx, &rows, `
+		select `+recoCandidateColumns+`
+		from movies m
+		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
+		where coalesce(m.updated_at, 'epoch') >= $1
+	`, since)
+	return rows, err
+}
+
 // ListCandidatesForReco returns up to `limit` movies suitable as feed
 // candidates, joined with their media_index id. Cheap query — feed
 // generation is sub-second.
@@ -446,7 +460,7 @@ func (r *Repository) ListCandidatesForReco(ctx context.Context, limit int) ([]Re
 		from movies m
 		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
 		where m.vote_count > 0
-		order by m.vote_count desc
+		order by m.vote_count desc, mi.media_id
 		limit $1
 	`, limit)
 	return rows, err
@@ -507,7 +521,7 @@ func (r *Repository) candidatesByOverlap(ctx context.Context, column string, ids
 		from movies m
 		join media_index mi on mi.id = m.movie_id and mi.media_type = 'movie'
 		where m.vote_count >= $1 and m.`+column+` && $2::int[]
-		order by m.vote_count desc
+		order by m.vote_count desc, mi.media_id
 		limit $3
 	`, minVotes, ids, limit)
 	return rows, err

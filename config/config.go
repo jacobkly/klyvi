@@ -42,6 +42,12 @@ type ConfReco struct {
 	// set RECO_USE_IDF=true to A/B it live. Requires feature_stats to be
 	// populated (seed-catalog -refresh-feature-stats).
 	UseIDF bool `env:"RECO_USE_IDF,default=false"`
+
+	// CatalogRefresh is how often the feed's in-memory catalog reads what
+	// changed. The feed draws its candidate pool from memory instead of
+	// shipping about 1,200 rows from the database per request. 0 turns the
+	// in-memory catalog off and the feed reads the database as before.
+	CatalogRefresh time.Duration `env:"RECO_CATALOG_REFRESH,default=2m"`
 }
 
 type ConfServer struct {
