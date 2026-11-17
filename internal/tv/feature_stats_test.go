@@ -2,6 +2,7 @@ package tv_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -105,5 +106,45 @@ func TestRefreshFeatureStats_CountsVotedSeries(t *testing.T) {
 
 	if rows, c := movieSnapshot(); rows != movieRows || c != movieCorpus {
 		t.Errorf("movie stats changed: %d rows / corpus %d, was %d / %d", rows, c, movieRows, movieCorpus)
+	}
+}
+
+// A series' crew for the recommender is its creators plus its crew in the
+// given jobs. A series with neither is left out.
+func TestRecoCrew_AddsCreators(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping DB integration test in short mode")
+	}
+	_, repo, dbh := setup(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const withCrew, bare = 2_100_000_030, 2_100_000_031
+	cleanup := func() {
+		cleanupExec(dbh, `delete from tv_series where tv_id = any($1)`, []int{withCrew, bare})
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	if _, err := dbh.ExecContext(ctx, `
+		insert into tv_series (tv_id, created_by, credits) values
+		($1, '[{"id": 2100000905, "name": "Creator"}]'::jsonb,
+		     '{"cast": [], "crew": [{"id": 2100000906, "job": "Original Music Composer"},
+		                            {"id": 2100000907, "job": "Producer"},
+		                            {"id": 2100000905, "job": "Writer"}]}'::jsonb),
+		($2, '[]'::jsonb, '{"cast": [], "crew": [{"id": 2100000907, "job": "Producer"}]}'::jsonb)`,
+		withCrew, bare); err != nil {
+		t.Fatalf("insert series: %v", err)
+	}
+
+	got, err := repo.RecoCrew(ctx, []string{"Writer", "Original Music Composer"})
+	if err != nil {
+		t.Fatalf("RecoCrew: %v", err)
+	}
+	if want := []int{2100000905, 2100000906}; !reflect.DeepEqual(got[withCrew], want) {
+		t.Errorf("crew = %v, want %v", got[withCrew], want)
+	}
+	if ids, ok := got[bare]; ok {
+		t.Errorf("a series with only producers has crew %v, want it left out", ids)
 	}
 }

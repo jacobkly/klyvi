@@ -499,3 +499,39 @@ func TestService_GetMovieById_PopulatesKeywordsAndCredits(t *testing.T) {
 	}
 	t.Logf("movie %d row is %d bytes", movieID, rowBytes)
 }
+
+// The crew term reads each film's directors, writers and composers. Other
+// jobs, malformed entries and films with no such crew are left out.
+func TestRecoCrew_KeepsTheGivenJobs(t *testing.T) {
+	repo, dbConn := openTestRepo(t)
+	ctx := context.Background()
+	withCrew := 2_000_000_000 + rand.Intn(100_000_000)
+	producersOnly := withCrew + 1
+	cleanupTestMovies(t, dbConn, withCrew, producersOnly)
+
+	a := testMovie(withCrew, true)
+	crew := json.RawMessage(`{"cast":[{"id":1}],"crew":[
+		{"id":2100000903,"job":"Original Music Composer"},
+		{"id":2100000901,"job":"Director"},
+		{"id":2100000902,"job":"Producer"},
+		{"id":2100000901,"job":"Screenplay"},
+		{"job":"Director"}]}`)
+	a.Credits = &crew
+	b := testMovie(producersOnly, true)
+	producers := json.RawMessage(`{"cast":[],"crew":[{"id":2100000902,"job":"Producer"}]}`)
+	b.Credits = &producers
+	if err := repo.InsertMovies(ctx, []*movies.Movie{a, b}); err != nil {
+		t.Fatalf("InsertMovies: %v", err)
+	}
+
+	got, err := repo.RecoCrew(ctx, []string{"Director", "Screenplay", "Original Music Composer"})
+	if err != nil {
+		t.Fatalf("RecoCrew: %v", err)
+	}
+	if want := []int{2100000901, 2100000903}; !reflect.DeepEqual(got[withCrew], want) {
+		t.Errorf("crew = %v, want %v", got[withCrew], want)
+	}
+	if ids, ok := got[producersOnly]; ok {
+		t.Errorf("a film with only producers has crew %v, want it left out", ids)
+	}
+}

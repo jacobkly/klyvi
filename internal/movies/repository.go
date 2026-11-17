@@ -695,3 +695,32 @@ func (r *Repository) DeleteCollection(ctx context.Context, collectionID int) err
 	_, err := r.db.ExecContext(ctx, `delete from movie_collections where collection_id = $1`, collectionID)
 	return err
 }
+
+// RecoCrew returns the TMDB person ids of each cached film's crew in the given
+// jobs, keyed by movie id, sorted and without repeats. Films with no such crew
+// are left out. The recommender's crew term matches titles on them.
+func (r *Repository) RecoCrew(ctx context.Context, jobs []string) (map[int][]int, error) {
+	var rows []struct {
+		ID  int         `db:"id"`
+		IDs db.IntArray `db:"ids"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		select id, ids from (
+			select movie_id as id,
+			       array(select distinct (c->>'id')::int
+			               from jsonb_array_elements(case when jsonb_typeof(credits->'crew') = 'array'
+			                                              then credits->'crew' else '[]'::jsonb end) c
+			              where c->>'job' = any($1) and jsonb_typeof(c->'id') = 'number'
+			              order by 1) as ids
+			  from movies
+			 where credits is not null
+		) t
+		where cardinality(ids) > 0`, jobs); err != nil {
+		return nil, fmt.Errorf("reco crew: %w", err)
+	}
+	out := make(map[int][]int, len(rows))
+	for _, row := range rows {
+		out[row.ID] = row.IDs
+	}
+	return out, nil
+}

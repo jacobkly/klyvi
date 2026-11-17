@@ -24,10 +24,10 @@ const (
 // effect, after the feed returns — the speed win lands once the read path is
 // optimized to skip feature-lookup when the profile is fresh.
 type Tier2 struct {
-	cfg   Config
-	repo  ProfileRepository
-	idf   *MediaIDF
-	facts *FactIndex
+	cfg  Config
+	repo ProfileRepository
+	idf  *MediaIDF
+	side sideIndexes
 
 	saving  chan struct{}
 	pending sync.WaitGroup
@@ -50,7 +50,10 @@ func (t *Tier2) Wait() {
 func (t *Tier2) WithIDF(idf *MediaIDF) *Tier2 { t.idf = idf; return t }
 
 // WithFacts is Tier1.WithFacts for this tier.
-func (t *Tier2) WithFacts(facts *FactIndex) *Tier2 { t.facts = facts; return t }
+func (t *Tier2) WithFacts(facts *FactIndex) *Tier2 { t.side.facts = facts; return t }
+
+// WithCrew is Tier1.WithCrew for this tier.
+func (t *Tier2) WithCrew(crew *FactIndex) *Tier2 { t.side.crew = crew; return t }
 
 func (t *Tier2) Name() string { return "tier2" }
 
@@ -61,7 +64,7 @@ func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 
 	profile := BuildProfile(u.UserID, u.Liked, u.Disliked, t.idf)
 	t.saveProfile(profile)
-	factW := pooledFactWeights(u.Liked, t.facts)
+	side := t.side.pool(u.Liked)
 
 	out := make([]Scored, 0, len(cands))
 	for _, c := range cands {
@@ -77,7 +80,7 @@ func (t *Tier2) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 		eSim := eraSimilarity(c.Features.Year, profile.EraWeights)
 
 		score := t.cfg.GenreWeight*gSim + t.cfg.KeywordWeight*kSim + t.cfg.EraWeight*eSim +
-			factTerm(t.cfg, c.Features, factW)
+			side.score(t.cfg, c.Features)
 		if score <= 0 {
 			continue
 		}

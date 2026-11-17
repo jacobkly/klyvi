@@ -43,6 +43,11 @@ type ConfReco struct {
 	// then the facts are not loaded at all. Needs the opendata job to have run.
 	FactWeight float64 `env:"RECO_FACT_WEIGHT,default=0"`
 
+	// CrewWeight scores the directors, writers, composers and show creators a
+	// title shares with what the user likes. 0 is off, and then the crew is not
+	// loaded at all.
+	CrewWeight float64 `env:"RECO_CREW_WEIGHT,default=0"`
+
 	// UseIDF turns on global inverse-document-frequency weighting of taste
 	// features — it damps catalog-ubiquitous genres/keywords so a diverse taste
 	// leans on its discriminative signal. Off by default: the offline

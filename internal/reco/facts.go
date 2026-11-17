@@ -2,6 +2,7 @@ package reco
 
 import (
 	"context"
+	"fmt"
 	"math"
 )
 
@@ -20,10 +21,11 @@ type factKey struct {
 	tmdbID    int
 }
 
-// FactIndex holds every catalog title's open-data facts and how rare each fact
-// is. Rarity is counted per media type over the titles Wikidata matched, like
-// the keyword IDF, so a director with two films outweighs a city that is the
-// setting of two hundred. A nil index holds no facts.
+// FactIndex holds a set of ids for every catalog title and how rare each id
+// is: the open-data facts, or the crew. Rarity is counted per media type over
+// the titles that have any, like the keyword IDF, so a director with two
+// films outweighs a city that is the setting of two hundred. A nil index
+// holds nothing.
 type FactIndex struct {
 	ids map[factKey][]int
 	idf map[string]map[int]float64
@@ -87,32 +89,76 @@ func (x *FactIndex) Weight(mediaType string, id int) float64 {
 	return 1
 }
 
-// pooledFactWeights sums the liked (or disliked) titles' signal per fact,
-// each scaled by the fact's IDF in its own title's media type.
-func pooledFactWeights(items []SignalItem, x *FactIndex) map[int]float64 {
+// CrewJobs are the TMDB crew jobs the crew term matches on: who directs,
+// writes and scores a title. Producers and the rest of the shown crew are
+// left out, since a studio producer spans too many unlike titles.
+var CrewJobs = []string{
+	"Director",
+	"Screenplay", "Writer", "Story", "Novel", "Author",
+	"Original Music Composer", "Music",
+}
+
+// sideIndexes are the id sets scored beside genres and keywords, each with its
+// own weight in Config: the Wikidata facts and the crew.
+type sideIndexes struct {
+	facts *FactIndex
+	crew  *FactIndex
+}
+
+// sideWeights are the liked (or disliked) titles' pooled side ids.
+type sideWeights struct {
+	fact map[int]float64
+	crew map[int]float64
+}
+
+func (s sideIndexes) pool(items []SignalItem) sideWeights {
+	return sideWeights{
+		fact: pooledIndexWeights(items, s.facts, func(f *MediaFeatures) []int { return f.FactIDs }),
+		crew: pooledIndexWeights(items, s.crew, func(f *MediaFeatures) []int { return f.CrewIDs }),
+	}
+}
+
+// score is the side terms of a candidate's score. Each is 0 when its weight is
+// 0 or the title shares none of its ids, so such titles score as before.
+func (w sideWeights) score(cfg Config, f *MediaFeatures) float64 {
+	var s float64
+	if cfg.FactWeight != 0 {
+		s += cfg.FactWeight * overlapScore(f.FactIDs, w.fact)
+	}
+	if cfg.CrewWeight != 0 {
+		s += cfg.CrewWeight * overlapScore(f.CrewIDs, w.crew)
+	}
+	return s
+}
+
+// pooledIndexWeights sums the liked (or disliked) titles' signal per id, each
+// scaled by the id's IDF in its own title's media type.
+func pooledIndexWeights(items []SignalItem, x *FactIndex, ids func(*MediaFeatures) []int) map[int]float64 {
 	out := map[int]float64{}
 	for _, it := range items {
 		if it.Features == nil {
 			continue
 		}
-		for _, id := range it.Features.FactIDs {
+		for _, id := range ids(it.Features) {
 			out[id] += it.Weight * x.Weight(it.Features.MediaType, id)
 		}
 	}
 	return out
 }
 
-// factCatalog puts each title's open-data facts on the features of every
-// candidate the catalog returns. It copies a title's features before adding
-// them, since the catalog underneath may share them between requests.
+// factCatalog puts each title's open-data facts and crew on the features of
+// every candidate the catalog returns. It copies a title's features before
+// adding them, since the catalog underneath may share them between requests.
 type factCatalog struct {
 	CatalogRepository
 	facts *FactIndex
+	crew  *FactIndex
 }
 
-// NewFactCatalog wraps a catalog so its candidates carry their facts.
-func NewFactCatalog(catalog CatalogRepository, facts *FactIndex) CatalogRepository {
-	return factCatalog{CatalogRepository: catalog, facts: facts}
+// NewFactCatalog wraps a catalog so its candidates carry their facts and
+// crew. Either index may be nil.
+func NewFactCatalog(catalog CatalogRepository, facts, crew *FactIndex) CatalogRepository {
+	return factCatalog{CatalogRepository: catalog, facts: facts, crew: crew}
 }
 
 func (c factCatalog) withFacts(cands []Candidate, err error) ([]Candidate, error) {
@@ -121,9 +167,12 @@ func (c factCatalog) withFacts(cands []Candidate, err error) ([]Candidate, error
 	}
 	out := make([]Candidate, len(cands))
 	for i, cand := range cands {
-		if ids := c.facts.IDs(cand.MediaType, cand.TMDBID); ids != nil && cand.Features != nil {
+		facts := c.facts.IDs(cand.MediaType, cand.TMDBID)
+		crew := c.crew.IDs(cand.MediaType, cand.TMDBID)
+		if (facts != nil || crew != nil) && cand.Features != nil {
 			f := *cand.Features
-			f.FactIDs = ids
+			f.FactIDs = facts
+			f.CrewIDs = crew
 			cand.Features = &f
 		}
 		out[i] = cand
@@ -149,4 +198,28 @@ func (c factCatalog) SeriesCandidatesByTaste(ctx context.Context, genreIDs, keyw
 
 func (c factCatalog) CandidatesByMediaIDs(ctx context.Context, mediaIDs []int) ([]Candidate, error) {
 	return c.withFacts(c.CatalogRepository.CandidatesByMediaIDs(ctx, mediaIDs))
+}
+
+// CrewSource reads the crew ids of every cached title of one media type in the
+// given jobs, keyed by TMDB id. The movies and series repositories are one.
+type CrewSource interface {
+	RecoCrew(ctx context.Context, jobs []string) (map[int][]int, error)
+}
+
+// LoadCrewIndex reads the films' and series' crew in CrewJobs into one index.
+func LoadCrewIndex(ctx context.Context, films, series CrewSource) (*FactIndex, error) {
+	var titles []TitleFacts
+	for _, src := range []struct {
+		mediaType string
+		source    CrewSource
+	}{{"movie", films}, {"tv", series}} {
+		crew, err := src.source.RecoCrew(ctx, CrewJobs)
+		if err != nil {
+			return nil, fmt.Errorf("load %s crew: %w", src.mediaType, err)
+		}
+		for id, people := range crew {
+			titles = append(titles, TitleFacts{MediaType: src.mediaType, TMDBID: id, IDs: people})
+		}
+	}
+	return NewFactIndex(titles), nil
 }

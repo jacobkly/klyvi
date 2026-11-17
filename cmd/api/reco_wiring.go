@@ -19,15 +19,15 @@ import (
 // the given catalog: the database adapter, or the in-memory cachedCatalog in
 // front of it. It is the one place production builds the recommender, so
 // tests that measure the feed measure exactly what the server runs.
-func newRecoOrchestrator(dbConn *sqlx.DB, catalog reco.CatalogRepository, cfg reco.Config, idf *reco.MediaIDF, facts *reco.FactIndex) *reco.Orchestrator {
+func newRecoOrchestrator(dbConn *sqlx.DB, catalog reco.CatalogRepository, cfg reco.Config, idf *reco.MediaIDF, facts, crew *reco.FactIndex) *reco.Orchestrator {
 	return reco.NewOrchestrator(
 		catalog,
 		newSignalAdapter(dbConn),
 		newSeenAdapter(dbConn),
 		cfg,
 	).WithTier0(reco.NewTier0()).
-		WithTier1(reco.NewTier1(cfg).WithIDF(idf).WithFacts(facts)).
-		WithTier2(reco.NewTier2(cfg, newProfileAdapter(dbConn)).WithIDF(idf).WithFacts(facts))
+		WithTier1(reco.NewTier1(cfg).WithIDF(idf).WithFacts(facts).WithCrew(crew)).
+		WithTier2(reco.NewTier2(cfg, newProfileAdapter(dbConn)).WithIDF(idf).WithFacts(facts).WithCrew(crew))
 }
 
 // catalogAdapter wraps the movies and series repositories to satisfy

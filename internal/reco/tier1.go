@@ -11,9 +11,9 @@ import (
 // that is the central differentiator; genre-only matching is what
 // incumbents already do.
 type Tier1 struct {
-	cfg   Config
-	idf   *MediaIDF
-	facts *FactIndex
+	cfg  Config
+	idf  *MediaIDF
+	side sideIndexes
 }
 
 func NewTier1(cfg Config) *Tier1 { return &Tier1{cfg: cfg} }
@@ -25,7 +25,11 @@ func (t *Tier1) WithIDF(idf *MediaIDF) *Tier1 { t.idf = idf; return t }
 
 // WithFacts attaches the open-data fact index the fact term weighs shared
 // facts by. Without it every shared fact weighs 1.
-func (t *Tier1) WithFacts(facts *FactIndex) *Tier1 { t.facts = facts; return t }
+func (t *Tier1) WithFacts(facts *FactIndex) *Tier1 { t.side.facts = facts; return t }
+
+// WithCrew attaches the crew index the crew term weighs shared people by.
+// Without it every shared person weighs 1.
+func (t *Tier1) WithCrew(crew *FactIndex) *Tier1 { t.side.crew = crew; return t }
 
 func (t *Tier1) Name() string { return "tier1" }
 
@@ -38,12 +42,12 @@ func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 	posGenre := pooledFeatureWeights(u.Liked, genreKeyset, (*FeatureIDF).GenreWeight, t.idf)
 	posKeyword := pooledFeatureWeights(u.Liked, keywordKeyset, (*FeatureIDF).KeywordWeight, t.idf)
 	posEra := pooledEraWeights(u.Liked)
-	posFact := pooledFactWeights(u.Liked, t.facts)
+	posSide := t.side.pool(u.Liked)
 
 	negGenre := pooledFeatureWeights(u.Disliked, genreKeyset, (*FeatureIDF).GenreWeight, t.idf)
 	negKeyword := pooledFeatureWeights(u.Disliked, keywordKeyset, (*FeatureIDF).KeywordWeight, t.idf)
 	negEra := pooledEraWeights(u.Disliked)
-	negFact := pooledFactWeights(u.Disliked, t.facts)
+	negSide := t.side.pool(u.Disliked)
 
 	out := make([]Scored, 0, len(cands))
 	for _, c := range cands {
@@ -54,8 +58,8 @@ func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 			continue
 		}
 
-		pos := t.scoreAgainst(c.Features, posGenre, posKeyword, posEra, posFact)
-		neg := t.scoreAgainst(c.Features, negGenre, negKeyword, negEra, negFact)
+		pos := t.scoreAgainst(c.Features, posGenre, posKeyword, posEra, posSide)
+		neg := t.scoreAgainst(c.Features, negGenre, negKeyword, negEra, negSide)
 		score := pos - t.cfg.NegativeSimWeight*neg
 
 		if score <= 0 {
@@ -72,21 +76,12 @@ func (t *Tier1) Score(ctx context.Context, u *UserContext, cands []Candidate) ([
 
 // scoreAgainst computes the weighted feature-overlap score for a candidate
 // against pooled liked-set (or disliked-set) feature weights.
-func (t *Tier1) scoreAgainst(f *MediaFeatures, genreW, keywordW, eraW, factW map[int]float64) float64 {
+func (t *Tier1) scoreAgainst(f *MediaFeatures, genreW, keywordW, eraW map[int]float64, side sideWeights) float64 {
 	gSim := overlapScore(f.GenreIDs, genreW)
 	kSim := overlapScore(f.KeywordIDs, keywordW)
 	eSim := eraSimilarity(f.Year, eraW)
 	return t.cfg.GenreWeight*gSim + t.cfg.KeywordWeight*kSim + t.cfg.EraWeight*eSim +
-		factTerm(t.cfg, f, factW)
-}
-
-// factTerm is the open-data fact overlap, scaled by its weight. It is 0 when
-// the term is off or the title has no facts, so such titles score as before.
-func factTerm(cfg Config, f *MediaFeatures, factW map[int]float64) float64 {
-	if cfg.FactWeight == 0 {
-		return 0
-	}
-	return cfg.FactWeight * overlapScore(f.FactIDs, factW)
+		side.score(t.cfg, f)
 }
 
 // overlapScore is the sum of pooled weights of features the candidate

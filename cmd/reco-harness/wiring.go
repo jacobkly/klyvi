@@ -13,16 +13,17 @@ import (
 // repositories onto reco's Candidate type; extracting the wiring to a shared
 // package is future cleanup.
 //
-// facts puts each title's Wikidata facts on its features, as the API's
-// reco.NewFactCatalog does, and the scorers weigh shared facts by it.
+// facts and crew put each title's Wikidata facts and crew on its features, as
+// the API's reco.NewFactCatalog does, and the scorers weigh shared ids by them.
 type catalogAdapter struct {
 	repo   *movies.Repository
 	tvRepo *tv.Repository
 	facts  *reco.FactIndex
+	crew   *reco.FactIndex
 }
 
-func newCatalogAdapter(repo *movies.Repository, tvRepo *tv.Repository, facts *reco.FactIndex) *catalogAdapter {
-	return &catalogAdapter{repo: repo, tvRepo: tvRepo, facts: facts}
+func newCatalogAdapter(repo *movies.Repository, tvRepo *tv.Repository, facts, crew *reco.FactIndex) *catalogAdapter {
+	return &catalogAdapter{repo: repo, tvRepo: tvRepo, facts: facts, crew: crew}
 }
 
 func (a *catalogAdapter) SampleMovieCandidates(ctx context.Context, limit int) ([]reco.Candidate, error) {
@@ -110,6 +111,7 @@ func (a *catalogAdapter) seriesToCandidates(rows []tv.RecoCandidateRow) []reco.C
 				VoteAverage: row.VoteAverage,
 				VoteCount:   row.VoteCount,
 				FactIDs:     a.facts.IDs("tv", row.TVID),
+				CrewIDs:     a.crew.IDs("tv", row.TVID),
 			},
 		})
 	}
@@ -137,6 +139,7 @@ func (a *catalogAdapter) rowsToCandidates(rows []movies.RecoCandidateRow) []reco
 				VoteAverage: row.VoteAverage,
 				VoteCount:   row.VoteCount,
 				FactIDs:     a.facts.IDs("movie", row.MovieID),
+				CrewIDs:     a.crew.IDs("movie", row.MovieID),
 			},
 		})
 	}

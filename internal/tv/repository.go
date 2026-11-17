@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"klyvi-api/internal/platform/db"
 	"klyvi-api/internal/platform/tmdb"
 )
 
@@ -374,4 +375,40 @@ func (r *Repository) GetTVIDAndSeasonByMediaID(ctx context.Context, mediaID int)
 		return 0, 0, err
 	}
 	return row.ID, row.SeasonNumber, nil
+}
+
+// RecoCrew returns the TMDB person ids of each cached series' creators and its
+// crew in the given jobs, keyed by tv id, sorted and without repeats. Series
+// with neither are left out. The recommender's crew term matches titles on
+// them. A series' crew is thin next to a film's, so its creators carry most
+// of the signal.
+func (r *Repository) RecoCrew(ctx context.Context, jobs []string) (map[int][]int, error) {
+	var rows []struct {
+		ID  int         `db:"id"`
+		IDs db.IntArray `db:"ids"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		select id, ids from (
+			select tv_id as id,
+			       array(select distinct person from (
+			                select (c->>'id')::int as person
+			                  from jsonb_array_elements(case when jsonb_typeof(credits->'crew') = 'array'
+			                                                 then credits->'crew' else '[]'::jsonb end) c
+			                 where c->>'job' = any($1) and jsonb_typeof(c->'id') = 'number'
+			                union all
+			                select (c->>'id')::int
+			                  from jsonb_array_elements(case when jsonb_typeof(created_by) = 'array'
+			                                                 then created_by else '[]'::jsonb end) c
+			                 where jsonb_typeof(c->'id') = 'number'
+			             ) p order by 1) as ids
+			  from tv_series
+		) t
+		where cardinality(ids) > 0`, jobs); err != nil {
+		return nil, fmt.Errorf("reco crew: %w", err)
+	}
+	out := make(map[int][]int, len(rows))
+	for _, row := range rows {
+		out[row.ID] = row.IDs
+	}
+	return out, nil
 }

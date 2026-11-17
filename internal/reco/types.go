@@ -21,6 +21,10 @@ type MediaFeatures struct {
 	// FactIDs are the title's open-data facts (see FactIndex), nil when
 	// Wikidata did not match it or the fact term is off.
 	FactIDs []int `json:"-"`
+	// CrewIDs are the TMDB person ids of the title's directors, writers,
+	// composers and, for a series, creators (see CrewJobs), nil when its
+	// credits are not cached or the crew term is off.
+	CrewIDs []int `json:"-"`
 }
 
 // Candidate is a media item the orchestrator may rank for a user. Features
@@ -146,6 +150,11 @@ type Config struct {
 	// from Wikidata, weighted by rarity. Titles with no facts score the same
 	// at any weight. 0 turns it off.
 	FactWeight float64
+
+	// CrewWeight scores the directors, writers, composers and show creators
+	// a candidate shares with the user's likes, weighted by rarity. Titles
+	// with no cached credits score the same at any weight. 0 turns it off.
+	CrewWeight float64
 }
 
 // DefaultConfig is the starting point. All values are tunable via

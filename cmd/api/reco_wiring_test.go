@@ -71,7 +71,7 @@ func TestTier2FeedQueryBudget(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			orch := newRecoOrchestrator(dbConn, tc.catalog(), reco.DefaultConfig(), nil, nil)
+			orch := newRecoOrchestrator(dbConn, tc.catalog(), reco.DefaultConfig(), nil, nil, nil)
 			// Cleanups run last-in first-out, so background profile saves land
 			// before the user is deleted and the pool closes.
 			t.Cleanup(orch.Wait)
@@ -200,7 +200,7 @@ func TestCachedFeed_LaterPagesSkipTheDBUntilARating(t *testing.T) {
 	userID := newTier2User(t, dbConn)
 
 	feedCache := reco.NewFeedCache(time.Minute, 8)
-	orch := newRecoOrchestrator(dbConn, openMemCatalog(t, dbConn), reco.DefaultConfig(), nil, nil).
+	orch := newRecoOrchestrator(dbConn, openMemCatalog(t, dbConn), reco.DefaultConfig(), nil, nil, nil).
 		WithFeedCache(feedCache)
 	t.Cleanup(orch.Wait)
 	interactionsService := interactions.NewService(

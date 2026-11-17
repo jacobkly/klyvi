@@ -127,6 +127,7 @@ func main() {
 	recoCfg.TVShare = cfg.Reco.TVShare
 	recoCfg.CalibrationWeight = cfg.Reco.CalibrationWeight
 	recoCfg.FactWeight = cfg.Reco.FactWeight
+	recoCfg.CrewWeight = cfg.Reco.CrewWeight
 
 	// Global IDF tables, gated by RECO_USE_IDF and loaded once at startup: they
 	// damp catalog-ubiquitous features so a diverse taste leans on its
@@ -172,15 +173,21 @@ func main() {
 		log.Println("reco catalog: in-memory catalog off (RECO_CATALOG_REFRESH=0), the feed reads the database")
 	}
 
-	// The Wikidata facts load only when their term is on. Like the IDF tables,
-	// a refresh of the facts needs a restart.
-	var facts *reco.FactIndex
+	// The Wikidata facts and the crew load only when their term is on. Like
+	// the IDF tables, they are read once, so a title cached later carries
+	// neither until the next restart.
+	var facts, crew *reco.FactIndex
 	if recoCfg.FactWeight > 0 {
 		facts = loadRecoFacts(dbConn)
-		recoCatalog = reco.NewFactCatalog(recoCatalog, facts)
+	}
+	if recoCfg.CrewWeight > 0 {
+		crew = loadRecoCrew(movieRepo, tvRepo)
+	}
+	if facts != nil || crew != nil {
+		recoCatalog = reco.NewFactCatalog(recoCatalog, facts, crew)
 	}
 
-	recoOrchestrator := newRecoOrchestrator(dbConn, recoCatalog, recoCfg, featureIDF, facts).
+	recoOrchestrator := newRecoOrchestrator(dbConn, recoCatalog, recoCfg, featureIDF, facts, crew).
 		WithReasonIDF(featureTables).
 		WithFeedCache(feedCache)
 
@@ -305,6 +312,20 @@ func loadRecoFacts(dbConn *sqlx.DB) *reco.FactIndex {
 		log.Printf("reco: wikidata facts loaded for %d titles", facts.Len())
 	}
 	return facts
+}
+
+// loadRecoCrew reads the crew the feed matches titles on. A failed load
+// returns an empty index, so every title scores as it would with the term off.
+func loadRecoCrew(films, series reco.CrewSource) *reco.FactIndex {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	crew, err := reco.LoadCrewIndex(ctx, films, series)
+	if err != nil {
+		log.Printf("reco: %v", err)
+		return reco.NewFactIndex(nil)
+	}
+	log.Printf("reco: crew loaded for %d titles", crew.Len())
+	return crew
 }
 
 // loadFeatureIDF reads one media type's feature stats into an IDF table. A
