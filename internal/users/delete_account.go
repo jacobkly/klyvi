@@ -48,6 +48,8 @@ func (s *Service) DeleteAccount(ctx context.Context, id uuid.UUID) error {
 	if err := s.repo.DeleteAccountData(ctx, id); err != nil {
 		return fmt.Errorf("delete account data: %w", err)
 	}
+	// The data is gone from here on, so this is the point to record it.
+	s.auditf("account delete user=%s", id)
 	// The users row is gone. If removing the auth user fails below, the client
 	// comes back with the same token to retry, and that request needs the row.
 	s.ensured.Remove(id.String())

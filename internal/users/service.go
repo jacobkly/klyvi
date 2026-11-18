@@ -88,6 +88,13 @@ type Service struct {
 	// deletion drops the user's cached feed through it.
 	feed FeedInvalidator
 
+	// records feeds the account export its imports and taste profile.
+	records AccountRecordReader
+
+	// audit takes the one line each export and deletion writes. Nil means the
+	// default logger.
+	audit *log.Logger
+
 	// now is the service's clock. time.Now in production; tests pin it.
 	now func() time.Time
 }

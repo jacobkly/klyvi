@@ -94,7 +94,8 @@ func (s *Service) ExportTrackingJSON(ctx context.Context, id uuid.UUID) ([]byte,
 
 // ExportAccountData is the GDPR bundle: everything held about the user in one
 // JSON document — profile (which holds the notification preferences), tracking,
-// the full interaction history, and the notices.
+// the full interaction history, the notices, the import runs (unmatched titles
+// included) and the taste profile. Each export writes one audit line.
 func (s *Service) ExportAccountData(ctx context.Context, id uuid.UUID) ([]byte, error) {
 	user, err := s.repo.GetUserByID(ctx, id)
 	if err != nil {
@@ -121,13 +122,24 @@ func (s *Service) ExportAccountData(ctx context.Context, id uuid.UUID) ([]byte, 
 	if notices == nil {
 		notices = []notifications.Notification{}
 	}
+	imports, taste, err := s.accountRecords(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 
-	return json.MarshalIndent(struct {
+	out, err := json.MarshalIndent(struct {
 		User          *User                        `json:"user"`
 		Tracking      []tracking.Entry             `json:"tracking"`
 		Interactions  []interactions.Interaction   `json:"interactions"`
 		Notifications []notifications.Notification `json:"notifications"`
-	}{user, entries, events, notices}, "", "  ")
+		Imports       []ImportRecord               `json:"imports"`
+		TasteProfile  *TasteProfileRecord          `json:"taste_profile"`
+	}{user, entries, events, notices, imports, taste}, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	s.auditf("account export user=%s", id)
+	return out, nil
 }
 
 // csvCell keeps a value from running as a formula when the file is opened in a

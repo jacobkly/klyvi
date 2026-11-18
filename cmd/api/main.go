@@ -97,7 +97,8 @@ func main() {
 
 	userService := users.NewService(userRepo).
 		WithExportSources(trackingService, interactionsService, notificationsService).
-		WithFeedInvalidator(feedCache)
+		WithFeedInvalidator(feedCache).
+		WithAccountRecords(userRepo)
 	if supabaseClient != nil {
 		userService = userService.
 			WithAvatarStorage(supabaseClient, cfg.Supabase.StorageBucket).
