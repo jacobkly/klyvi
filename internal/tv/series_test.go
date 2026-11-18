@@ -52,7 +52,10 @@ func (f *fakeTMDB) TMDBRequest(_ context.Context, _, endpoint string, _ interfac
 			"genres": [{"id": 18, "name": "Drama"}, {"id": 80, "name": "Crime"}],
 			"keywords": {"results": [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]},
 			"credits": {"cast": [{"id": 17419, "name": "Bryan Cranston", "order": 0}], "crew": []},
-			"seasons": [{"season_number": 0, "episode_count": 3}, {"season_number": 1, "episode_count": 7}]
+			"seasons": [{"season_number": 0, "episode_count": 3}, {"season_number": 1, "episode_count": 7}],
+			"content_ratings": {"results": [{"iso_3166_1": "US", "rating": "TV-MA"}]},
+			"videos": {"results": [{"site": "YouTube", "type": "Trailer", "official": true, "key": "HhesaQXLuRY"}]},
+			"external_ids": {"imdb_id": "tt0903747"}
 		}`, id)
 	default:
 		return nil, errors.New("fakeTMDB: unexpected endpoint " + endpoint)

@@ -29,7 +29,7 @@ const tvSeriesColumns = `tv_id, adult, backdrop_path, created_by, first_air_date
 	name, original_language, original_name, overview, popularity, poster_path,
 	production_companies, production_countries, seasons, spoken_languages,
 	status, tagline, type, vote_average, vote_count, keywords, credits,
-	created_at, updated_at`
+	certification, trailer_key, imdb_id, has_extras, created_at, updated_at`
 
 func (r *Repository) GetTVSeriesByID(ctx context.Context, tvID int) (*TVSeries, error) {
 	var series TVSeries
@@ -51,14 +51,16 @@ const upsertTVSeriesSQL = `
 			next_episode_to_air, networks, number_of_episodes, number_of_seasons,
 			name, original_language, original_name, overview, popularity, poster_path,
 			production_companies, production_countries, seasons, spoken_languages,
-			status, tagline, type, vote_average, vote_count, keywords, credits
+			status, tagline, type, vote_average, vote_count, keywords, credits,
+			certification, trailer_key, imdb_id, has_extras
 		) values (
 			:tv_id, :adult, :backdrop_path, :created_by, :first_air_date,
 			:genres, :homepage, :in_production, :last_air_date, :last_episode_to_air,
 			:next_episode_to_air, :networks, :number_of_episodes, :number_of_seasons,
 			:name, :original_language, :original_name, :overview, :popularity, :poster_path,
 			:production_companies, :production_countries, :seasons, :spoken_languages,
-			:status, :tagline, :type, :vote_average, :vote_count, :keywords, :credits
+			:status, :tagline, :type, :vote_average, :vote_count, :keywords, :credits,
+			:certification, :trailer_key, :imdb_id, :has_extras
 		)
 		on conflict (tv_id) do update set
 			adult = excluded.adult,
@@ -91,6 +93,10 @@ const upsertTVSeriesSQL = `
 			vote_count = excluded.vote_count,
 			keywords = excluded.keywords,
 			credits = excluded.credits,
+			certification = excluded.certification,
+			trailer_key = excluded.trailer_key,
+			imdb_id = excluded.imdb_id,
+			has_extras = excluded.has_extras,
 			updated_at = now()`
 
 // InsertTVSeries caches a series. A row cached without keywords or credits

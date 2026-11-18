@@ -44,8 +44,16 @@ type TVSeries struct {
 	VoteCount           int              `db:"vote_count" json:"vote_count"`
 	Keywords            *json.RawMessage `db:"keywords" json:"keywords"`
 	Credits             *json.RawMessage `db:"credits" json:"credits"`
-	CreatedAt           time.Time        `db:"created_at" json:"created_at"`
-	UpdatedAt           time.Time        `db:"updated_at" json:"updated_at"`
+	// Certification is the US age rating ("TV-MA"), TrailerKey the YouTube
+	// id of the official trailer, and IMDBID the series' IMDb id. HasExtras
+	// marks a row fetched with them, so an older row is refetched on first
+	// view.
+	Certification *string   `db:"certification" json:"certification"`
+	TrailerKey    *string   `db:"trailer_key" json:"trailer_key"`
+	IMDBID        *string   `db:"imdb_id" json:"imdb_id"`
+	HasExtras     bool      `db:"has_extras" json:"-"`
+	CreatedAt     time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // TVSeason mirrors `tv_seasons`. Composite PK is (tv_id, season_number).

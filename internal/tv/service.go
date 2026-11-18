@@ -96,18 +96,23 @@ func (s *Service) getSeriesDetail(ctx context.Context, tvID int) (*TVSeries, err
 	if err != nil {
 		return nil, err
 	}
-	if cached != nil && hasName(cached) {
+	if cached != nil && hasName(cached) && cached.HasExtras {
 		return cached, nil
 	}
 
 	// A row cached without its name is refetched and overwritten, so the
-	// detail page never shows a series as untitled.
+	// detail page never shows a series as untitled. So is one cached before
+	// the rating and trailer were fetched, and it stays the fallback.
 	store := s.repo.InsertTVSeries
 	if cached != nil {
 		store = s.repo.ReplaceTVSeries
 	}
 	series, err := s.fetchSeriesInto(ctx, tvID, store)
 	if err != nil {
+		if cached != nil && hasName(cached) {
+			log.Printf("serving cached series %d without its extras: %v", tvID, err)
+			return cached, nil
+		}
 		return nil, err
 	}
 
@@ -167,6 +172,12 @@ func (s *Service) SeasonEpisodeCounts(ctx context.Context, tvID int) (map[int]in
 	return counts, nil
 }
 
+// detailEndpoint is the TMDB detail request for a series, with everything the
+// cache stores appended.
+func detailEndpoint(tvID int) string {
+	return fmt.Sprintf("/tv/%d?language=en-US&append_to_response=%s", tvID, tmdb.TVDetailAppend)
+}
+
 // fetchSeries fetches a series detail from TMDB with its keywords and
 // credits, and caches it.
 func (s *Service) fetchSeries(ctx context.Context, tvID int) (*TVSeries, error) {
@@ -179,7 +190,7 @@ func (s *Service) fetchSeriesInto(ctx context.Context, tvID int, store func(cont
 	raw, err := s.client.TMDBRequest(
 		ctx,
 		"GET",
-		fmt.Sprintf("/tv/%d?language=en-US&append_to_response=keywords,credits", tvID),
+		detailEndpoint(tvID),
 		nil,
 	)
 	if err != nil {
@@ -246,7 +257,7 @@ func (s *Service) RefreshSeries(ctx context.Context, tvID int) (removed bool, er
 	raw, err := s.client.TMDBRequest(
 		ctx,
 		"GET",
-		fmt.Sprintf("/tv/%d?language=en-US&append_to_response=keywords,credits", tvID),
+		detailEndpoint(tvID),
 		nil,
 	)
 	if tmdb.IsStatus(err, http.StatusNotFound) {

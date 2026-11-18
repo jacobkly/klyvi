@@ -94,6 +94,9 @@ func NormalizeTMDBMovie(raw map[string]interface{}) *Movie {
 		VoteCount:           intVal("vote_count"),
 		Keywords:            keywordsField,
 		Credits:             j(tmdb.SlimCredits(raw["credits"])),
+		Certification:       tmdb.MovieCertification(raw),
+		TrailerKey:          tmdb.TrailerKey(raw),
+		HasExtras:           tmdb.HasExtras(raw),
 	}
 }
 

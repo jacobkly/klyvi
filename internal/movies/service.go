@@ -79,16 +79,17 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 	if err != nil {
 		return nil, err
 	}
-	// A row cached from a search hit has no credits or keywords. Treat it as
-	// a miss so the detail view fills it in, but keep it as a fallback.
-	if movie != nil && movie.Credits != nil {
+	// A row cached from a search hit has no credits or keywords, and one
+	// cached before the extras has no rating or trailer. Treat either as a
+	// miss so the detail view fills it in, but keep it as a fallback.
+	if movie != nil && movie.Credits != nil && movie.HasExtras {
 		return movie, nil
 	}
 
 	raw, err := s.client.TMDBRequest(
 		ctx,
 		"GET",
-		fmt.Sprintf("/movie/%d?language=en-US&append_to_response=keywords,credits", movieID),
+		detailEndpoint(movieID),
 		nil,
 	)
 	if err != nil {
@@ -100,7 +101,13 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 	}
 
 	normalized := NormalizeTMDBMovie(raw)
-	if err := s.repo.InsertMovie(ctx, normalized); err != nil {
+	// InsertMovie never overwrites a full row, so one missing only its
+	// extras is replaced instead.
+	store := s.repo.InsertMovie
+	if movie != nil && movie.Credits != nil {
+		store = s.repo.ReplaceMovie
+	}
+	if err := store(ctx, normalized); err != nil {
 		return nil, err
 	}
 
@@ -109,6 +116,12 @@ func (s *Service) GetMovieById(ctx context.Context, id int, idType string) (*Mov
 	}
 
 	return normalized, nil
+}
+
+// detailEndpoint is the TMDB detail request for a movie, with everything the
+// cache stores appended.
+func detailEndpoint(movieID int) string {
+	return fmt.Sprintf("/movie/%d?language=en-US&append_to_response=%s", movieID, tmdb.MovieDetailAppend)
 }
 
 // EnsureCached fetches and persists a movie's full detail (title, poster,
@@ -129,7 +142,7 @@ func (s *Service) RefreshMovie(ctx context.Context, movieID int) (removed bool, 
 	raw, err := s.client.TMDBRequest(
 		ctx,
 		"GET",
-		fmt.Sprintf("/movie/%d?language=en-US&append_to_response=keywords,credits", movieID),
+		detailEndpoint(movieID),
 		nil,
 	)
 	if tmdb.IsStatus(err, http.StatusNotFound) {
@@ -188,7 +201,7 @@ func (s *Service) GetMovieCollection(
 	rawMovie, err := s.client.TMDBRequest(
 		ctx,
 		"GET",
-		fmt.Sprintf("/movie/%d?language=en-US&append_to_response=keywords,credits", movieID),
+		detailEndpoint(movieID),
 		nil,
 	)
 	if err != nil {

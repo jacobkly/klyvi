@@ -30,7 +30,7 @@ const movieColumns = `movie_id, adult, backdrop_path, belongs_to_collection,
 	overview, popularity, poster_path, production_companies,
 	production_countries, release_date, revenue, runtime, spoken_languages,
 	status, tagline, title, video, vote_average, vote_count, keywords, credits,
-	created_at, updated_at`
+	certification, trailer_key, has_extras, created_at, updated_at`
 
 func (r *Repository) GetByTMDBID(ctx context.Context, tmdbID int) (*Movie, error) {
 	var movie Movie
@@ -76,7 +76,7 @@ const upsertMovieSQL = `
 		production_countries, release_date, revenue,
 		runtime, spoken_languages, status,
 		tagline, title, video, vote_average, vote_count,
-		keywords, credits
+		keywords, credits, certification, trailer_key, has_extras
 	) values (
 		:movie_id, :adult, :backdrop_path, :belongs_to_collection,
 		:budget, :genres, :homepage, :imdb_id,
@@ -85,7 +85,7 @@ const upsertMovieSQL = `
 		:production_countries, :release_date, :revenue,
 		:runtime, :spoken_languages, :status,
 		:tagline, :title, :video, :vote_average, :vote_count,
-		:keywords, :credits
+		:keywords, :credits, :certification, :trailer_key, :has_extras
 	)
 	on conflict (movie_id) do update set
 		adult = excluded.adult,
@@ -114,6 +114,9 @@ const upsertMovieSQL = `
 		vote_count = excluded.vote_count,
 		keywords = excluded.keywords,
 		credits = excluded.credits,
+		certification = excluded.certification,
+		trailer_key = excluded.trailer_key,
+		has_extras = excluded.has_extras,
 		updated_at = now()`
 
 const insertMovieSQL = upsertMovieSQL + `
