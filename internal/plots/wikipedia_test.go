@@ -121,3 +121,55 @@ func TestWikipedia_ReportsAnAPIError(t *testing.T) {
 		t.Errorf("err = %v, want the API error", err)
 	}
 }
+
+func TestWikipedia_RetriesWhenRateLimited(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte(`{"query":{"pages":[{"title":"A","revisions":[{"revid":7}]}]}}`))
+	}))
+	defer srv.Close()
+
+	wp := NewWikipedia(srv.URL, "t")
+	wp.backoff = time.Millisecond
+	got, err := wp.Revisions(context.Background(), []string{"A"})
+	if err != nil || got["A"] != 7 || calls != 3 {
+		t.Errorf("Revisions = %v, %v after %d calls", got, err, calls)
+	}
+}
+
+// Waits double from the backoff, never fall short of what the server asked
+// for, and stop growing at the cap.
+func TestRetryDelay(t *testing.T) {
+	cases := []struct {
+		attempt int
+		asked   time.Duration
+		want    time.Duration
+	}{
+		{1, 0, 5 * time.Second},
+		{2, 0, 10 * time.Second},
+		{4, 0, 40 * time.Second},
+		{1, 30 * time.Second, 30 * time.Second},
+		{8, 0, maxBackoff},
+		{1, time.Hour, maxBackoff},
+	}
+	for _, c := range cases {
+		if got := retryDelay(c.attempt, 5*time.Second, c.asked); got != c.want {
+			t.Errorf("retryDelay(%d, 5s, %v) = %v, want %v", c.attempt, c.asked, got, c.want)
+		}
+	}
+}
+
+func TestRetryAfter(t *testing.T) {
+	cases := map[string]time.Duration{"": 0, "12": 12 * time.Second, "-3": 0, "soon": 0, "0": 0}
+	for header, want := range cases {
+		if got := retryAfter(header); got != want {
+			t.Errorf("retryAfter(%q) = %v, want %v", header, got, want)
+		}
+	}
+}

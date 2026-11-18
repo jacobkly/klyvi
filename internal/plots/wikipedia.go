@@ -35,7 +35,7 @@ func NewWikipedia(endpoint, userAgent string) *Wikipedia {
 		http:      &http.Client{Timeout: 90 * time.Second},
 		endpoint:  endpoint,
 		userAgent: userAgent,
-		retries:   3,
+		retries:   6,
 		backoff:   5 * time.Second,
 	}
 }
@@ -167,6 +167,39 @@ func (w *Wikipedia) Texts(ctx context.Context, revisionIDs []int64) (map[int64]s
 // or rate limiting.
 var errRetry = errors.New("wikipedia busy")
 
+// busyError is an errRetry that may carry how long the server asked us to wait.
+type busyError struct {
+	status int
+	after  time.Duration
+}
+
+func (e *busyError) Error() string { return fmt.Sprintf("%v: status %d", errRetry, e.status) }
+func (e *busyError) Unwrap() error { return errRetry }
+
+// maxBackoff caps one wait between retries. Six retries from a 5 s backoff
+// wait 5, 10, 20, 40, 80 and 120 s, about 4.5 minutes, before a batch is
+// given up.
+const maxBackoff = 2 * time.Minute
+
+// retryDelay is the wait before retry number attempt (from 1): the backoff
+// doubled each time, at least what the server asked for, at most maxBackoff.
+func retryDelay(attempt int, backoff, asked time.Duration) time.Duration {
+	d := backoff
+	for i := 1; i < attempt && d < maxBackoff; i++ {
+		d *= 2
+	}
+	return min(max(d, asked), maxBackoff)
+}
+
+// retryAfter reads a Retry-After header given in seconds. Anything else is 0.
+func retryAfter(header string) time.Duration {
+	n, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second
+}
+
 func (w *Wikipedia) query(ctx context.Context, params url.Values) (*apiResponse, error) {
 	form := url.Values{"action": {"query"}, "format": {"json"}, "formatversion": {"2"}, "maxlag": {"5"}}
 	for k, v := range params {
@@ -175,10 +208,15 @@ func (w *Wikipedia) query(ctx context.Context, params url.Values) (*apiResponse,
 	var err error
 	for attempt := 0; attempt <= w.retries; attempt++ {
 		if attempt > 0 {
+			var asked time.Duration
+			var busy *busyError
+			if errors.As(err, &busy) {
+				asked = busy.after
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(w.backoff * time.Duration(attempt)):
+			case <-time.After(retryDelay(attempt, w.backoff, asked)):
 			}
 		}
 		var resp *apiResponse
@@ -205,7 +243,7 @@ func (w *Wikipedia) queryOnce(ctx context.Context, form url.Values) (*apiRespons
 	switch {
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("%w: status %d", errRetry, resp.StatusCode)
+		return nil, &busyError{status: resp.StatusCode, after: retryAfter(resp.Header.Get("Retry-After"))}
 	case resp.StatusCode != http.StatusOK:
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
