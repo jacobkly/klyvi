@@ -90,7 +90,8 @@ func main() {
 		WithSeriesEnsurer(tvService)
 	interactionsService := interactions.NewService(interactionsRepo, trackingRepo).
 		WithFeedInvalidator(feedCache).
-		WithSeriesEnsurer(tvService)
+		WithSeriesEnsurer(tvService).
+		WithSeenMarker(trackingRepo)
 
 	notificationsService := notifications.NewService(notifications.NewRepository(dbConn))
 

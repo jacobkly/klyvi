@@ -34,11 +34,18 @@ type SeriesEnsurer interface {
 	EnsureSeries(ctx context.Context, tvID int) error
 }
 
+// SeenMarker files a title as Completed with no score, leaving an existing
+// library entry alone. The tracking package's Repository satisfies it.
+type SeenMarker interface {
+	MarkSeen(ctx context.Context, userID uuid.UUID, mediaID int, mediaType string) error
+}
+
 type Service struct {
 	repo   InteractionRepository
 	media  MediaIndexResolver
 	feed   FeedInvalidator
 	series SeriesEnsurer
+	seen   SeenMarker
 	cap    *dailyCap
 }
 
@@ -57,6 +64,13 @@ func (s *Service) WithFeedInvalidator(f FeedInvalidator) *Service {
 // season or a series, so the signal has the show's features to roll up to.
 func (s *Service) WithSeriesEnsurer(e SeriesEnsurer) *Service {
 	s.series = e
+	return s
+}
+
+// WithSeenMarker turns every onboarding answer into a library entry: the
+// user said they have seen the title, so it is Completed, with no score.
+func (s *Service) WithSeenMarker(m SeenMarker) *Service {
+	s.seen = m
 	return s
 }
 
@@ -129,6 +143,13 @@ func (s *Service) Record(ctx context.Context, userID uuid.UUID, req RecordReques
 	if err := s.repo.Record(ctx, e); err != nil {
 		return nil, err
 	}
+	// Best effort: the answer stands as a feed signal either way, and the
+	// backfill command catches up an entry that failed here.
+	if s.seen != nil && isOnboardingAnswer(req) {
+		if err := s.seen.MarkSeen(ctx, userID, mediaID, req.MediaType); err != nil {
+			log.Printf("best-effort MarkSeen failed for %s=%d: %v", req.MediaType, req.TMDBID, err)
+		}
+	}
 	// Impressions and clicks fire while the user browses the feed and barely
 	// move it, so they leave the cached feed alone until it expires. They
 	// also only name candidates the catalog already holds.
@@ -188,6 +209,15 @@ func (s *Service) ListByUser(ctx context.Context, userID uuid.UUID, sinceDays in
 
 func (s *Service) CountByUser(ctx context.Context, userID uuid.UUID) (int, error) {
 	return s.repo.CountByUser(ctx, userID)
+}
+
+// isOnboardingAnswer reports whether a request is an onboarding answer that
+// says the user has seen the title. Unseen titles send nothing, and a
+// series is never tracked, only its seasons.
+func isOnboardingAnswer(req RecordRequest) bool {
+	return req.Kind == KindRated &&
+		req.Source != nil && *req.Source == SourceOnboarding &&
+		req.MediaType != MediaTypeTV
 }
 
 func validateMediaType(mt string) error {

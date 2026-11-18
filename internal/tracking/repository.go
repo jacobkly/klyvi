@@ -130,6 +130,62 @@ func (r *Repository) AddEntry(ctx context.Context, userID uuid.UUID, mediaID int
 	return r.GetEntry(ctx, userID, mediaID)
 }
 
+// MarkSeen files a title the user says they have seen as Completed with no
+// score. A title already in the library keeps its entry as it is.
+func (r *Repository) MarkSeen(ctx context.Context, userID uuid.UUID, mediaID int, mediaType string) error {
+	_, err := r.db.ExecContext(ctx, `
+		insert into media_list (user_id, media_id, media_type, status)
+		values ($1, $2, $3, 'completed')
+		on conflict (user_id, media_id) do nothing
+	`, userID, mediaID, mediaType)
+	if err != nil {
+		return fmt.Errorf("mark seen: %w", err)
+	}
+	return nil
+}
+
+// BackfillResult counts what a backfill wrote, or would write on a dry run.
+type BackfillResult struct {
+	Entries  int64 `db:"entries"`
+	Accounts int64 `db:"accounts"`
+}
+
+// onboardingSeenRows is every onboarding answer whose title is not in the
+// answering user's library yet, once per title. $1 narrows it to one user.
+const onboardingSeenRows = `
+	select distinct i.user_id, i.media_id, i.media_type
+	from interactions i
+	where i.source = 'onboarding' and i.kind = 'rated' and i.media_type <> 'tv'
+	  and ($1::uuid is null or i.user_id = $1::uuid)
+	  and not exists (
+		select 1 from media_list ml
+		where ml.user_id = i.user_id and ml.media_id = i.media_id
+	  )
+`
+
+// BackfillOnboardingSeen files past onboarding answers the way MarkSeen files
+// new ones: Completed, with no score, and never over an existing entry. A nil
+// userID covers every account. A dry run counts without writing.
+func (r *Repository) BackfillOnboardingSeen(ctx context.Context, userID *uuid.UUID, dryRun bool) (BackfillResult, error) {
+	var res BackfillResult
+	query := `
+		with ins as (
+			insert into media_list (user_id, media_id, media_type, status)
+			select user_id, media_id, media_type, 'completed' from (` + onboardingSeenRows + `) seen
+			on conflict (user_id, media_id) do nothing
+			returning user_id
+		)
+		select count(*) as entries, count(distinct user_id) as accounts from ins
+	`
+	if dryRun {
+		query = `select count(*) as entries, count(distinct user_id) as accounts from (` + onboardingSeenRows + `) seen`
+	}
+	if err := r.db.GetContext(ctx, &res, query, userID); err != nil {
+		return BackfillResult{}, fmt.Errorf("backfill onboarding answers: %w", err)
+	}
+	return res, nil
+}
+
 func (r *Repository) GetEntry(ctx context.Context, userID uuid.UUID, mediaID int) (*Entry, error) {
 	var e Entry
 	err := r.db.GetContext(ctx, &e, `
