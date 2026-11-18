@@ -54,4 +54,15 @@ else
 fi
 
 echo "== $(date -u +%H:%M:%S) done, failed=$failed"
+
+# A clean run pings a heartbeat check (healthchecks.io or similar), set as
+# HEARTBEAT_URL in .env. A failed or missing run sends no ping, so the check
+# raises the alarm. With no URL set, the ping is skipped.
+heartbeat=${HEARTBEAT_URL:-$(sed -n 's/^HEARTBEAT_URL=//p' "$here/.env" 2>/dev/null | tail -n 1 | tr -d "\"'\r")}
+if [ "$failed" = 0 ] && [ -n "$heartbeat" ]; then
+  if ! curl -fsS -m 10 --retry 3 -o /dev/null "$heartbeat"; then
+    echo "== heartbeat ping failed"
+  fi
+fi
+
 exit "$failed"

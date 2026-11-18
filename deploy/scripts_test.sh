@@ -83,6 +83,12 @@ done
 exit 0
 EOF
 
+  # nightly.sh pings its heartbeat with curl. The stand-in only records it.
+  cat >"$case_dir/bin/curl" <<EOF
+#!/bin/sh
+echo "curl \$*" >>"$case_dir/calls"
+EOF
+
   chmod +x "$case_dir/bin/"*
 }
 
@@ -265,7 +271,7 @@ fi
 # --- nightly.sh -----------------------------------------------------------
 
 run_nightly() {
-  : >"$case_dir/.env"
+  printf '%s\n' "${nightly_env:-}" >"$case_dir/.env"
   PATH="$case_dir/bin:$PATH" BACKUP_DIR="$case_dir/nas" PG_IMAGE="" \
     PGHOST=db.test PGUSER=backup_job PGPASSWORD=not-a-secret PGDATABASE=postgres \
     sh "$case_dir/nightly.sh" >"$case_dir/out" 2>&1
@@ -385,6 +391,34 @@ if grep -q "/opendata\|/plots" "$case_dir/calls"; then
   bad "the open-data and plot refreshes only run on Sundays"
 else
   ok "the open-data and plot refreshes only run on Sundays"
+fi
+
+setup
+nightly_env="HEARTBEAT_URL=https://hc.example.test/ping/abc"
+run_nightly
+nightly_env=""
+if grep -q "^curl .*https://hc.example.test/ping/abc" "$case_dir/calls"; then
+  ok "a clean run pings the heartbeat URL from .env"
+else
+  bad "a clean run pings the heartbeat URL from .env: $(cat "$case_dir/calls")"
+fi
+
+setup
+nightly_env="HEARTBEAT_URL=https://hc.example.test/ping/abc"
+echo "/notify" >"$case_dir/docker_fails"
+run_nightly
+nightly_env=""
+if grep -q "^curl " "$case_dir/calls"; then
+  bad "a failed step skips the heartbeat, so the missed ping raises the alarm"
+else
+  ok "a failed step skips the heartbeat, so the missed ping raises the alarm"
+fi
+
+setup
+if run_nightly && ! grep -q "^curl " "$case_dir/calls"; then
+  ok "with no heartbeat URL the ping is skipped and the run still succeeds"
+else
+  bad "with no heartbeat URL the ping is skipped and the run still succeeds: $(cat "$case_dir/out")"
 fi
 
 # --- speedtest.sh ----------------------------------------------------------

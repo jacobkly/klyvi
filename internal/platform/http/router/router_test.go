@@ -190,3 +190,27 @@ func TestTMDBRecommendationRoutesAreGone(t *testing.T) {
 		})
 	}
 }
+
+type downDB struct{}
+
+func (downDB) PingContext(context.Context) error { return context.DeadlineExceeded }
+
+// The uptime monitor polls /health/ready on the root router, outside the
+// per-IP limiter, and gets 503 when the database is down.
+func TestReadinessIsMountedAndUnthrottled(t *testing.T) {
+	r := router.New(router.Services{
+		Users:          users.NewService(nil),
+		Onboarding:     onboarding.NewService(emptyPool{}, nil),
+		AuthMW:         func(next http.Handler) http.Handler { return next },
+		DB:             downDB{},
+		RateLimitRPM:   1,
+		RateLimitBurst: 1,
+	})
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("request %d: status %d, want 503", i+1, rec.Code)
+		}
+	}
+}

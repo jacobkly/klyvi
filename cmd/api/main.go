@@ -259,6 +259,7 @@ func main() {
 		SimilarMovies:  similarMovies,
 		SimilarTV:      similarTV,
 		AuthMW:         authMW,
+		DB:             dbConn,
 		AllowedOrigins: cfg.Server.AllowedOrigins,
 		RateLimitRPM:   cfg.Server.RateLimitRPM,
 		RateLimitBurst: cfg.Server.RateLimitBurst,

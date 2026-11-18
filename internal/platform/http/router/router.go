@@ -46,6 +46,9 @@ type Services struct {
 	// Mounted on all protected route groups.
 	AuthMW func(http.Handler) http.Handler
 
+	// DB answers the readiness check at /health/ready. Nil leaves the route off.
+	DB health.Pinger
+
 	// AllowedOrigins is the comma-separated CORS origin list from config.
 	// Empty string falls back to localhost dev defaults.
 	AllowedOrigins string
@@ -97,6 +100,9 @@ func New(services Services) *chi.Mux {
 	r.Use(chimiddleware.Compress(5, "application/json"))
 
 	r.Get("/health", health.Get)
+	if services.DB != nil {
+		r.Get("/health/ready", health.Ready(services.DB))
+	}
 
 	r.Route("/v1", func(r chi.Router) {
 		// Global per-IP rate limit for the whole API. /health sits on the root
