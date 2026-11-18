@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/google/uuid"
 
@@ -126,6 +127,17 @@ func (s *Service) Get(ctx context.Context, userID, id uuid.UUID) (*Import, error
 func (s *Service) run(ctx context.Context, id, userID uuid.UUID, rows []Row) {
 	s.workers <- struct{}{}
 	defer func() { <-s.workers }()
+	// The rows come from a user's file. A bug they reach fails this job, not
+	// the whole API: an unrecovered panic in a goroutine ends the process.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("import %s: worker panicked: %v\n%s", id, r, debug.Stack())
+			msg := "the import stopped on an unexpected error"
+			if err := s.repo.SetStatus(ctx, id, StatusFailed, &msg); err != nil {
+				log.Printf("import %s: could not mark failed: %v", id, err)
+			}
+		}
+	}()
 
 	if err := s.repo.SetStatus(ctx, id, StatusRunning, nil); err != nil {
 		log.Printf("import %s: could not mark running: %v", id, err)

@@ -3,6 +3,7 @@ package reco
 import (
 	"context"
 	"log"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -126,6 +127,11 @@ func (t *Tier2) saveProfile(p *TasteProfile) {
 	go func() {
 		defer t.pending.Done()
 		defer func() { <-t.saving }()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("taste profile save for %s panicked: %v\n%s", p.UserID, r, debug.Stack())
+			}
+		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), profileSaveTimeout)
 		defer cancel()

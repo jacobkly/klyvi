@@ -103,3 +103,22 @@ func TestSearch_NonMovieSearchesDoNotWarm(t *testing.T) {
 		t.Errorf("InsertMovies batches = %v, want none", repo.batches)
 	}
 }
+
+// panickingRepo stands in for a bug in the cache write.
+type panickingRepo struct{}
+
+func (panickingRepo) InsertMovies(context.Context, []*movies.Movie) error { panic("insert bug") }
+func (panickingRepo) EnsureMediaIndexes(context.Context, []int) error     { return nil }
+
+// A panic while warming the cache is contained: search still answers, and an
+// unrecovered panic would have ended the API process.
+func TestSearch_WarmPanicIsContained(t *testing.T) {
+	client := cannedTMDB{resp: map[string]any{"results": []any{hit(1, "movie")}}}
+	svc := search.NewService(client, panickingRepo{})
+	for range 2 {
+		if _, err := svc.GetSearchResult(context.Background(), "", "anything"); err != nil {
+			t.Fatalf("GetSearchResult: %v", err)
+		}
+		svc.Wait()
+	}
+}

@@ -252,3 +252,32 @@ func TestRun_NonFilmRowsAreUnmatchedWithoutSearching(t *testing.T) {
 		t.Error("the film row was never searched")
 	}
 }
+
+// panickingTMDB blows up on the first search, standing in for a parser or
+// matcher bug that a user's file can reach.
+type panickingTMDB struct{}
+
+func (panickingTMDB) TMDBRequest(context.Context, string, string, interface{}) (map[string]interface{}, error) {
+	panic("matcher bug")
+}
+
+// A panic inside the worker marks that job failed and frees its slot. Before
+// this, it killed the whole API process.
+func TestRun_PanicMarksTheJobFailed(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo, panickingTMDB{}, nil, nil, nil)
+
+	for range importWorkers + 1 {
+		imp, err := svc.Start(context.Background(), uuid.New(), string(SourceLetterboxd), letterboxdFile(1))
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		// Every job fails, including the one past the pool size, which only
+		// runs if the failed jobs gave their worker slots back.
+		waitForStatus(t, repo, imp.ID, StatusFailed)
+		got, _ := repo.Get(context.Background(), uuid.Nil, imp.ID)
+		if got.Error == nil || *got.Error == "" {
+			t.Error("a failed import carries no error message")
+		}
+	}
+}

@@ -69,3 +69,27 @@ func TestTier2_PersistsProfileOffTheRequestPath(t *testing.T) {
 		t.Errorf("upserted = %v, want one upsert for %v", repo.upserted, userID)
 	}
 }
+
+// panickingProfiles stands in for a bug in the profile write.
+type panickingProfiles struct{}
+
+func (panickingProfiles) GetProfile(context.Context, uuid.UUID) (*TasteProfile, error) {
+	return nil, nil
+}
+
+func (panickingProfiles) UpsertProfile(context.Context, *TasteProfile) error {
+	panic("upsert bug")
+}
+
+// A panic in the background save is logged and dropped. Unrecovered, it would
+// end the API process. The save slot is still given back.
+func TestTier2_ProfileSavePanicIsContained(t *testing.T) {
+	t2 := NewTier2(DefaultConfig(), panickingProfiles{})
+	for range maxConcurrentProfileSaves + 1 {
+		t2.saveProfile(&TasteProfile{UserID: uuid.New()})
+		t2.Wait()
+	}
+	if n := len(t2.saving); n != 0 {
+		t.Errorf("save slots held after the panics = %d, want 0", n)
+	}
+}

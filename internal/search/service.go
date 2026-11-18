@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -140,6 +141,11 @@ func (s *Service) warmMovieCache(hits []*movies.Movie) {
 	go func() {
 		defer s.wg.Done()
 		defer func() { <-s.warming }()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("search cache warm panicked: %v\n%s", r, debug.Stack())
+			}
+		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), warmTimeout)
 		defer cancel()

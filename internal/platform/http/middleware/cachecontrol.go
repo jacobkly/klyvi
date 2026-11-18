@@ -46,3 +46,6 @@ func (w *cacheControlWriter) Write(b []byte) (int, error) {
 	}
 	return w.ResponseWriter.Write(b)
 }
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (w *cacheControlWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

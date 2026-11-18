@@ -265,11 +265,15 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:      r,
-		ReadTimeout:  cfg.Server.TimeoutRead,
-		WriteTimeout: cfg.Server.TimeoutWrite,
-		IdleTimeout:  cfg.Server.TimeoutIdle,
+		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler: r,
+		// Headers get their own short limit, so a client that trickles them
+		// in cannot hold a connection open. Uploads extend the body read per
+		// route (middleware.LongRequest).
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       cfg.Server.TimeoutRead,
+		WriteTimeout:      cfg.Server.TimeoutWrite,
+		IdleTimeout:       cfg.Server.TimeoutIdle,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

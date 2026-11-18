@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
@@ -69,6 +70,10 @@ const (
 	catalogSWR    = 86400 // 24h
 	searchMaxAge  = 600   // 10m
 )
+
+// longRequest is the read and write window for uploads and exports, which
+// outgrow the server's few-second defaults on a slow connection.
+const longRequest = 60 * time.Second
 
 func New(services Services) *chi.Mux {
 	r := chi.NewRouter()
@@ -164,11 +169,11 @@ func New(services Services) *chi.Mux {
 			r.Get("/users/me", usersAPI.GetMe)
 			r.With(middleware.MaxBodyBytes(jsonBodyCap)).Patch("/users/me", usersAPI.UpdateMe)
 			r.Delete("/users/me", usersAPI.DeleteMe)
-			r.Post("/users/me/avatar", usersAPI.UploadAvatar)
+			r.With(middleware.LongRequest(longRequest)).Post("/users/me/avatar", usersAPI.UploadAvatar)
 			r.Delete("/users/me/avatar", usersAPI.DeleteAvatar)
 			r.Get("/users/me/stats", usersAPI.GetStats)
-			r.Get("/users/me/export", usersAPI.ExportTracking)
-			r.Get("/users/me/data", usersAPI.ExportAccountData)
+			r.With(middleware.LongRequest(longRequest)).Get("/users/me/export", usersAPI.ExportTracking)
+			r.With(middleware.LongRequest(longRequest)).Get("/users/me/data", usersAPI.ExportAccountData)
 
 			trackingAPI := tracking.NewAPI(services.Tracking)
 			r.Route("/tracking", func(r chi.Router) {
@@ -198,7 +203,7 @@ func New(services Services) *chi.Mux {
 
 			importsAPI := imports.NewAPI(services.Imports)
 			r.Route("/imports", func(r chi.Router) {
-				r.Post("/", importsAPI.Create)
+				r.With(middleware.LongRequest(longRequest)).Post("/", importsAPI.Create)
 				r.Get("/{id}", importsAPI.Get)
 			})
 
