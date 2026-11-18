@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"klyvi-api/internal/platform/http/response"
+	"klyvi-api/internal/platform/tmdb"
 )
 
 // Sentinel errors the service returns for client-caused failures. Everything
@@ -24,7 +25,9 @@ func statusForError(err error) (int, string) {
 	switch {
 	case errors.Is(err, ErrInvalidIDType), errors.Is(err, ErrInvalidListType):
 		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, ErrTVNotFound):
+	// TMDB answering 404 means the id names no title, which is the
+	// visitor's mistake, not ours. Any other TMDB status stays a 500.
+	case errors.Is(err, ErrTVNotFound), tmdb.IsStatus(err, http.StatusNotFound):
 		return http.StatusNotFound, "tv not found"
 	default:
 		return http.StatusInternalServerError, "internal server error"
