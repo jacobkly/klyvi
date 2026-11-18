@@ -2,6 +2,7 @@ package tv
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"klyvi-api/internal/platform/tmdb"
@@ -67,6 +68,13 @@ func NormalizeTMDBTVSeries(raw map[string]interface{}) *TVSeries {
 		keywordsField = j(wrapper["results"])
 	}
 
+	// An answer with a blank name falls back to the original name, the
+	// title the series is known by at home.
+	name := str("name")
+	if name == nil || strings.TrimSpace(*name) == "" {
+		name = str("original_name")
+	}
+
 	return &TVSeries{
 		TVID:                intVal("id"),
 		Adult:               boolVal("adult"),
@@ -82,7 +90,7 @@ func NormalizeTMDBTVSeries(raw map[string]interface{}) *TVSeries {
 		Networks:            j(raw["networks"]),
 		NumberOfEpisodes:    intVal("number_of_episodes"),
 		NumberOfSeasons:     intVal("number_of_seasons"),
-		Name:                str("name"),
+		Name:                name,
 		OriginalLanguage:    str("original_language"),
 		OriginalName:        str("original_name"),
 		Overview:            str("overview"),

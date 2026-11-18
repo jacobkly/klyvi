@@ -3,9 +3,11 @@ package tv
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"klyvi-api/internal/platform/tmdb"
 )
@@ -94,11 +96,17 @@ func (s *Service) getSeriesDetail(ctx context.Context, tvID int) (*TVSeries, err
 	if err != nil {
 		return nil, err
 	}
-	if cached != nil {
+	if cached != nil && hasName(cached) {
 		return cached, nil
 	}
 
-	series, err := s.fetchSeries(ctx, tvID)
+	// A row cached without its name is refetched and overwritten, so the
+	// detail page never shows a series as untitled.
+	store := s.repo.InsertTVSeries
+	if cached != nil {
+		store = s.repo.ReplaceTVSeries
+	}
+	series, err := s.fetchSeriesInto(ctx, tvID, store)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +170,12 @@ func (s *Service) SeasonEpisodeCounts(ctx context.Context, tvID int) (map[int]in
 // fetchSeries fetches a series detail from TMDB with its keywords and
 // credits, and caches it.
 func (s *Service) fetchSeries(ctx context.Context, tvID int) (*TVSeries, error) {
+	return s.fetchSeriesInto(ctx, tvID, s.repo.InsertTVSeries)
+}
+
+// fetchSeriesInto fetches a series from TMDB and caches it with store. An
+// answer with no name is an error and caches nothing.
+func (s *Service) fetchSeriesInto(ctx context.Context, tvID int, store func(context.Context, *TVSeries) error) (*TVSeries, error) {
 	raw, err := s.client.TMDBRequest(
 		ctx,
 		"GET",
@@ -173,10 +187,21 @@ func (s *Service) fetchSeries(ctx context.Context, tvID int) (*TVSeries, error) 
 	}
 
 	normalized := NormalizeTMDBTVSeries(raw)
-	if err := s.repo.InsertTVSeries(ctx, normalized); err != nil {
+	if !hasName(normalized) {
+		return nil, fmt.Errorf("series %d: %w", tvID, errNamelessSeries)
+	}
+	if err := store(ctx, normalized); err != nil {
 		return nil, err
 	}
 	return normalized, nil
+}
+
+// errNamelessSeries marks a TMDB series answer with neither a name nor an
+// original name. Caching it would show the series as untitled.
+var errNamelessSeries = errors.New("tmdb sent a series with no name")
+
+func hasName(series *TVSeries) bool {
+	return series.Name != nil && strings.TrimSpace(*series.Name) != ""
 }
 
 func (s *Service) getSeasonDetail(ctx context.Context, tvID, seasonNum int) (*TVSeason, error) {
@@ -233,7 +258,11 @@ func (s *Service) RefreshSeries(ctx context.Context, tvID int) (removed bool, er
 	if err != nil {
 		return false, fmt.Errorf("fetch series %d: %w", tvID, err)
 	}
-	if err := s.repo.ReplaceTVSeries(ctx, NormalizeTMDBTVSeries(raw)); err != nil {
+	normalized := NormalizeTMDBTVSeries(raw)
+	if !hasName(normalized) {
+		return false, fmt.Errorf("refresh series %d: %w", tvID, errNamelessSeries)
+	}
+	if err := s.repo.ReplaceTVSeries(ctx, normalized); err != nil {
 		return false, fmt.Errorf("replace series %d: %w", tvID, err)
 	}
 	return false, nil
