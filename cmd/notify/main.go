@@ -16,8 +16,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/joho/godotenv"
-
 	"klyvi-api/config"
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/notifications"
@@ -26,13 +24,14 @@ import (
 	"klyvi-api/internal/tv"
 )
 
+// envFile is registered at package level so tests can see its default.
+var envFile = config.EnvFileFlag(flag.CommandLine)
+
 func main() {
 	timeout := flag.Duration("timeout", 30*time.Minute, "overall run timeout")
 	flag.Parse()
 
-	if err := godotenv.Load(".env.dev"); err != nil {
-		log.Printf("godotenv: %v (continuing, env may already be set)", err)
-	}
+	config.LoadEnvFile(*envFile)
 	cfg := config.New()
 
 	dbConn, err := db.New(cfg.DB)

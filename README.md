@@ -138,24 +138,24 @@ Apply the schema, seed the catalog, and start the API:
 
 ```bash
 # Apply schema
-go run ./cmd/migrate up
+go run ./cmd/migrate -env .env.dev up
 
 # Populate the movie cache so the recommender has content
-go run ./cmd/seed-catalog
+go run ./cmd/seed-catalog -env .env.dev
 
 # Populate the TV cache, then recompute the keyword stats the rankings use
-go run ./cmd/seed-catalog -media tv
-go run ./cmd/seed-catalog -refresh-feature-stats
+go run ./cmd/seed-catalog -env .env.dev -media tv
+go run ./cmd/seed-catalog -env .env.dev -refresh-feature-stats
 
 # Seed the curated onboarding swipe deck
-go run ./cmd/seed-onboarding
+go run ./cmd/seed-onboarding -env .env.dev
 
 # Start the API (it reads only the environment, so export the file first)
 set -a && . ./.env.dev && set +a
 go run ./cmd/api
 ```
 
-The migrate, seed, and harness commands load `.env.dev` on their own. Variables already set in the environment win.
+The migrate, seed and job commands read `.env.local`, the local Supabase stack, unless `-env` names another file, so reaching the hosted project always takes `-env .env.dev`. The harness reads `.env.dev`. Variables already set in the environment win.
 
 Or build and run the same image CI builds (it contains only the API, so run migrations first):
 

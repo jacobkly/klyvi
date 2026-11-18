@@ -17,12 +17,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/joho/godotenv"
-
 	"klyvi-api/config"
 	"klyvi-api/internal/coliked"
 	"klyvi-api/internal/platform/db"
 )
+
+// envFile is registered at package level so tests can see its default.
+var envFile = config.EnvFileFlag(flag.CommandLine)
 
 func main() {
 	def := coliked.DefaultOptions()
@@ -33,9 +34,7 @@ func main() {
 	perTitle := flag.Int("per-title", def.PerTitle, "neighbours kept per title")
 	flag.Parse()
 
-	if err := godotenv.Load(".env.dev"); err != nil {
-		log.Printf("godotenv: %v (continuing, env may already be set)", err)
-	}
+	config.LoadEnvFile(*envFile)
 	cfg := config.New()
 	dbConn, err := db.New(cfg.DB)
 	if err != nil {

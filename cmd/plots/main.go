@@ -20,8 +20,6 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/joho/godotenv"
-
 	"klyvi-api/config"
 	"klyvi-api/internal/embed"
 	"klyvi-api/internal/platform/db"
@@ -32,6 +30,9 @@ import (
 // which the job inherits. Without it the model's working memory grows past
 // the limit and the container thrashes. GOMEMLIMIT overrides it.
 const memoryLimit = 350 << 20
+
+// envFile is registered at package level so tests can see its default.
+var envFile = config.EnvFileFlag(flag.CommandLine)
 
 func main() {
 	timeout := flag.Duration("timeout", 3*time.Hour, "overall run timeout")
@@ -55,9 +56,7 @@ func main() {
 		log.Fatalf("-media must be all, movie or tv, not %q", *media)
 	}
 
-	if err := godotenv.Load(".env.dev"); err != nil {
-		log.Printf("godotenv: %v (continuing, env may already be set)", err)
-	}
+	config.LoadEnvFile(*envFile)
 	cfg := config.New()
 	dbConn, err := db.New(cfg.DB)
 	if err != nil {

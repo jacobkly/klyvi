@@ -7,7 +7,6 @@ import (
 	"os"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/joho/godotenv"
 	"github.com/pressly/goose/v3"
 
 	"klyvi-api/config"
@@ -21,15 +20,14 @@ const (
 var (
 	flags   = flag.NewFlagSet("migrate", flag.ExitOnError)
 	dir     = flags.String("dir", "migrations", "directory with migration files")
-	envFile = flags.String("env", ".env.dev", "env file with DB_* settings (already-set env vars win)")
+	envFile = config.EnvFileFlag(flags)
 )
 
 func main() {
 	flags.Usage = usage
 	flags.Parse(os.Args[1:])
 
-	// used to run migrations locally w/o docker
-	_ = godotenv.Load(*envFile)
+	config.LoadEnvFile(*envFile)
 
 	args := flags.Args()
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
@@ -67,8 +65,8 @@ func usage() {
 var (
 	usagePrefix = `Usage: migrate [-env FILE] COMMAND
 Examples:
-    migrate status
-    migrate -env .env.local up    # rehearse against the local Supabase stack
+    migrate status                # the local Supabase stack (.env.local)
+    migrate -env .env.dev status  # the hosted database
 `
 
 	usageCommands = `

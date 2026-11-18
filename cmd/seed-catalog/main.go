@@ -43,7 +43,6 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/joho/godotenv"
 
 	"klyvi-api/config"
 	"klyvi-api/internal/movies"
@@ -168,6 +167,9 @@ type tmdbRequester interface {
 	TMDBRequest(ctx context.Context, method, endpoint string, body interface{}) (map[string]interface{}, error)
 }
 
+// envFile is registered at package level so tests can see its default.
+var envFile = config.EnvFileFlag(flag.CommandLine)
+
 func main() {
 	popularPages := flag.Int("popular-pages", 15, "number of /movie/popular pages to walk")
 	topRatedPages := flag.Int("top-rated-pages", 10, "number of /movie/top_rated pages to walk")
@@ -186,9 +188,7 @@ func main() {
 	refreshMax := flag.Int("refresh-max", 0, "with -refresh-older-than, refetch at most this many rows (0 = no cap)")
 	flag.Parse()
 
-	if err := godotenv.Load(".env.dev"); err != nil {
-		log.Printf("godotenv: %v (continuing — env may already be set)", err)
-	}
+	config.LoadEnvFile(*envFile)
 
 	cfg := config.New()
 

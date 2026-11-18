@@ -19,8 +19,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/joho/godotenv"
-
 	"klyvi-api/config"
 	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/platform/db"
@@ -90,13 +88,14 @@ var pool = []seedEntry{
 	{"Jurassic Park", 1993, "popcorn"},
 }
 
+// envFile is registered at package level so tests can see its default.
+var envFile = config.EnvFileFlag(flag.CommandLine)
+
 func main() {
 	dryRun := flag.Bool("dry-run", false, "resolve TMDB ids and print, do not write to DB")
 	flag.Parse()
 
-	if err := godotenv.Load(".env.dev"); err != nil {
-		log.Printf("godotenv: %v (continuing — env may already be set)", err)
-	}
+	config.LoadEnvFile(*envFile)
 
 	cfg := config.New()
 	dbConn, err := db.New(cfg.DB)
