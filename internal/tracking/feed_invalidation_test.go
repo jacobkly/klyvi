@@ -58,6 +58,10 @@ func (m *memTracking) DeleteByMediaType(context.Context, uuid.UUID, string) (int
 	return 3, nil
 }
 
+func (m *memTracking) EpisodeCount(context.Context, int) (*int, error) {
+	return nil, nil
+}
+
 // invalidations records which users had their cached feed dropped.
 type invalidations struct{ users []uuid.UUID }
 

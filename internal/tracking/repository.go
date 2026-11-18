@@ -3,6 +3,7 @@ package tracking
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -255,4 +256,26 @@ func (r *Repository) ListByUser(ctx context.Context, userID uuid.UUID, filters L
 		return nil, err
 	}
 	return entries, nil
+}
+
+// EpisodeCount is the number of episodes in the season behind mediaID, or nil
+// when it is a movie, unknown, or its season isn't cached yet.
+func (r *Repository) EpisodeCount(ctx context.Context, mediaID int) (*int, error) {
+	var n *int
+	err := r.db.GetContext(ctx, &n, `
+		select case when jsonb_typeof(tvse.episodes) = 'array' then jsonb_array_length(tvse.episodes) end
+		from media_index mi
+		left join tv_seasons tvse
+			on mi.media_type = 'season'
+			and tvse.tv_id = mi.id
+			and tvse.season_number = mi.season_number
+		where mi.media_id = $1
+	`, mediaID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("episode count: %w", err)
+	}
+	return n, nil
 }

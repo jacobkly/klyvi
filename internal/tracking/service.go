@@ -19,6 +19,7 @@ type TrackingRepository interface {
 	ListByUser(ctx context.Context, userID uuid.UUID, filters ListFilters) ([]Entry, error)
 	ResetScoresByMediaType(ctx context.Context, userID uuid.UUID, mediaType string) (int64, error)
 	DeleteByMediaType(ctx context.Context, userID uuid.UUID, mediaType string) (int64, error)
+	EpisodeCount(ctx context.Context, mediaID int) (*int, error)
 }
 
 // FeedInvalidator drops a user's cached recommendations. The reco feed cache
@@ -101,6 +102,9 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, req AddRequest) (*E
 	if err := validateScore(req.Score); err != nil {
 		return nil, err
 	}
+	if err := validateEpisodeFloor(req.EpisodeProgress); err != nil {
+		return nil, err
+	}
 
 	mediaID, err := s.repo.EnsureMediaIndexAndGetID(ctx, req.TMDBID, req.MediaType, req.SeasonNumber)
 	if err != nil {
@@ -113,6 +117,9 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, req AddRequest) (*E
 		if err := s.series.EnsureSeries(ctx, req.TMDBID); err != nil {
 			log.Printf("best-effort EnsureSeries failed for tv=%d: %v", req.TMDBID, err)
 		}
+	}
+	if err := s.validateEpisodeCap(ctx, mediaID, req.EpisodeProgress); err != nil {
+		return nil, err
 	}
 
 	entry, err := s.repo.AddEntry(ctx, userID, mediaID, AddParams{
@@ -137,6 +144,12 @@ func (s *Service) Update(ctx context.Context, userID uuid.UUID, mediaID int, req
 		return nil, err
 	}
 	if err := validateScore(req.Score); err != nil {
+		return nil, err
+	}
+	if err := validateEpisodeFloor(req.EpisodeProgress); err != nil {
+		return nil, err
+	}
+	if err := s.validateEpisodeCap(ctx, mediaID, req.EpisodeProgress); err != nil {
 		return nil, err
 	}
 
@@ -277,6 +290,29 @@ func validateScore(s *int) error {
 	}
 	if *s < 0 || *s > 100 {
 		return invalid("score must be between 0 and 100, got %d", *s)
+	}
+	return nil
+}
+
+func validateEpisodeFloor(ep *int) error {
+	if ep != nil && *ep < 0 {
+		return invalid("episodes watched can't be negative, got %d", *ep)
+	}
+	return nil
+}
+
+// validateEpisodeCap refuses more episodes than the season has. A season the
+// catalog doesn't know the length of yet, or a movie, has no cap.
+func (s *Service) validateEpisodeCap(ctx context.Context, mediaID int, ep *int) error {
+	if ep == nil {
+		return nil
+	}
+	count, err := s.repo.EpisodeCount(ctx, mediaID)
+	if err != nil {
+		return err
+	}
+	if count != nil && *ep > *count {
+		return invalid("episodes watched must be at most %d, got %d", *count, *ep)
 	}
 	return nil
 }
