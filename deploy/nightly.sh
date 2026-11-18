@@ -1,7 +1,7 @@
 #!/bin/sh
 # The one nightly cron entry: catalog refresh, then the co-liked counts, then
 # notices, then on Sundays the open-data refresh from Wikidata and the plot
-# vectors from Wikipedia, then the backup.
+# vectors from Wikipedia, then the backup when one is set up.
 #
 #   30 3 * * * sh /path/to/deploy/nightly.sh > /var/log/klyvi-nightly.log 2>&1
 #
@@ -45,7 +45,13 @@ if [ "${NIGHTLY_WEEKDAY:-$(date -u +%u)}" = 7 ]; then
   step "open data" job /opendata -timeout 1h
   step "plot vectors" job /plots -timeout 3h
 fi
-step "backup" sh "$here/backup.sh"
+# Backups are optional. With no .env.backup next to this script and no BACKUP_DIR
+# set, the step is skipped rather than failing every night.
+if [ -f "$here/.env.backup" ] || [ -n "${BACKUP_DIR:-}" ]; then
+  step "backup" sh "$here/backup.sh"
+else
+  echo "== backup skipped, no .env.backup"
+fi
 
 echo "== $(date -u +%H:%M:%S) done, failed=$failed"
 exit "$failed"

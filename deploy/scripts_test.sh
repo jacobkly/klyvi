@@ -287,6 +287,15 @@ else
 fi
 
 setup
+: >"$case_dir/.env"
+if PATH="$case_dir/bin:$PATH" sh "$case_dir/nightly.sh" >"$case_dir/out" 2>&1 &&
+  ! grep -q "^pg_dump " "$case_dir/calls" && grep -q "backup skipped" "$case_dir/out"; then
+  ok "with no backup settings the backup is skipped and the run still succeeds"
+else
+  bad "with no backup settings the backup is skipped and the run still succeeds: $(cat "$case_dir/out")"
+fi
+
+setup
 run_nightly
 if grep "docker compose" "$case_dir/calls" | grep -qv "watchtower.enable=false"; then
   bad "job containers opt out of Watchtower, which would restart a long refresh"
