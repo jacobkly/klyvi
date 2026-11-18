@@ -22,31 +22,62 @@ const ModelID = "bge-small-en-v1.5@5c38ec7"
 // Dims is the length of every vector the model returns.
 const Dims = 384
 
+// reloadEvery is how many texts a loaded model embeds before it is loaded
+// again. hugot's pure Go backend keeps about 0.4 MiB after every text, which
+// only a new session frees. A full catalog run would otherwise pass the
+// container's 512 MB. A reload takes about 0.3 s.
+const reloadEvery = 50
+
 // Model is a loaded embedding model. It is not safe for concurrent use.
 type Model struct {
+	dir      string
 	session  *hugot.Session
 	pipeline *pipelines.FeatureExtractionPipeline
+	runs     int
 }
 
 // Load reads the model from dir, which holds model.onnx, tokenizer.json and a
 // config.json that sets max_position_embeddings, the token limit inputs are
 // truncated to.
 func Load(ctx context.Context, dir string) (*Model, error) {
+	m := &Model{dir: dir}
+	if err := m.load(ctx); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (m *Model) load(ctx context.Context) error {
+	dir := m.dir
 	session, err := hugot.NewGoSession(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("embed session: %w", err)
+		return fmt.Errorf("embed session: %w", err)
 	}
 	p, err := hugot.NewPipeline(session, hugot.FeatureExtractionConfig{ModelPath: dir, Name: "plots"})
 	if err != nil {
 		_ = session.Destroy()
-		return nil, fmt.Errorf("embed model %s: %w", dir, err)
+		return fmt.Errorf("embed model %s: %w", dir, err)
 	}
-	return &Model{session: session, pipeline: p}, nil
+	m.session, m.pipeline, m.runs = session, p, 0
+	return nil
 }
 
 // Embed returns the unit-length vector of text: the model's CLS token, which is
 // the pooling bge models are trained for.
 func (m *Model) Embed(ctx context.Context, text string) ([]float32, error) {
+	if m.runs >= reloadEvery || m.session == nil {
+		if m.session != nil {
+			err := m.session.Destroy()
+			m.session = nil
+			if err != nil {
+				return nil, fmt.Errorf("embed reload: %w", err)
+			}
+		}
+		if err := m.load(ctx); err != nil {
+			return nil, fmt.Errorf("embed reload: %w", err)
+		}
+	}
+	m.runs++
 	out, err := m.pipeline.RunRaw(ctx, []string{text})
 	if err != nil {
 		return nil, fmt.Errorf("embed: %w", err)
@@ -59,7 +90,12 @@ func (m *Model) Embed(ctx context.Context, text string) ([]float32, error) {
 
 // Close frees the model.
 func (m *Model) Close() error {
-	return m.session.Destroy()
+	if m.session == nil {
+		return nil
+	}
+	err := m.session.Destroy()
+	m.session = nil
+	return err
 }
 
 // Normalize returns v scaled to unit length, or v unchanged when it is all

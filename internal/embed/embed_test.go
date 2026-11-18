@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"strconv"
 	"testing"
 )
 
@@ -67,5 +68,44 @@ func TestModel(t *testing.T) {
 	}
 	if n := dot(heist, heist); math.Abs(n-1) > 1e-4 {
 		t.Errorf("vector length² %.5f, want 1", n)
+	}
+}
+
+// The model is reloaded every reloadEvery texts to free what the Go backend
+// holds on to. A text embeds the same on either side of a reload.
+func TestModel_ReloadKeepsTheVectors(t *testing.T) {
+	dir := os.Getenv("KLYVI_EMBED_MODEL")
+	if dir == "" || testing.Short() {
+		t.Skip("set KLYVI_EMBED_MODEL to the model directory to run")
+	}
+	ctx := context.Background()
+	m, err := Load(ctx, dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	const text = "A lighthouse keeper finds a stranger washed up on the rocks after a storm."
+	first, err := m.Embed(ctx, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := m.session
+	for i := 0; i < reloadEvery; i++ {
+		if _, err := m.Embed(ctx, "filler text number "+strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m.session == session {
+		t.Fatalf("the session was not reloaded after %d texts", reloadEvery+1)
+	}
+	again, err := m.Embed(ctx, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range first {
+		if math.Abs(float64(first[i]-again[i])) > 1e-5 {
+			t.Fatalf("dimension %d changed across a reload: %v then %v", i, first[i], again[i])
+		}
 	}
 }
