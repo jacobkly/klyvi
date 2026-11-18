@@ -25,6 +25,7 @@ type Facts struct {
 	BasedOn      []int   `json:"based_on"`
 	Countries    []int   `json:"countries"`
 	Series       []int   `json:"series"`
+	Franchises   []int   `json:"franchises"`
 }
 
 // properties maps each Wikidata property Klyvi reads to the list it fills.
@@ -32,14 +33,15 @@ var properties = []struct {
 	id   string
 	list func(*Facts) *[]int
 }{
-	{"P136", func(f *Facts) *[]int { return &f.Genres }},    // genre
-	{"P161", func(f *Facts) *[]int { return &f.Cast }},      // cast member
-	{"P57", func(f *Facts) *[]int { return &f.Directors }},  // director
-	{"P921", func(f *Facts) *[]int { return &f.Subjects }},  // main subject
-	{"P840", func(f *Facts) *[]int { return &f.Locations }}, // narrative location
-	{"P144", func(f *Facts) *[]int { return &f.BasedOn }},   // based on
-	{"P495", func(f *Facts) *[]int { return &f.Countries }}, // country of origin
-	{"P179", func(f *Facts) *[]int { return &f.Series }},    // part of the series
+	{"P136", func(f *Facts) *[]int { return &f.Genres }},      // genre
+	{"P161", func(f *Facts) *[]int { return &f.Cast }},        // cast member
+	{"P57", func(f *Facts) *[]int { return &f.Directors }},    // director
+	{"P921", func(f *Facts) *[]int { return &f.Subjects }},    // main subject
+	{"P840", func(f *Facts) *[]int { return &f.Locations }},   // narrative location
+	{"P144", func(f *Facts) *[]int { return &f.BasedOn }},     // based on
+	{"P495", func(f *Facts) *[]int { return &f.Countries }},   // country of origin
+	{"P179", func(f *Facts) *[]int { return &f.Series }},      // part of the series
+	{"P8345", func(f *Facts) *[]int { return &f.Franchises }}, // media franchise
 }
 
 // tmdbProperty is the Wikidata property holding a title's TMDB id.

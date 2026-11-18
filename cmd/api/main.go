@@ -14,6 +14,7 @@ import (
 
 	"klyvi-api/config"
 	"klyvi-api/internal/coliked"
+	"klyvi-api/internal/family"
 	"klyvi-api/internal/imports"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/movies"
@@ -260,6 +261,7 @@ func main() {
 		Notifications:  notificationsService,
 		SimilarMovies:  similarMovies,
 		SimilarTV:      similarTV,
+		Family:         family.NewRepository(dbConn),
 		AuthMW:         authMW,
 		DB:             dbConn,
 		AllowedOrigins: cfg.Server.AllowedOrigins,

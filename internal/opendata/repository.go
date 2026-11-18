@@ -78,25 +78,26 @@ func (r *Repository) Save(ctx context.Context, mediaType string, batch []int, fa
 
 	res, err := tx.ExecContext(ctx, `
 		insert into wikidata_facts (media_type, tmdb_id, wikidata_id, wikipedia_url, genres,
-			cast_members, directors, subjects, locations, based_on, countries, series)
+			cast_members, directors, subjects, locations, based_on, countries, series, franchises)
 		select media_type, tmdb_id, wikidata_id, wikipedia_url, genres,
-			cast_members, directors, subjects, locations, based_on, countries, series
+			cast_members, directors, subjects, locations, based_on, countries, series, franchises
 		from jsonb_to_recordset($1::jsonb) as r(media_type text, tmdb_id int, wikidata_id int,
 			wikipedia_url text, genres int[], cast_members int[], directors int[], subjects int[],
-			locations int[], based_on int[], countries int[], series int[])
+			locations int[], based_on int[], countries int[], series int[], franchises int[])
 		on conflict (media_type, tmdb_id) do update set
 			wikidata_id = excluded.wikidata_id, wikipedia_url = excluded.wikipedia_url,
 			genres = excluded.genres, cast_members = excluded.cast_members,
 			directors = excluded.directors, subjects = excluded.subjects,
 			locations = excluded.locations, based_on = excluded.based_on,
-			countries = excluded.countries, series = excluded.series, updated_at = now()
+			countries = excluded.countries, series = excluded.series,
+			franchises = excluded.franchises, updated_at = now()
 		where (wikidata_facts.wikidata_id, wikidata_facts.wikipedia_url, wikidata_facts.genres,
 				wikidata_facts.cast_members, wikidata_facts.directors, wikidata_facts.subjects,
 				wikidata_facts.locations, wikidata_facts.based_on, wikidata_facts.countries,
-				wikidata_facts.series)
+				wikidata_facts.series, wikidata_facts.franchises)
 			is distinct from (excluded.wikidata_id, excluded.wikipedia_url, excluded.genres,
 				excluded.cast_members, excluded.directors, excluded.subjects, excluded.locations,
-				excluded.based_on, excluded.countries, excluded.series)
+				excluded.based_on, excluded.countries, excluded.series, excluded.franchises)
 	`, string(rows))
 	if err != nil {
 		return 0, fmt.Errorf("upsert facts: %w", err)

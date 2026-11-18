@@ -38,11 +38,12 @@ type Movie struct {
 }
 
 type MovieCollection struct {
-	CollectionID int       `db:"collection_id" json:"collection_id"`
-	MovieID      int       `db:"movie_id" json:"movie_id"`
-	Name         string    `db:"name" json:"name"`
-	PosterPath   *string   `db:"poster_path" json:"poster_path"`
-	VoteAverage  *float64  `db:"vote_average" json:"vote_average"`
-	Position     *int      `db:"position" json:"position"`
-	CreatedAt    time.Time `db:"created_at" json:"created_at"`
+	CollectionID int        `db:"collection_id" json:"collection_id"`
+	MovieID      int        `db:"movie_id" json:"movie_id"`
+	Name         string     `db:"name" json:"name"`
+	PosterPath   *string    `db:"poster_path" json:"poster_path"`
+	VoteAverage  *float64   `db:"vote_average" json:"vote_average"`
+	Position     *int       `db:"position" json:"position"`
+	ReleaseDate  *time.Time `db:"release_date" json:"release_date"`
+	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
 }

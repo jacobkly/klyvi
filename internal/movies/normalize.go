@@ -124,6 +124,13 @@ func NormalizeTMDBMovieCollection(
 
 		pos := i + 1
 
+		var released *time.Time
+		if v, ok := m["release_date"].(string); ok && v != "" {
+			if d, err := time.Parse("2006-01-02", v); err == nil {
+				released = &d
+			}
+		}
+
 		result = append(result, MovieCollection{
 			CollectionID: collectionID,
 			MovieID:      int(m["id"].(float64)),
@@ -131,6 +138,7 @@ func NormalizeTMDBMovieCollection(
 			PosterPath:   poster,
 			VoteAverage:  vote,
 			Position:     &pos,
+			ReleaseDate:  released,
 		})
 	}
 

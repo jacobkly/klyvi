@@ -73,6 +73,9 @@ type ListFilters struct {
 	Status    *string
 	Limit     int
 	After     *Cursor
+	// TMDBIDs keeps only the rows for these titles (a season row matches
+	// its series id). Empty means no filter.
+	TMDBIDs []int
 }
 
 // entrySelectClause is the column list every read returns — media_list
@@ -309,6 +312,12 @@ func (r *Repository) ListByUser(ctx context.Context, userID uuid.UUID, filters L
 		args = append(args, *filters.Status)
 		sb.WriteString(" and ml.status = $")
 		sb.WriteString(strconv.Itoa(len(args)))
+	}
+	if len(filters.TMDBIDs) > 0 {
+		args = append(args, filters.TMDBIDs)
+		sb.WriteString(" and mi.id = any($")
+		sb.WriteString(strconv.Itoa(len(args)))
+		sb.WriteString(")")
 	}
 	if filters.After != nil {
 		args = append(args, filters.After.UpdatedAt, filters.After.ID)

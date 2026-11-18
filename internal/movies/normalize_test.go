@@ -44,3 +44,21 @@ func TestNormalizeTMDBMovie_StoresSlimCredits(t *testing.T) {
 		t.Errorf("stored crew = %+v, want only the Director", got.Crew)
 	}
 }
+
+// A collection lists its films in release order, so each part keeps its date.
+func TestNormalizeTMDBMovieCollection_KeepsReleaseDates(t *testing.T) {
+	raw := map[string]any{"parts": []any{
+		map[string]any{"id": float64(49026), "title": "The Dark Knight Rises", "release_date": "2012-07-17"},
+		map[string]any{"id": float64(272), "title": "Batman Begins", "release_date": ""},
+	}}
+	parts := movies.NormalizeTMDBMovieCollection(raw, 263)
+	if len(parts) != 2 {
+		t.Fatalf("got %d parts, want 2", len(parts))
+	}
+	if d := parts[0].ReleaseDate; d == nil || d.Format("2006-01-02") != "2012-07-17" {
+		t.Errorf("first part date = %v, want 2012-07-17", d)
+	}
+	if parts[1].ReleaseDate != nil {
+		t.Errorf("an empty date should stay nil, got %v", parts[1].ReleaseDate)
+	}
+}

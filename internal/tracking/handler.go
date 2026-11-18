@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -228,6 +229,15 @@ func (a *API) List(w http.ResponseWriter, r *http.Request) {
 		}
 		filters.Limit = n
 	}
+	if v := q.Get("tmdb_ids"); v != "" {
+		ids, ok := parseTMDBIDs(v)
+		if !ok {
+			response.WriteError(w, http.StatusBadRequest,
+				"tmdb_ids must be up to "+strconv.Itoa(MaxListTMDBIDs)+" positive integers, comma separated")
+			return
+		}
+		filters.TMDBIDs = ids
+	}
 	if v := q.Get("cursor"); v != "" {
 		c, err := ParseCursor(v)
 		if err != nil {
@@ -250,4 +260,24 @@ func (a *API) List(w http.ResponseWriter, r *http.Request) {
 
 	response.WriteSuccess(w, http.StatusOK, "v1",
 		middleware.StatsFromContext(r.Context()), entries)
+}
+
+// MaxListTMDBIDs caps the tmdb_ids filter on the list. A collection band
+// asks for a few films, a franchise for a few dozen titles.
+const MaxListTMDBIDs = 100
+
+func parseTMDBIDs(v string) ([]int, bool) {
+	parts := strings.Split(v, ",")
+	if len(parts) > MaxListTMDBIDs {
+		return nil, false
+	}
+	ids := make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n <= 0 {
+			return nil, false
+		}
+		ids[i] = n
+	}
+	return ids, true
 }

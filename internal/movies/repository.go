@@ -276,7 +276,7 @@ func (r *Repository) GetCollectionByCollectionID(
 		select *
 		from movie_collections
 		where collection_id = $1
-		order by position asc nulls last
+		order by release_date asc nulls last, position asc nulls last
 	`, collectionID)
 
 	if err == sql.ErrNoRows {
@@ -635,7 +635,8 @@ func (r *Repository) InsertMovieCollectionBatch(
 			name,
 			poster_path,
 			vote_average,
-			position
+			position,
+			release_date
 		)
 		values (
 			:collection_id,
@@ -643,7 +644,8 @@ func (r *Repository) InsertMovieCollectionBatch(
 			:name,
 			:poster_path,
 			:vote_average,
-			:position
+			:position,
+			:release_date
 		)
 		on conflict do nothing
 	`, entries)
@@ -680,8 +682,8 @@ func (r *Repository) ReplaceCollection(ctx context.Context, collectionID int, pa
 	}
 	if len(parts) > 0 {
 		if _, err := tx.NamedExecContext(ctx, `
-			insert into movie_collections (collection_id, movie_id, name, poster_path, vote_average, position)
-			values (:collection_id, :movie_id, :name, :poster_path, :vote_average, :position)
+			insert into movie_collections (collection_id, movie_id, name, poster_path, vote_average, position, release_date)
+			values (:collection_id, :movie_id, :name, :poster_path, :vote_average, :position, :release_date)
 			on conflict do nothing
 		`, parts); err != nil {
 			return fmt.Errorf("write collection %d: %w", collectionID, err)

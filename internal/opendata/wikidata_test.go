@@ -60,6 +60,8 @@ func TestWikidataFacts(t *testing.T) {
 		row("tmdb", "550", "item", entity+"Q190050", "p", "P840", "v", "http://www.wikidata.org/.well-known/genid/abc"),
 		row("tmdb", "603", "item", entity+"Q83495", "p", "P161", "v", entity+"Q43416"),
 		row("tmdb", "603", "item", entity+"Q83495", "p", "P921", "v", entity+"Q11461"),
+		row("tmdb", "603", "item", entity+"Q83495", "p", "P179", "v", entity+"Q16153829"),
+		row("tmdb", "603", "item", entity+"Q83495", "p", "P8345", "v", entity+"Q107039178"),
 	}
 	srv, queries := fakeService(t, items, statements)
 	w := NewWikidata(srv.URL, "test-agent/1.0")
@@ -72,10 +74,11 @@ func TestWikidataFacts(t *testing.T) {
 	want := []Facts{
 		{MediaType: "movie", TMDBID: 550, WikidataID: 190050, WikipediaURL: &article,
 			Genres: []int{130232, 2484376}, Cast: []int{}, Directors: []int{200566}, Subjects: []int{},
-			Locations: []int{}, BasedOn: []int{}, Countries: []int{}, Series: []int{}},
+			Locations: []int{}, BasedOn: []int{}, Countries: []int{}, Series: []int{}, Franchises: []int{}},
 		{MediaType: "movie", TMDBID: 603, WikidataID: 83495,
 			Genres: []int{}, Cast: []int{43416}, Directors: []int{}, Subjects: []int{11461},
-			Locations: []int{}, BasedOn: []int{}, Countries: []int{}, Series: []int{}},
+			Locations: []int{}, BasedOn: []int{}, Countries: []int{}, Series: []int{16153829},
+			Franchises: []int{107039178}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("facts =\n%+v\nwant\n%+v", got, want)

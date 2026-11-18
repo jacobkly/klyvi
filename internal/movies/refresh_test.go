@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/rand"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -328,5 +329,41 @@ func TestRefreshCollection(t *testing.T) {
 					len(repo.replacedCollection), len(repo.deletedCollections), tt.wantParts, tt.wantDelete)
 			}
 		})
+	}
+}
+
+// A collection reads in release order, whatever order TMDB listed the parts
+// in. A part with no date goes last.
+func TestCollections_ReadInReleaseOrder(t *testing.T) {
+	repo, dbConn := openTestRepo(t)
+	ctx := context.Background()
+	id := 2_000_000_000 + rand.Intn(100_000_000)
+	cleanupTestCollections(t, dbConn, id)
+
+	date := func(s string) *time.Time {
+		d, _ := time.Parse("2006-01-02", s)
+		return &d
+	}
+	parts := testCollection(id, 3, 1, 2)
+	parts[0].ReleaseDate = nil
+	parts[1].ReleaseDate = date("2012-07-17")
+	parts[2].ReleaseDate = date("2005-06-10")
+	if err := repo.ReplaceCollection(ctx, id, parts); err != nil {
+		t.Fatalf("ReplaceCollection: %v", err)
+	}
+
+	got, err := repo.GetCollectionByCollectionID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetCollectionByCollectionID: %v", err)
+	}
+	var order []int
+	for _, p := range got {
+		order = append(order, p.MovieID)
+	}
+	if want := []int{2, 1, 3}; !slices.Equal(order, want) {
+		t.Errorf("order = %v, want release order %v", order, want)
+	}
+	if got[0].ReleaseDate == nil || got[0].ReleaseDate.Year() != 2005 {
+		t.Errorf("first part date = %v, want 2005", got[0].ReleaseDate)
 	}
 }

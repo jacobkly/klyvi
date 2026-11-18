@@ -9,6 +9,7 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"klyvi-api/internal/family"
 	"klyvi-api/internal/health"
 	"klyvi-api/internal/imports"
 	"klyvi-api/internal/interactions"
@@ -41,6 +42,8 @@ type Services struct {
 	// SimilarMovies and SimilarTV serve the "more like this" shelves.
 	SimilarMovies *similar.Service
 	SimilarTV     *similar.Service
+	// Family links titles that share a Wikidata series or franchise.
+	Family *family.Repository
 
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
@@ -120,6 +123,7 @@ func New(services Services) *chi.Mux {
 			r.Get("/{id}", movieAPI.GetMovieById)
 			r.Get("/{id}/collection", movieAPI.GetMovieCollection)
 			r.Get("/{id}/similar", similar.NewAPI(services.SimilarMovies).Get)
+			r.Get("/{id}/family", family.NewAPI(services.Family, "movie").Get)
 			r.Get("/", movieAPI.GetMovieList)
 		})
 
@@ -129,6 +133,7 @@ func New(services Services) *chi.Mux {
 			r.Get("/{id}", tvAPI.GetTvById)
 			r.Get("/{id}/collection", tvAPI.GetTvCollection)
 			r.Get("/{id}/similar", similar.NewAPI(services.SimilarTV).Get)
+			r.Get("/{id}/family", family.NewAPI(services.Family, "tv").Get)
 			r.Get("/", tvAPI.GetTvList)
 		})
 
