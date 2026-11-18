@@ -147,10 +147,10 @@ func (r *Repository) DeleteAccountData(ctx context.Context, id uuid.UUID) error 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// media_list, interactions, taste_profiles reference users(id) ON DELETE
-	// CASCADE, so deleting the users row would suffice — but deleting them
-	// explicitly first keeps this correct even if a future table drops the
-	// cascade, and reads clearly.
+	// Every table that references users(id) does so ON DELETE CASCADE (since
+	// migration 00038 for media_list, and a schema test in platform/db keeps
+	// it so), so deleting the users row would suffice. Deleting the big three
+	// explicitly first reads clearly and does not lean on that alone.
 	stmts := []string{
 		`delete from media_list where user_id = $1`,
 		`delete from interactions where user_id = $1`,

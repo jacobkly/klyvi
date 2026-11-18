@@ -82,16 +82,17 @@ func New(services Services) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(chimiddleware.RequestID)
+	r.Use(middleware.Nosniff)
 	// Recover panics into a 500 before anything else runs, so a handler bug
 	// never drops the connection. Sits after RequestID so the log carries the id.
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   parseOrigins(services.AllowedOrigins),
-		AllowedMethods:   []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Request-Id"},
-		ExposedHeaders:   []string{"X-Request-Id"},
-		AllowCredentials: true,
-		MaxAge:           300,
+		AllowedOrigins: parseOrigins(services.AllowedOrigins),
+		AllowedMethods: []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-Request-Id"},
+		ExposedHeaders: []string{"X-Request-Id"},
+		// No AllowCredentials: the client sends a Bearer token, never cookies.
+		MaxAge: 300,
 	}))
 	r.Use(middleware.LoggerMiddleware)
 	r.Use(middleware.StatsMiddleware)

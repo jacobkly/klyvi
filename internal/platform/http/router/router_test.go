@@ -214,3 +214,30 @@ func TestReadinessIsMountedAndUnthrottled(t *testing.T) {
 		}
 	}
 }
+
+// Every API response tells the browser not to guess its type, and CORS does
+// not offer credentials, since the client sends a Bearer token, not cookies.
+func TestResponsesAreNosniffAndCORSHasNoCredentials(t *testing.T) {
+	r := router.New(router.Services{
+		Users:      users.NewService(nil),
+		Onboarding: onboarding.NewService(emptyPool{}, nil),
+		AuthMW:     func(next http.Handler) http.Handler { return next },
+	})
+
+	for _, path := range []string{"/health", "/v1/onboarding/pool", "/v1/no-such-route"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Origin", "http://localhost:3000")
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("%s: X-Content-Type-Options = %q, want nosniff", path, got)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3000" {
+			t.Errorf("%s: Access-Control-Allow-Origin = %q, want the origin", path, got)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+			t.Errorf("%s: Access-Control-Allow-Credentials = %q, want none", path, got)
+		}
+	}
+}

@@ -99,7 +99,6 @@ type ConfServer struct {
 	TimeoutRead  time.Duration `env:"SERVER_TIMEOUT_READ,required"`
 	TimeoutWrite time.Duration `env:"SERVER_TIMEOUT_WRITE,required"`
 	TimeoutIdle  time.Duration `env:"SERVER_TIMEOUT_IDLE,required"`
-	Debug        bool          `env:"SERVER_DEBUG,required"`
 
 	// AllowedOrigins is a comma-separated list of CORS origins (e.g.
 	// "http://localhost:3000,https://klyvi.app"). Optional — defaults
@@ -120,7 +119,6 @@ type ConfDB struct {
 	Password string `env:"DB_PASS,required"`
 	DBName   string `env:"DB_NAME,required"`
 	SSLMode  string `env:"DB_SSLMODE,required"`
-	Debug    bool   `env:"DB_DEBUG,required"`
 }
 
 type ConfTMDB struct {

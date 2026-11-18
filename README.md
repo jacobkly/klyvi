@@ -97,7 +97,6 @@ SERVER_PORT=8080
 SERVER_TIMEOUT_READ=3s
 SERVER_TIMEOUT_WRITE=5s
 SERVER_TIMEOUT_IDLE=5s
-SERVER_DEBUG=true
 
 # Optional. Comma-separated CORS origins for the frontend.
 # Defaults to common localhost dev ports when unset.
@@ -113,7 +112,6 @@ DB_USER=...
 DB_PASS=...
 DB_NAME=postgres
 DB_SSLMODE=require
-DB_DEBUG=true
 
 TMDB_API_KEY=...
 TMDB_BASE_URL=https://api.themoviedb.org/3
@@ -249,7 +247,6 @@ DB_USER=postgres
 DB_PASS=postgres
 DB_NAME=postgres
 DB_SSLMODE=disable
-DB_DEBUG=true
 ```
 
 Then rehearse every new migration here (up, down, up) before running it
@@ -263,8 +260,9 @@ go run ./cmd/migrate -env .env.local up
 npx supabase stop                              # or `stop --no-backup` to wipe it
 ```
 
-`cmd/migrate` defaults to `.env.dev` (the hosted project). Variables already
-set in the environment win over the file.
+`cmd/migrate` defaults to `.env.local`, so `-env .env.local` above only spells it
+out. Reaching the hosted project takes `-env .env.dev`. Variables already set in
+the environment win over the file.
 
 Health check:
 
