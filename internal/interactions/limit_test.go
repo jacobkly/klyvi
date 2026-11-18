@@ -21,6 +21,10 @@ func (r *countingRepo) ListByUser(context.Context, uuid.UUID, int) ([]Interactio
 	return nil, nil
 }
 
+func (r *countingRepo) List(context.Context, uuid.UUID, ListQuery) ([]Interaction, error) {
+	return nil, nil
+}
+
 func (r *countingRepo) CountByUser(context.Context, uuid.UUID) (int, error) { return r.rows, nil }
 
 type fixedMedia struct{}

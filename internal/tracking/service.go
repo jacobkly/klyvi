@@ -3,6 +3,9 @@ package tracking
 import (
 	"context"
 	"log"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -197,7 +200,42 @@ func (s *Service) Lookup(ctx context.Context, userID uuid.UUID, req LookupReques
 	return s.repo.GetEntryByTMDB(ctx, userID, req.TMDBID, req.MediaType, req.SeasonNumber)
 }
 
+// MaxListPage is the most rows one page of the list returns. A larger limit
+// is cut to it.
+const MaxListPage = 200
+
+// Cursor is the row a page continues after: the last row of the previous
+// page, by its updated_at and id.
+type Cursor struct {
+	UpdatedAt time.Time
+	ID        int
+}
+
+// ParseCursor reads the "<updated_at>,<id>" form a client builds from the
+// last row it holds. updated_at is RFC 3339 as the list returns it.
+func ParseCursor(raw string) (*Cursor, error) {
+	at, id, ok := strings.Cut(raw, ",")
+	if !ok {
+		return nil, invalid("invalid cursor")
+	}
+	t, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return nil, invalid("invalid cursor")
+	}
+	n, err := strconv.Atoi(id)
+	if err != nil {
+		return nil, invalid("invalid cursor")
+	}
+	return &Cursor{UpdatedAt: t, ID: n}, nil
+}
+
 func (s *Service) List(ctx context.Context, userID uuid.UUID, filters ListFilters) ([]Entry, error) {
+	if filters.Limit < 0 {
+		return nil, invalid("limit must be at least 1")
+	}
+	if filters.Limit > MaxListPage {
+		filters.Limit = MaxListPage
+	}
 	if filters.MediaType != nil {
 		if err := validateMediaType(*filters.MediaType); err != nil {
 			return nil, err

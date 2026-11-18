@@ -24,6 +24,10 @@ func (m *memInteractions) ListByUser(context.Context, uuid.UUID, int) ([]interac
 	return nil, nil
 }
 
+func (m *memInteractions) List(context.Context, uuid.UUID, interactions.ListQuery) ([]interactions.Interaction, error) {
+	return nil, nil
+}
+
 func (m *memInteractions) CountByUser(context.Context, uuid.UUID) (int, error) { return 0, nil }
 
 type tmdbIDAsMediaID struct{}

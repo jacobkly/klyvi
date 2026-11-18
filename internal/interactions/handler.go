@@ -68,10 +68,11 @@ func (a *API) RecordBatch(w http.ResponseWriter, r *http.Request) {
 		middleware.StatsFromContext(r.Context()), res)
 }
 
-// List — GET /v1/interactions?since_days=30
+// List — GET /v1/interactions?since_days=30&kind=rated&limit=100
 //
-// Returns the authenticated user's interaction history, most recent first.
-// An optional `since_days` query param bounds the window (omit for all-time).
+// Returns the authenticated user's interaction history, most recent first,
+// capped at DefaultListCap rows unless `limit` asks for more (up to
+// MaxListCap). `since_days` bounds the window and `kind` keeps one kind.
 func (a *API) List(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.UserUUIDFromContext(r.Context())
 	if !ok {
@@ -88,8 +89,17 @@ func (a *API) List(w http.ResponseWriter, r *http.Request) {
 		}
 		sinceDays = parsed
 	}
+	q := ListQuery{SinceDays: sinceDays, Kind: r.URL.Query().Get("kind")}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			response.WriteError(w, http.StatusBadRequest, "limit must be at least 1")
+			return
+		}
+		q.Limit = n
+	}
 
-	rows, err := a.service.ListByUser(r.Context(), userID, sinceDays)
+	rows, err := a.service.List(r.Context(), userID, q)
 	if err != nil {
 		respondError(w, err)
 		return

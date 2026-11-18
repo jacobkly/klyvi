@@ -67,6 +67,21 @@ func (r *Repository) ListByUser(ctx context.Context, userID uuid.UUID, sinceDays
 	return rows, err
 }
 
+// List returns one capped slice of a user's history, newest first, narrowed
+// by ListQuery. The service fills in the limit.
+func (r *Repository) List(ctx context.Context, userID uuid.UUID, q ListQuery) ([]Interaction, error) {
+	var rows []Interaction
+	err := r.db.SelectContext(ctx, &rows, `
+		select * from interactions
+		where user_id = $1
+		  and ($2 = 0 or created_at >= now() - make_interval(days => $2))
+		  and ($3 = '' or kind = $3)
+		order by created_at desc, id desc
+		limit $4
+	`, userID, q.SinceDays, q.Kind, q.Limit)
+	return rows, err
+}
+
 // CountByUser reports the number of interactions a user has — the cheap
 // gate the orchestrator uses to choose between Tier 0 and Tier 1+.
 func (r *Repository) CountByUser(ctx context.Context, userID uuid.UUID) (int, error) {

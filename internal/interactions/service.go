@@ -12,6 +12,7 @@ import (
 type InteractionRepository interface {
 	Record(ctx context.Context, e *Interaction) error
 	ListByUser(ctx context.Context, userID uuid.UUID, sinceDays int) ([]Interaction, error)
+	List(ctx context.Context, userID uuid.UUID, q ListQuery) ([]Interaction, error)
 	CountByUser(ctx context.Context, userID uuid.UUID) (int, error)
 }
 
@@ -205,6 +206,41 @@ func (s *Service) RecordBatch(ctx context.Context, userID uuid.UUID, reqs []Reco
 
 func (s *Service) ListByUser(ctx context.Context, userID uuid.UUID, sinceDays int) ([]Interaction, error) {
 	return s.repo.ListByUser(ctx, userID, sinceDays)
+}
+
+// DefaultListCap is how many rows the list endpoint returns when the caller
+// gives no limit. MaxListCap is the most it returns at all. Impressions pile
+// up by the screenful, so an uncapped history only grows.
+const (
+	DefaultListCap = 500
+	MaxListCap     = 1000
+)
+
+// ListQuery narrows the list endpoint. SinceDays 0 means all time, Kind ""
+// means every kind and Limit 0 means DefaultListCap.
+type ListQuery struct {
+	SinceDays int
+	Kind      string
+	Limit     int
+}
+
+// List is the capped history the HTTP endpoint serves, newest first. The
+// export and the recommender read the whole history through ListByUser.
+func (s *Service) List(ctx context.Context, userID uuid.UUID, q ListQuery) ([]Interaction, error) {
+	if q.Kind != "" {
+		if err := validateKind(q.Kind); err != nil {
+			return nil, err
+		}
+	}
+	switch {
+	case q.Limit < 0:
+		return nil, invalid("limit must be at least 1")
+	case q.Limit == 0:
+		q.Limit = DefaultListCap
+	case q.Limit > MaxListCap:
+		q.Limit = MaxListCap
+	}
+	return s.repo.List(ctx, userID, q)
 }
 
 func (s *Service) CountByUser(ctx context.Context, userID uuid.UUID) (int, error) {

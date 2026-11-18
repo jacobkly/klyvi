@@ -203,7 +203,8 @@ func (a *API) Lookup(w http.ResponseWriter, r *http.Request) {
 		middleware.StatsFromContext(r.Context()), entry)
 }
 
-// List — GET /v1/tracking?media_type=movie&status=completed
+// List — GET /v1/tracking?media_type=movie&status=completed&limit=100&cursor=...
+// With no limit it returns the whole list.
 func (a *API) List(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.UserUUIDFromContext(r.Context())
 	if !ok {
@@ -218,6 +219,22 @@ func (a *API) List(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := q.Get("status"); v != "" {
 		filters.Status = &v
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			response.WriteError(w, http.StatusBadRequest, "limit must be at least 1")
+			return
+		}
+		filters.Limit = n
+	}
+	if v := q.Get("cursor"); v != "" {
+		c, err := ParseCursor(v)
+		if err != nil {
+			respondError(w, err)
+			return
+		}
+		filters.After = c
 	}
 
 	entries, err := a.service.List(r.Context(), userID, filters)

@@ -66,9 +66,13 @@ type AddParams struct {
 }
 
 // ListFilters narrows the result set for the user-facing list endpoint.
+// Limit 0 means the whole list. After, when set, starts the page just past
+// that row in the list's order.
 type ListFilters struct {
 	MediaType *string
 	Status    *string
+	Limit     int
+	After     *Cursor
 }
 
 // entrySelectClause is the column list every read returns — media_list
@@ -284,7 +288,8 @@ func (r *Repository) DeleteByMediaType(ctx context.Context, userID uuid.UUID, me
 }
 
 // ListByUser returns the tracking entries for a user, filterable by media_type
-// and status. Most recently touched first. The JOIN populates display
+// and status. Most recently touched first, paged by keyset when the filters
+// carry a limit or a cursor. The JOIN populates display
 // fields so the frontend can render directly off this without per-row
 // follow-up lookups.
 func (r *Repository) ListByUser(ctx context.Context, userID uuid.UUID, filters ListFilters) ([]Entry, error) {
@@ -305,7 +310,22 @@ func (r *Repository) ListByUser(ctx context.Context, userID uuid.UUID, filters L
 		sb.WriteString(" and ml.status = $")
 		sb.WriteString(strconv.Itoa(len(args)))
 	}
-	sb.WriteString(" order by ml.updated_at desc")
+	if filters.After != nil {
+		args = append(args, filters.After.UpdatedAt, filters.After.ID)
+		sb.WriteString(" and (ml.updated_at, ml.id) < ($")
+		sb.WriteString(strconv.Itoa(len(args) - 1))
+		sb.WriteString(", $")
+		sb.WriteString(strconv.Itoa(len(args)))
+		sb.WriteString(")")
+	}
+	// id breaks ties so a page boundary between rows with the same
+	// updated_at neither skips nor repeats one.
+	sb.WriteString(" order by ml.updated_at desc, ml.id desc")
+	if filters.Limit > 0 {
+		args = append(args, filters.Limit)
+		sb.WriteString(" limit $")
+		sb.WriteString(strconv.Itoa(len(args)))
+	}
 
 	var entries []Entry
 	if err := r.db.SelectContext(ctx, &entries, sb.String(), args...); err != nil {
