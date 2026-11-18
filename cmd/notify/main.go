@@ -7,6 +7,13 @@
 //
 // TMDB calls are bounded by what people track, so a run stays in the hundreds.
 // Running it twice creates nothing new.
+//
+// With -policy it does something else: it posts one notice about a change to
+// the terms or privacy policy to every account, linking to the page, and runs
+// nothing nightly. Post it before the change takes effect, as the terms
+// promise. The same text posted twice reaches nobody twice.
+//
+//	go run ./cmd/notify -policy "Our terms change on 1 March. Here's what's new." -link /terms
 package main
 
 import (
@@ -15,6 +22,8 @@ import (
 	"log"
 	"os"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 
 	"klyvi-api/config"
 	"klyvi-api/internal/movies"
@@ -29,6 +38,8 @@ var envFile = config.EnvFileFlag(flag.CommandLine)
 
 func main() {
 	timeout := flag.Duration("timeout", 30*time.Minute, "overall run timeout")
+	policy := flag.String("policy", "", "post this policy notice to every account instead of running the nightly job")
+	link := flag.String("link", "", "the site path a policy notice opens, such as /terms")
 	flag.Parse()
 
 	config.LoadEnvFile(*envFile)
@@ -37,6 +48,11 @@ func main() {
 	dbConn, err := db.New(cfg.DB)
 	if err != nil {
 		log.Fatalf("db: %v", err)
+	}
+
+	if *policy != "" || *link != "" {
+		postPolicy(dbConn, *policy, *link, *timeout)
+		return
 	}
 
 	client := tmdb.NewBackgroundClient(tmdb.NewClient(cfg.TMDB.APIKey))
@@ -57,4 +73,18 @@ func main() {
 		log.Printf("notify: %v", runErr)
 		os.Exit(1)
 	}
+}
+
+// postPolicy posts one policy notice to every account and exits non-zero if it
+// can't.
+func postPolicy(dbConn *sqlx.DB, text, link string, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	created, err := notifications.NewService(notifications.NewRepository(dbConn)).PostPolicy(ctx, text, link)
+	cancel()
+	_ = dbConn.Close()
+	if err != nil {
+		log.Printf("notify: %v", err)
+		os.Exit(1)
+	}
+	log.Printf("notify: posted the policy notice to %d accounts", created)
 }

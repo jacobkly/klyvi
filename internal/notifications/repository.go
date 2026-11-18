@@ -25,7 +25,7 @@ func NewRepository(db *sqlx.DB) *Repository {
 const selectNotices = `
 	select n.id, n.kind, n.media_type, n.tmdb_id, n.season_number, n.title,
 		coalesce(se.poster_path, s.poster_path, m.poster_path) as poster_path,
-		n.event_date::text as event_date, n.created_at, n.read_at
+		n.event_date::text as event_date, n.link, n.created_at, n.read_at
 	from notifications n
 	left join movies m on n.media_type = 'movie' and m.movie_id = n.tmdb_id
 	left join tv_series s on n.media_type = 'tv' and s.tv_id = n.tmdb_id
@@ -232,4 +232,23 @@ func (r *Repository) Insert(ctx context.Context, n NewNotice) (bool, error) {
 		return false, fmt.Errorf("count created notifications: %w", err)
 	}
 	return created > 0, nil
+}
+
+// InsertPolicy gives every account one policy notice dated today and says how
+// many it created. An account that already has a notice with this text gets
+// nothing, so running it twice tells nobody twice.
+func (r *Repository) InsertPolicy(ctx context.Context, text, link string) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `
+		insert into notifications (user_id, kind, title, link, event_date)
+		select id, 'policy', $1::text, $2::text, current_date from users
+		on conflict do nothing
+	`, text, link)
+	if err != nil {
+		return 0, fmt.Errorf("insert policy notices: %w", err)
+	}
+	created, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count created policy notices: %w", err)
+	}
+	return created, nil
 }

@@ -37,6 +37,7 @@ func (f *fakeExportSource) ListByUser(context.Context, uuid.UUID, int) ([]intera
 
 func exportFixture() *fakeExportSource {
 	title := "Fight Club"
+	movieType := "movie"
 	status := "completed"
 	score := 95
 	return &fakeExportSource{
@@ -47,7 +48,7 @@ func exportFixture() *fakeExportSource {
 			{MediaID: 1, MediaType: "movie", Kind: "rated", Rating: &score},
 		},
 		notices: []notifications.Notification{
-			{ID: 1, Kind: notifications.KindFilmRelease, MediaType: "movie", Title: title},
+			{ID: 1, Kind: notifications.KindFilmRelease, MediaType: &movieType, Title: title},
 		},
 	}
 }
