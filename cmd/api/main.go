@@ -27,6 +27,7 @@ import (
 	"klyvi-api/internal/platform/supabase"
 	"klyvi-api/internal/platform/tmdb"
 	"klyvi-api/internal/plots"
+	"klyvi-api/internal/providers"
 	"klyvi-api/internal/rankings"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/search"
@@ -262,6 +263,7 @@ func main() {
 		SimilarMovies:  similarMovies,
 		SimilarTV:      similarTV,
 		Family:         family.NewRepository(dbConn),
+		Providers:      providers.NewService(cachedTMDB, providers.NewRepository(dbConn)),
 		AuthMW:         authMW,
 		DB:             dbConn,
 		AllowedOrigins: cfg.Server.AllowedOrigins,

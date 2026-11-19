@@ -15,6 +15,7 @@ import (
 
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/platform/tmdb"
+	"klyvi-api/internal/providers"
 	"klyvi-api/internal/tv"
 )
 
@@ -200,6 +201,17 @@ func refreshCatalog(ctx context.Context, dbConn *sqlx.DB, client *tmdb.Client, m
 		time.Since(start).Truncate(time.Second), res.refreshed, res.removed, res.failed, res.left)
 	if res.outOfTime {
 		log.Printf("the time budget ran out; the next run starts with the %d still stale", res.left)
+	}
+
+	// Where-to-watch copies refetch on view after a week. One nobody viewed
+	// goes once it reaches the catalog age, inside TMDB's cache limit.
+	pruneCtx, cancelPrune := context.WithTimeout(context.Background(), time.Minute)
+	pruned, pruneErr := providers.NewRepository(dbConn).DeleteOlderThan(pruneCtx, r.cutoff)
+	cancelPrune()
+	if pruneErr != nil {
+		err = errors.Join(err, pruneErr)
+	} else {
+		log.Printf("watch providers: %d copies past the catalog age removed", pruned)
 	}
 
 	if res.refreshed+res.removed > 0 {

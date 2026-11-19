@@ -17,6 +17,7 @@ import (
 	"klyvi-api/internal/notifications"
 	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/platform/http/middleware"
+	"klyvi-api/internal/providers"
 	"klyvi-api/internal/rankings"
 	"klyvi-api/internal/reco"
 	"klyvi-api/internal/search"
@@ -44,6 +45,8 @@ type Services struct {
 	SimilarTV     *similar.Service
 	// Family links titles that share a Wikidata series or franchise.
 	Family *family.Repository
+	// Providers says where a title streams, rents or sells, per country.
+	Providers *providers.Service
 
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
@@ -124,6 +127,7 @@ func New(services Services) *chi.Mux {
 			r.Get("/{id}/collection", movieAPI.GetMovieCollection)
 			r.Get("/{id}/similar", similar.NewAPI(services.SimilarMovies).Get)
 			r.Get("/{id}/family", family.NewAPI(services.Family, "movie").Get)
+			r.Get("/{id}/providers", providers.NewAPI(services.Providers, "movie").Get)
 			r.Get("/", movieAPI.GetMovieList)
 		})
 
@@ -134,6 +138,7 @@ func New(services Services) *chi.Mux {
 			r.Get("/{id}/collection", tvAPI.GetTvCollection)
 			r.Get("/{id}/similar", similar.NewAPI(services.SimilarTV).Get)
 			r.Get("/{id}/family", family.NewAPI(services.Family, "tv").Get)
+			r.Get("/{id}/providers", providers.NewAPI(services.Providers, "tv").Get)
 			r.Get("/", tvAPI.GetTvList)
 		})
 
