@@ -14,6 +14,7 @@ import (
 
 	"klyvi-api/config"
 	"klyvi-api/internal/coliked"
+	"klyvi-api/internal/errlog"
 	"klyvi-api/internal/family"
 	"klyvi-api/internal/imports"
 	"klyvi-api/internal/interactions"
@@ -57,6 +58,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// Errors (5xx, panics, background panics, web reports) go to
+	// error_events, grouped. Set up first so every job below can report.
+	errorRecorder := errlog.NewRecorder(errlog.NewStore(dbConn))
+	errlog.SetDefault(errorRecorder)
 
 	tmdbClient := tmdb.NewClient(cfg.TMDB.APIKey)
 	// Cache catalog reads in-process; a cold key under load collapses to one
@@ -239,7 +245,7 @@ func main() {
 		cachedTMDB, loadFeatureIDF(movieRepo, "tv"), similarCfg).
 		WithPlots(plotVecs, cfg.Reco.SimilarPlotWeight)
 
-	authMW, err := middleware.NewAuthMiddleware(middleware.AuthConfig{
+	auth, err := middleware.NewAuthenticator(middleware.AuthConfig{
 		JWKSURL:  cfg.Supabase.JWKSURL,
 		Issuer:   cfg.Supabase.Issuer,
 		Audience: cfg.Supabase.Audience,
@@ -264,7 +270,9 @@ func main() {
 		SimilarTV:      similarTV,
 		Family:         family.NewRepository(dbConn),
 		Providers:      providers.NewService(cachedTMDB, providers.NewRepository(dbConn)),
-		AuthMW:         authMW,
+		AuthMW:         auth.Required,
+		OptionalAuthMW: auth.Optional,
+		Errors:         errorRecorder,
 		DB:             dbConn,
 		AllowedOrigins: cfg.Server.AllowedOrigins,
 		RateLimitRPM:   cfg.Server.RateLimitRPM,
@@ -310,6 +318,10 @@ func main() {
 	// the pool closes.
 	searchService.Wait()
 	recoOrchestrator.Wait()
+	// Last, so a panic in the drain above is still stored.
+	if err := errorRecorder.Close(shutdownCtx); err != nil {
+		log.Printf("error log flush: %v", err)
+	}
 	log.Println("server stopped")
 }
 

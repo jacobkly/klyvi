@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"klyvi-api/internal/errlog"
 	"klyvi-api/internal/movies"
 )
 
@@ -143,7 +144,9 @@ func (s *Service) warmMovieCache(hits []*movies.Movie) {
 		defer func() { <-s.warming }()
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("search cache warm panicked: %v\n%s", r, debug.Stack())
+				stack := debug.Stack()
+				log.Printf("search cache warm panicked: %v\n%s", r, stack)
+				errlog.Recovered("search cache warm", r, stack)
 			}
 		}()
 

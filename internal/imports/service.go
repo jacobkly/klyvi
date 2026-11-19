@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"klyvi-api/internal/errlog"
 	"klyvi-api/internal/interactions"
 	"klyvi-api/internal/platform/tmdb"
 	"klyvi-api/internal/tracking"
@@ -131,7 +132,9 @@ func (s *Service) run(ctx context.Context, id, userID uuid.UUID, rows []Row) {
 	// the whole API: an unrecovered panic in a goroutine ends the process.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("import %s: worker panicked: %v\n%s", id, r, debug.Stack())
+			stack := debug.Stack()
+			log.Printf("import %s: worker panicked: %v\n%s", id, r, stack)
+			errlog.Recovered("import worker", r, stack)
 			msg := "the import stopped on an unexpected error"
 			if err := s.repo.SetStatus(ctx, id, StatusFailed, &msg); err != nil {
 				log.Printf("import %s: could not mark failed: %v", id, err)

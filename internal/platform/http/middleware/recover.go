@@ -7,6 +7,7 @@ import (
 
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 
+	"klyvi-api/internal/errlog"
 	"klyvi-api/internal/platform/http/response"
 )
 
@@ -24,8 +25,10 @@ func Recoverer(next http.Handler) http.Handler {
 			if rec == http.ErrAbortHandler {
 				panic(rec)
 			}
+			stack := debug.Stack()
 			log.Printf("panic recovered [%s]: %v\n%s",
-				chimiddleware.GetReqID(r.Context()), rec, debug.Stack())
+				chimiddleware.GetReqID(r.Context()), rec, stack)
+			errlog.RecordPanic(r, rec, stack)
 			response.WriteError(w, http.StatusInternalServerError, "internal server error")
 		}()
 		next.ServeHTTP(w, r)

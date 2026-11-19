@@ -22,14 +22,30 @@ type AuthConfig struct {
 	Audience string
 }
 
-// NewAuthMiddleware builds a middleware that verifies Supabase-style JWTs
-// against the project's JWKS. The JWKS is loaded once at startup; the keyfunc
-// library handles refresh on its own schedule.
+// Authenticator verifies Supabase-style JWTs against the project's JWKS. The
+// JWKS is loaded once at startup; the keyfunc library handles refresh on its
+// own schedule.
 //
 // Tokens must use an asymmetric signing algorithm (RS256/ES256); HS256 is
 // explicitly rejected to prevent the classic "alg: none" / shared-secret
 // confusion class of attack.
+type Authenticator struct {
+	jwks   keyfunc.Keyfunc
+	parser *jwt.Parser
+}
+
+// NewAuthMiddleware builds the required-auth middleware: a request without a
+// valid token gets a 401.
 func NewAuthMiddleware(cfg AuthConfig) (func(http.Handler) http.Handler, error) {
+	a, err := NewAuthenticator(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return a.Required, nil
+}
+
+// NewAuthenticator loads the JWKS and builds the token parser.
+func NewAuthenticator(cfg AuthConfig) (*Authenticator, error) {
 	if cfg.JWKSURL == "" {
 		return nil, errors.New("JWKSURL is required")
 	}
@@ -50,37 +66,61 @@ func NewAuthMiddleware(cfg AuthConfig) (func(http.Handler) http.Handler, error) 
 	if cfg.Audience != "" {
 		parserOpts = append(parserOpts, jwt.WithAudience(cfg.Audience))
 	}
-	parser := jwt.NewParser(parserOpts...)
+	return &Authenticator{jwks: jwks, parser: jwt.NewParser(parserOpts...)}, nil
+}
 
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			tok := extractBearer(r)
-			if tok == "" {
-				response.WriteError(w, http.StatusUnauthorized, "missing or malformed authorization header")
-				return
-			}
+var (
+	errNoToken      = errors.New("missing or malformed authorization header")
+	errInvalidToken = errors.New("invalid token")
+	errClaims       = errors.New("invalid claims")
+	errSubject      = errors.New("invalid subject claim")
+)
 
-			parsed, err := parser.Parse(tok, jwks.Keyfunc)
-			if err != nil || !parsed.Valid {
-				response.WriteError(w, http.StatusUnauthorized, "invalid token")
-				return
-			}
+// userFrom verifies the request's bearer token and returns its subject.
+func (a *Authenticator) userFrom(r *http.Request) (uuid.UUID, error) {
+	tok := extractBearer(r)
+	if tok == "" {
+		return uuid.Nil, errNoToken
+	}
+	parsed, err := a.parser.Parse(tok, a.jwks.Keyfunc)
+	if err != nil || !parsed.Valid {
+		return uuid.Nil, errInvalidToken
+	}
+	claims, ok := parsed.Claims.(jwt.MapClaims)
+	if !ok {
+		return uuid.Nil, errClaims
+	}
+	sub, _ := claims["sub"].(string)
+	id, err := uuid.Parse(sub)
+	if err != nil {
+		return uuid.Nil, errSubject
+	}
+	return id, nil
+}
 
-			claims, ok := parsed.Claims.(jwt.MapClaims)
-			if !ok {
-				response.WriteError(w, http.StatusUnauthorized, "invalid claims")
-				return
-			}
-			sub, _ := claims["sub"].(string)
-			id, err := uuid.Parse(sub)
-			if err != nil {
-				response.WriteError(w, http.StatusUnauthorized, "invalid subject claim")
-				return
-			}
+// Required lets a request through only with a valid token, and puts its
+// user in the context.
+func (a *Authenticator) Required(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, err := a.userFrom(r)
+		if err != nil {
+			response.WriteError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(WithUserUUID(r.Context(), id)))
+	})
+}
 
-			next.ServeHTTP(w, r.WithContext(WithUserUUID(r.Context(), id)))
-		})
-	}, nil
+// Optional lets every request through, and puts the user in the context
+// when the token is valid. For public routes that use the user if there
+// is one.
+func (a *Authenticator) Optional(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id, err := a.userFrom(r); err == nil {
+			r = r.WithContext(WithUserUUID(r.Context(), id))
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func extractBearer(r *http.Request) string {

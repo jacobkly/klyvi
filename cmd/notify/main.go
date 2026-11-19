@@ -6,7 +6,8 @@
 //	go run ./cmd/notify -timeout 15m
 //
 // TMDB calls are bounded by what people track, so a run stays in the hundreds.
-// Running it twice creates nothing new.
+// Running it twice creates nothing new. It also deletes error groups
+// (error_events) not seen in 30 days, the retention the privacy page states.
 //
 // With -policy it does something else: it posts one notice about a change to
 // the terms or privacy policy to every account, linking to the page, and runs
@@ -26,6 +27,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"klyvi-api/config"
+	"klyvi-api/internal/errlog"
 	"klyvi-api/internal/movies"
 	"klyvi-api/internal/notifications"
 	"klyvi-api/internal/platform/db"
@@ -65,6 +67,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	res, runErr := job.Run(ctx)
 	cancel()
+	pruneErrors(dbConn)
 	_ = dbConn.Close()
 
 	log.Printf("notify: checked %d series and %d films, created %d notices, deleted %d, %d fetches failed",
@@ -73,6 +76,19 @@ func main() {
 		log.Printf("notify: %v", runErr)
 		os.Exit(1)
 	}
+}
+
+// pruneErrors deletes error groups past retention. A failure is logged and
+// left for the next night, so housekeeping never fails the notices run.
+func pruneErrors(dbConn *sqlx.DB) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	n, err := errlog.NewStore(dbConn).Prune(ctx, errlog.Retention)
+	if err != nil {
+		log.Printf("notify: error log prune: %v", err)
+		return
+	}
+	log.Printf("notify: deleted %d error groups unseen for 30 days", n)
 }
 
 // postPolicy posts one policy notice to every account and exits non-zero if it

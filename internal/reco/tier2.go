@@ -7,6 +7,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"klyvi-api/internal/errlog"
 )
 
 const (
@@ -129,7 +131,9 @@ func (t *Tier2) saveProfile(p *TasteProfile) {
 		defer func() { <-t.saving }()
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("taste profile save for %s panicked: %v\n%s", p.UserID, r, debug.Stack())
+				stack := debug.Stack()
+				log.Printf("taste profile save for %s panicked: %v\n%s", p.UserID, r, stack)
+				errlog.Recovered("taste profile save", r, stack)
 			}
 		}()
 

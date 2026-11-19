@@ -9,6 +9,7 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"klyvi-api/internal/errlog"
 	"klyvi-api/internal/family"
 	"klyvi-api/internal/health"
 	"klyvi-api/internal/imports"
@@ -51,6 +52,13 @@ type Services struct {
 	// AuthMW verifies the Supabase JWT and puts the user UUID into context.
 	// Mounted on all protected route groups.
 	AuthMW func(http.Handler) http.Handler
+	// OptionalAuthMW does the same when a valid token is sent, and lets the
+	// request through without one. For public routes that use the user.
+	OptionalAuthMW func(http.Handler) http.Handler
+
+	// Errors stores error reports from the web client. Nil leaves
+	// POST /v1/errors off.
+	Errors *errlog.Recorder
 
 	// DB answers the readiness check at /health/ready. Nil leaves the route off.
 	DB health.Pinger
@@ -70,6 +78,8 @@ type Services struct {
 const (
 	jsonBodyCap  = 256 << 10 // 256 KiB — single JSON writes
 	batchBodyCap = 1 << 20   // 1 MiB — interactions batch
+	// errorReportCap fits a message and a stack the client trims to fit.
+	errorReportCap = 4 << 10
 )
 
 // Cache-Control windows for the public catalog. Catalog is stable, so a 1h
@@ -89,6 +99,9 @@ func New(services Services) *chi.Mux {
 
 	r.Use(chimiddleware.RequestID)
 	r.Use(middleware.Nosniff)
+	// Store every 5xx and panic, grouped. Outside the recoverer, so a
+	// panic's 500 passes through it.
+	r.Use(errlog.Middleware)
 	// Recover panics into a 500 before anything else runs, so a handler bug
 	// never drops the connection. Sits after RequestID so the log carries the id.
 	r.Use(middleware.Recoverer)
@@ -166,6 +179,22 @@ func New(services Services) *chi.Mux {
 			RequestsPerMinute: 20,
 			Burst:             10,
 		})).Get("/users/username-available", usersPublicAPI.CheckUsernameAvailable)
+
+		// The web client reports its own errors here, signed in or not. A
+		// signed-in report names its user. Tightly limited and small, since
+		// anyone can call it; the store caps distinct groups too.
+		if services.Errors != nil {
+			errorsAPI := errlog.NewAPI(services.Errors, middleware.UserUUIDFromContext)
+			optional := services.OptionalAuthMW
+			if optional == nil {
+				optional = func(next http.Handler) http.Handler { return next }
+			}
+			r.With(
+				middleware.RateLimit(middleware.RateLimitConfig{RequestsPerMinute: 10, Burst: 5}),
+				middleware.MaxBodyBytes(errorReportCap),
+				optional,
+			).Post("/errors", errorsAPI.Report)
+		}
 
 		// Top-100 rankings are public and cached server-side for 24h.
 		rankingsAPI := rankings.NewAPI(services.Rankings)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -165,6 +166,13 @@ func (r *Repository) DeleteAccountData(ctx context.Context, id uuid.UUID) error 
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit delete tx: %w", err)
+	}
+
+	// Error reports keep the error and drop who hit it. Outside the
+	// transaction and best-effort: the account is already gone, and a
+	// leftover id on an error row is pruned within 30 days anyway.
+	if _, err := r.db.ExecContext(ctx, `update error_events set user_id = null where user_id = $1`, id); err != nil {
+		log.Printf("delete account %s: unlink error reports: %v", id, err)
 	}
 	return nil
 }

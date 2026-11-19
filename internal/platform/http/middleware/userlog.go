@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
+
+	"klyvi-api/internal/errlog"
 )
 
 // UserLoggerMiddleware emits a one-line log per authenticated request that
@@ -17,6 +19,8 @@ import (
 func UserLoggerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if id, ok := UserUUIDFromContext(r.Context()); ok {
+			// Errors on this request name the user, for follow-up.
+			errlog.SetUser(r.Context(), id)
 			log.Printf("[USER] id=%s user=%s path=%s",
 				chimw.GetReqID(r.Context()), id, r.URL.Path)
 		}

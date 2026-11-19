@@ -7,8 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
+	"klyvi-api/internal/errlog"
 	"klyvi-api/internal/onboarding"
 	"klyvi-api/internal/platform/http/router"
 	"klyvi-api/internal/similar"
@@ -239,5 +242,66 @@ func TestResponsesAreNosniffAndCORSHasNoCredentials(t *testing.T) {
 		if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
 			t.Errorf("%s: Access-Control-Allow-Credentials = %q, want none", path, got)
 		}
+	}
+}
+
+type keptEvents struct {
+	mu     sync.Mutex
+	events []errlog.Event
+}
+
+func (k *keptEvents) Record(_ context.Context, e errlog.Event) (bool, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.events = append(k.events, e)
+	return true, nil
+}
+
+// The web client reports errors without signing in, and the route is
+// limited hard since anyone can call it.
+func TestErrorReportsArePublicAndLimited(t *testing.T) {
+	store := &keptEvents{}
+	rec := errlog.NewRecorder(store)
+	r := router.New(router.Services{
+		Users:  users.NewService(nil),
+		AuthMW: func(http.Handler) http.Handler { return http.NotFoundHandler() },
+		Errors: rec,
+	})
+
+	codes := []int{}
+	for range 6 {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/errors",
+			strings.NewReader(`{"kind":"TypeError","message":"x is undefined","page":"/home"}`))
+		req.RemoteAddr = "203.0.113.9:1234"
+		r.ServeHTTP(rr, req)
+		codes = append(codes, rr.Code)
+	}
+	if err := rec.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, c := range codes[:5] {
+		if c != http.StatusAccepted {
+			t.Fatalf("report %d: status %d, want 202", i+1, c)
+		}
+	}
+	if codes[5] != http.StatusTooManyRequests {
+		t.Errorf("the 6th report in a burst: status %d, want 429", codes[5])
+	}
+	if len(store.events) != 5 || store.events[0].Route != "/home" {
+		t.Errorf("stored %+v", store.events)
+	}
+}
+
+func TestErrorReportsAreOffWithoutARecorder(t *testing.T) {
+	r := router.New(router.Services{
+		Users:  users.NewService(nil),
+		AuthMW: func(next http.Handler) http.Handler { return next },
+	})
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/v1/errors", strings.NewReader(`{"message":"x"}`)))
+	if rr.Code == http.StatusAccepted {
+		t.Fatal("POST /v1/errors is mounted without a recorder")
 	}
 }

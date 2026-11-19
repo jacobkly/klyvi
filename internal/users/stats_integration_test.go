@@ -178,3 +178,38 @@ func deref(p *int) int {
 	}
 	return *p
 }
+
+// An account delete unlinks the user's error reports: the error stays for
+// the fix, the user id goes.
+func TestDeleteAccountData_UnlinksErrorReports(t *testing.T) {
+	repo, dbConn, ctx := usernameTestRepo(t)
+	var exists bool
+	if err := dbConn.GetContext(ctx, &exists, `select to_regclass('public.error_events') is not null`); err != nil {
+		t.Fatalf("check table: %v", err)
+	}
+	if !exists {
+		t.Skip("migration 00043 not applied; error_events doesn't exist yet")
+	}
+	id := newTestUser(t, repo, dbConn, ctx)
+	fingerprint := "test-unlink-" + id.String()
+	if _, err := dbConn.ExecContext(ctx, `
+		insert into error_events (fingerprint, source, kind, message, user_id)
+		values ($1, 'web', 'Error', 'test', $2)`, fingerprint, id); err != nil {
+		t.Fatalf("seed error_events: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = dbConn.ExecContext(context.Background(), `delete from error_events where fingerprint = $1`, fingerprint)
+	})
+
+	if err := repo.DeleteAccountData(ctx, id); err != nil {
+		t.Fatalf("DeleteAccountData: %v", err)
+	}
+
+	var linked int
+	if err := dbConn.GetContext(ctx, &linked, `select count(*) from error_events where user_id = $1`, id); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if linked != 0 {
+		t.Errorf("%d error reports still name the deleted user", linked)
+	}
+}

@@ -234,3 +234,48 @@ func TestAuthMiddleware_EnforcesIssuerWhenSet(t *testing.T) {
 		t.Errorf("expected 401 for wrong issuer, got %d", rec.Code)
 	}
 }
+
+func TestAuthenticator_OptionalNamesTheUserWhenThereIsOne(t *testing.T) {
+	key := newJWKSTestKey(t)
+	auth, err := NewAuthenticator(AuthConfig{JWKSURL: key.srv.URL})
+	if err != nil {
+		t.Fatalf("new authenticator: %v", err)
+	}
+	userID := uuid.New()
+	valid := key.sign(t, jwt.MapClaims{"sub": userID.String(), "exp": time.Now().Add(time.Hour).Unix()})
+	expired := key.sign(t, jwt.MapClaims{"sub": userID.String(), "exp": time.Now().Add(-time.Hour).Unix()})
+
+	tests := []struct {
+		name     string
+		header   string
+		wantUser bool
+	}{
+		{"a valid token", "Bearer " + valid, true},
+		{"no header", "", false},
+		{"an expired token", "Bearer " + expired, false},
+		{"garbage", "Bearer not-a-jwt", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotUser bool
+			var gotID uuid.UUID
+			h := auth.Optional(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotID, gotUser = UserUUIDFromContext(r.Context())
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			req := httptest.NewRequest("POST", "/", nil)
+			if tt.header != "" {
+				req.Header.Set("Authorization", tt.header)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want the request let through", rec.Code)
+			}
+			if gotUser != tt.wantUser || (tt.wantUser && gotID != userID) {
+				t.Errorf("user = %v %v, want %v", gotID, gotUser, tt.wantUser)
+			}
+		})
+	}
+}
