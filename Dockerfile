@@ -29,6 +29,19 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/ ./cmd/api ./cmd/
 # plain Go on a CPU without AVX2.
 RUN CGO_ENABLED=0 GOOS=linux GOEXPERIMENT=simd go build -ldflags="-s -w" -o /out/ ./cmd/plots
 
+# The licenses of everything the image ships, in /licenses: Go's own, every
+# module compiled into the binaries above (same settings, so the same
+# modules), and the model's. The binaries are stripped, so this is where
+# those notices travel. pipefail so a failed go list fails the build.
+RUN set -o pipefail \
+ && mkdir /out/licenses \
+ && cp "$(go env GOROOT)/LICENSE" /out/licenses/go.txt \
+ && cp deploy/licenses/*.txt /out/licenses/ \
+ && F='{{with .Module}}{{if not .Main}}{{.Path}} {{.Version}} {{.Dir}}{{end}}{{end}}' \
+ && { CGO_ENABLED=0 GOOS=linux go list -deps -f "$F" ./cmd/api ./cmd/coliked ./cmd/notify ./cmd/opendata ./cmd/seed-catalog \
+   && CGO_ENABLED=0 GOOS=linux GOEXPERIMENT=simd go list -deps -f "$F" ./cmd/plots; } \
+  | sh deploy/licenses.sh /out/licenses/go-modules.txt
+
 # ---------- runtime stage ----------
 # distroless/static-nonroot: no shell, no package manager, runs as a non-root
 # user, and already ships CA certificates so outbound HTTPS to Supabase and
@@ -36,6 +49,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOEXPERIMENT=simd go build -ldflags="-s -w" -o /out
 # The :nonroot tag runs as an unprivileged user (uid 65532) by default.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/model /model
+COPY --from=build /out/licenses /licenses
 COPY --from=build /out/api /out/coliked /out/notify /out/opendata /out/plots /out/seed-catalog /
 
 # Documents the listen port; SERVER_PORT must match. The image publishes nothing

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Tests for backup.sh, nightly.sh and speedtest.sh, using stand-ins for pg_dump,
-# pg_restore, docker and curl. Touches nothing outside a temp folder. Run from anywhere:
+# Tests for backup.sh, nightly.sh, speedtest.sh and licenses.sh, using stand-ins
+# for pg_dump, pg_restore, docker and curl, and fake module folders. Touches nothing outside a temp folder. Run from anywhere:
 #
 #   sh deploy/scripts_test.sh
 
@@ -9,7 +9,7 @@ set -u
 deploy=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 # A missing script exits non-zero, which the failure cases would count as a pass.
-for script in backup.sh nightly.sh speedtest.sh; do
+for script in backup.sh nightly.sh speedtest.sh licenses.sh; do
   if [ ! -f "$deploy/$script" ]; then
     echo "FAIL  $script does not exist"
     exit 1
@@ -499,6 +499,48 @@ if DB_ADDR=db.example.test:5432 run_speed && grep -Eq '^database connect +25 ms'
   ok "speedtest times the database connect and scales it to the feed"
 else
   bad "speedtest should time the database connect: $(cat "$case_dir/out")"
+fi
+
+# --- licenses.sh -----------------------------------------------------------
+
+# Fake module folders, as go list -deps would name them.
+setup_lic() {
+  case_dir=$(mktemp -d "$root/case.XXXXXX")
+  mods="$case_dir/mods"
+  mkdir -p "$mods/a" "$mods/b" "$mods/c/LICENSES"
+  echo "A license text" >"$mods/a/LICENSE"
+  echo "A notice text" >"$mods/a/NOTICE"
+  echo "package a" >"$mods/a/a.go"
+  echo "B licence text" >"$mods/b/LICENCE.md"
+  echo "package c" >"$mods/c/c.go"
+}
+
+run_lic() {
+  sh "$deploy/licenses.sh" "$case_dir/out" >"$case_dir/err" 2>&1
+}
+
+setup_lic
+if printf '%s
+' "example.com/b v1.0.0 $mods/b" "example.com/a v0.2.0 $mods/a"   "example.com/a v0.2.0 $mods/a" | run_lic   && [ "$(grep -c '^example.com/a v0.2.0$' "$case_dir/out")" -eq 1 ]   && grep -q 'A license text' "$case_dir/out" && grep -q 'A notice text' "$case_dir/out"   && grep -q 'B licence text' "$case_dir/out" && ! grep -q 'package a' "$case_dir/out"   && [ "$(grep -n '^example.com/a' "$case_dir/out" | cut -d: -f1)" -lt     "$(grep -n '^example.com/b' "$case_dir/out" | cut -d: -f1)" ]; then
+  ok "licenses collects each module's license and notice once, in order"
+else
+  bad "licenses should collect each module's files once: $(cat "$case_dir/out" "$case_dir/err")"
+fi
+
+setup_lic
+if echo "example.com/c v1.0.0 $mods/c" | run_lic   && grep -q 'No license file in the module.' "$case_dir/out"; then
+  ok "licenses says when a module ships no license file"
+else
+  bad "licenses should note a module with no license file: $(cat "$case_dir/out" "$case_dir/err")"
+fi
+
+setup_lic
+if echo "example.com/gone v1.0.0 $mods/gone" | run_lic; then
+  bad "licenses should exit non-zero when a module folder is missing"
+elif grep -q 'no folder for example.com/gone' "$case_dir/err"; then
+  ok "licenses fails on a module it cannot find"
+else
+  bad "licenses should name the missing module: $(cat "$case_dir/err")"
 fi
 
 echo

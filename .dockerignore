@@ -8,8 +8,11 @@
 .env.*
 !.env.example
 
-# Deploy manifests run on the server, not inside the image.
+# Deploy manifests run on the server, not inside the image. The license
+# collector and the model's notice are the exception: the build uses them.
 deploy/
+!deploy/licenses.sh
+!deploy/licenses/
 
 # Local-only docs and planning (also gitignored).
 *.md
