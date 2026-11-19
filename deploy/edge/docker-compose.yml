@@ -8,8 +8,10 @@ x-logging: &logging
     max-file: "3"
 
 services:
+  # Both images are pinned so a server restart never pulls a surprise release.
+  # Dependabot opens a monthly PR when a newer tag ships.
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.7
     restart: unless-stopped
     # Routes live in the Cloudflare dashboard, each pointing at a service on the
     # edge network, e.g. http://klyvi-api:8080.
@@ -19,7 +21,8 @@ services:
       - edge
 
   watchtower:
-    image: containrrr/watchtower
+    # 1.7.1 is the last release. The project is no longer maintained.
+    image: containrrr/watchtower:1.7.1
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

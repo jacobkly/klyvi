@@ -1,0 +1,38 @@
+# One grouped PR per ecosystem each month, so updates arrive as a small,
+# reviewable batch instead of a steady trickle.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      go-modules:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The API image's build and runtime bases in the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      docker-images:
+        patterns: ["*"]
+
+  # cloudflared and Watchtower in the shared edge stack. Merging a bump here
+  # still needs the compose file copied to the server by hand.
+  - package-ecosystem: docker-compose
+    directory: /deploy/edge
+    schedule:
+      interval: monthly
+    groups:
+      edge-images:
+        patterns: ["*"]
