@@ -11,7 +11,7 @@ services:
   # Both images are pinned so a server restart never pulls a surprise release.
   # Dependabot opens a monthly PR when a newer tag ships.
   cloudflared:
-    image: cloudflare/cloudflared:2026.10.7
+    image: cloudflare/cloudflared:2026.11.0
     restart: unless-stopped
     # Routes live in the Cloudflare dashboard, each pointing at a service on the
     # edge network, e.g. http://klyvi-api:8080.
