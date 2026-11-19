@@ -254,6 +254,11 @@ func main() {
 		log.Fatalf("auth middleware: %v", err)
 	}
 
+	admins, err := middleware.ParseUserIDs(cfg.Server.AdminUserIDs)
+	if err != nil {
+		log.Fatalf("ADMIN_USER_IDS: %v", err)
+	}
+
 	r := router.New(router.Services{
 		Movies:         movieService,
 		TV:             tvService,
@@ -273,6 +278,8 @@ func main() {
 		AuthMW:         auth.Required,
 		OptionalAuthMW: auth.Optional,
 		Errors:         errorRecorder,
+		ErrorGroups:    errlog.NewStore(dbConn),
+		Admins:         admins,
 		DB:             dbConn,
 		AllowedOrigins: cfg.Server.AllowedOrigins,
 		RateLimitRPM:   cfg.Server.RateLimitRPM,

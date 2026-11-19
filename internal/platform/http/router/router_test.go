@@ -11,8 +11,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"klyvi-api/internal/errlog"
 	"klyvi-api/internal/onboarding"
+	"klyvi-api/internal/platform/http/middleware"
 	"klyvi-api/internal/platform/http/router"
 	"klyvi-api/internal/similar"
 	"klyvi-api/internal/users"
@@ -303,5 +306,58 @@ func TestErrorReportsAreOffWithoutARecorder(t *testing.T) {
 	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/v1/errors", strings.NewReader(`{"message":"x"}`)))
 	if rr.Code == http.StatusAccepted {
 		t.Fatal("POST /v1/errors is mounted without a recorder")
+	}
+}
+
+// The admin routes answer anyone who isn't a listed admin, signed in or not,
+// with the plain 404 an unknown route gets, and stay unmounted until admins
+// are configured.
+func TestAdminRoutesHideFromEveryoneElse(t *testing.T) {
+	admin := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	other := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	// Sets the user from a test header, as the optional auth would from a token.
+	optional := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if id, err := uuid.Parse(r.Header.Get("X-Test-User")); err == nil {
+				r = r.WithContext(middleware.WithUserUUID(r.Context(), id))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	services := func(admins []uuid.UUID) router.Services {
+		return router.Services{
+			Users:          users.NewService(nil),
+			AuthMW:         func(next http.Handler) http.Handler { return next },
+			OptionalAuthMW: optional,
+			Admins:         admins,
+			ErrorGroups:    errlog.NewStore(nil),
+		}
+	}
+	unknown := httptest.NewRecorder()
+	http.NotFound(unknown, httptest.NewRequest(http.MethodGet, "/v1/nope", nil))
+
+	tests := []struct {
+		name   string
+		admins []uuid.UUID
+		user   string
+	}{
+		{"signed out", []uuid.UUID{admin}, ""},
+		{"another user", []uuid.UUID{admin}, other.String()},
+		{"no admins configured", nil, admin.String()},
+	}
+	for _, tc := range tests {
+		r := router.New(services(tc.admins))
+		for _, req := range []*http.Request{
+			httptest.NewRequest(http.MethodGet, "/v1/admin/errors", nil),
+			httptest.NewRequest(http.MethodPatch, "/v1/admin/errors/7", strings.NewReader(`{"resolved":true}`)),
+		} {
+			req.Header.Set("X-Test-User", tc.user)
+			rr := httptest.NewRecorder()
+			r.ServeHTTP(rr, req)
+			if rr.Code != http.StatusNotFound || rr.Body.String() != unknown.Body.String() {
+				t.Errorf("%s: %s %s = %d %q, want the unknown-route 404",
+					tc.name, req.Method, req.URL.Path, rr.Code, rr.Body.String())
+			}
+		}
 	}
 }

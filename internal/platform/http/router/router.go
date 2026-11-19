@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/google/uuid"
 
 	"klyvi-api/internal/errlog"
 	"klyvi-api/internal/family"
@@ -59,6 +60,11 @@ type Services struct {
 	// Errors stores error reports from the web client. Nil leaves
 	// POST /v1/errors off.
 	Errors *errlog.Recorder
+	// ErrorGroups and Admins serve the admin error pages at /v1/admin/errors.
+	// They're mounted only when both are set; anyone not in Admins gets the
+	// unknown-route 404.
+	ErrorGroups *errlog.Store
+	Admins      []uuid.UUID
 
 	// DB answers the readiness check at /health/ready. Nil leaves the route off.
 	DB health.Pinger
@@ -194,6 +200,21 @@ func New(services Services) *chi.Mux {
 				middleware.MaxBodyBytes(errorReportCap),
 				optional,
 			).Post("/errors", errorsAPI.Report)
+		}
+
+		// The admin pages. Optional auth, so a signed-out visitor gets the same
+		// 404 as a signed-in non-admin rather than a 401 that shows the route.
+		if services.ErrorGroups != nil && len(services.Admins) > 0 {
+			adminAPI := errlog.NewAdminAPI(services.ErrorGroups)
+			optional := services.OptionalAuthMW
+			if optional == nil {
+				optional = func(next http.Handler) http.Handler { return next }
+			}
+			r.Route("/admin", func(r chi.Router) {
+				r.Use(optional, middleware.AdminOnly(services.Admins))
+				r.Get("/errors", adminAPI.List)
+				r.With(middleware.MaxBodyBytes(jsonBodyCap)).Patch("/errors/{id}", adminAPI.Update)
+			})
 		}
 
 		// Top-100 rankings are public and cached server-side for 24h.

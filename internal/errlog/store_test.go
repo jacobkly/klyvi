@@ -2,6 +2,7 @@ package errlog_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,4 +217,74 @@ func TestStore_PruneDropsGroupsUnseenFor30Days(t *testing.T) {
 	if get(t, tx, fresh.Fingerprint()) == nil {
 		t.Error("a fresh group was pruned")
 	}
+}
+
+func TestStore_AdminListsNewestFirstAndResolveThenRecurReopens(t *testing.T) {
+	tx := openTx(t)
+	store := errlog.NewStore(tx)
+	older := errlog.Event{Source: errlog.SourceAPI, Kind: "500", Message: "older", Route: "/v1/admin-older", Method: "GET", Status: 500}
+	newer := errlog.Event{Source: errlog.SourceWeb, Kind: "TypeError", Message: "newer", Stack: "at x", Route: "/admin-newer"}
+	for _, e := range []errlog.Event{older, newer} {
+		if _, err := store.Record(ctx(t), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One transaction has one now(), so push the older one back by hand.
+	if _, err := tx.Exec(`update error_events set last_seen = now() + interval '1 hour' where fingerprint = $1`, newer.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Counts(ctx(t))
+	if err != nil {
+		t.Fatalf("Counts: %v", err)
+	}
+
+	open, err := store.List(ctx(t), errlog.StatusOpen, 2, 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(open) != 2 || open[0].Message != "newer" || open[1].Message != "older" {
+		t.Fatalf("open = %+v, want newer then older", open)
+	}
+	g := open[0]
+	if g.Source != "web" || g.Kind != "TypeError" || g.Stack == nil || *g.Stack != "at x" || g.Count != 1 || g.ResolvedAt != nil {
+		t.Fatalf("group = %+v", g)
+	}
+
+	resolved, err := store.SetResolved(ctx(t), g.ID, true)
+	if err != nil || resolved.ResolvedAt == nil {
+		t.Fatalf("SetResolved = %+v, %v", resolved, err)
+	}
+	if !contains(t, store, errlog.StatusResolved, g.ID) || contains(t, store, errlog.StatusOpen, g.ID) {
+		t.Fatal("a resolved group isn't only in the resolved list")
+	}
+	after, err := store.Counts(ctx(t))
+	if err != nil || after.Open != before.Open-1 || after.Resolved != before.Resolved+1 {
+		t.Fatalf("counts %+v -> %+v, %v", before, after, err)
+	}
+
+	// It happens again, so it's open again.
+	if _, err := store.Record(ctx(t), newer); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(t, store, errlog.StatusOpen, g.ID) {
+		t.Fatal("a resolved group that recurred stayed resolved")
+	}
+
+	if _, err := store.SetResolved(ctx(t), -1, true); !errors.Is(err, errlog.ErrNotFound) {
+		t.Fatalf("SetResolved(-1) err = %v, want ErrNotFound", err)
+	}
+}
+
+func contains(t *testing.T, store *errlog.Store, status errlog.Status, id int64) bool {
+	t.Helper()
+	groups, err := store.List(ctx(t), status, 100, 0)
+	if err != nil {
+		t.Fatalf("List(%s): %v", status, err)
+	}
+	for _, g := range groups {
+		if g.ID == id {
+			return true
+		}
+	}
+	return false
 }

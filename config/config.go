@@ -110,6 +110,10 @@ type ConfServer struct {
 	// page load fires several requests.
 	RateLimitRPM   int `env:"SERVER_RATELIMIT_RPM,default=120"`
 	RateLimitBurst int `env:"SERVER_RATELIMIT_BURST,default=40"`
+
+	// AdminUserIDs is a comma-separated list of Supabase user ids that may
+	// open the admin pages. Optional; empty leaves the admin routes off.
+	AdminUserIDs string `env:"ADMIN_USER_IDS"`
 }
 
 type ConfDB struct {
