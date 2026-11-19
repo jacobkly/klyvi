@@ -294,6 +294,11 @@ func TestTracking_List_EnrichesEntries(t *testing.T) {
 	if movieEntry.ReleaseYear == nil || *movieEntry.ReleaseYear == 0 {
 		t.Errorf("movie ReleaseYear: %v", movieEntry.ReleaseYear)
 	}
+	// The full day, so the client can say "Out 16 December" for a planned
+	// title that is not out yet. Fight Club opened on 15 October 1999.
+	if movieEntry.ReleaseDate == nil || *movieEntry.ReleaseDate != "1999-10-15" {
+		t.Errorf("movie ReleaseDate: got %v, want 1999-10-15", movieEntry.ReleaseDate)
+	}
 	if movieEntry.SeasonNumber != nil {
 		t.Errorf("movie SeasonNumber should be nil, got %v", movieEntry.SeasonNumber)
 	}
@@ -320,6 +325,10 @@ func TestTracking_List_EnrichesEntries(t *testing.T) {
 	}
 	if seasonEntry.ReleaseYear == nil {
 		t.Error("season ReleaseYear: got nil, want a year from season air_date or series first_air_date")
+	}
+	// A season's day is its own air date. Breaking Bad's first aired 20 January 2008.
+	if seasonEntry.ReleaseDate == nil || *seasonEntry.ReleaseDate != "2008-01-20" {
+		t.Errorf("season ReleaseDate: got %v, want 2008-01-20", seasonEntry.ReleaseDate)
 	}
 
 	// The season's episode total, so the client can show "3 of 7" without

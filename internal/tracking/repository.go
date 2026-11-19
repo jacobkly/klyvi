@@ -104,6 +104,7 @@ const entrySelectClause = `
 		extract(year from tvse.air_date)::int,
 		extract(year from tvs.first_air_date)::int
 	) as release_year,
+	to_char(coalesce(m.release_date, tvse.air_date, tvs.first_air_date), 'YYYY-MM-DD') as release_date,
 	mi.season_number as season_number,
 	tvse.name as season_name,
 	case when jsonb_typeof(tvse.episodes) = 'array' then jsonb_array_length(tvse.episodes) end as episode_count

@@ -58,6 +58,9 @@ type Entry struct {
 	PosterPath   *string `db:"poster_path" json:"poster_path"`
 	BackdropPath *string `db:"backdrop_path" json:"backdrop_path"`
 	ReleaseYear  *int    `db:"release_year" json:"release_year"`
+	// ReleaseDate is the full day as YYYY-MM-DD: a movie's release, or a
+	// season's air date falling back to the series' first air date.
+	ReleaseDate  *string `db:"release_date" json:"release_date"`
 	SeasonNumber *int    `db:"season_number" json:"season_number"`
 	SeasonName   *string `db:"season_name" json:"season_name"`
 	EpisodeCount *int    `db:"episode_count" json:"episode_count"`
