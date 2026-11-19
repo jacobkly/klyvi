@@ -201,7 +201,7 @@ func ComputeStats(rows []StatsRow, events []StatsEvent, now time.Time) *Stats {
 			s.ScoreDistribution[band].Hours += w / 60
 		}
 
-		for _, g := range r.Genres {
+		for _, g := range splitGenres(r.Genres) {
 			b := genreAgg[g]
 			if b == nil {
 				b = &GenreBucket{Name: g}
@@ -325,6 +325,33 @@ func scoreBandIndex(score int) int {
 		score = 100
 	}
 	return (score - 1) / 10
+}
+
+// tvGenreParts are TV's combined genres, as the film genres they're made of.
+// Counting them whole would list "Sci-Fi & Fantasy" beside "Science Fiction".
+var tvGenreParts = map[string][]string{
+	"Sci-Fi & Fantasy":   {"Science Fiction", "Fantasy"},
+	"Action & Adventure": {"Action", "Adventure"},
+}
+
+// splitGenres expands TV's combined genres and drops repeats, so a title
+// counts once in each genre.
+func splitGenres(genres []string) []string {
+	out := make([]string, 0, len(genres)+2)
+	seen := map[string]bool{}
+	for _, g := range genres {
+		parts, ok := tvGenreParts[g]
+		if !ok {
+			parts = []string{g}
+		}
+		for _, p := range parts {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 func bandLabel(i int) string {

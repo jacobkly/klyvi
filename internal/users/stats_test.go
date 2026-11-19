@@ -162,3 +162,32 @@ func TestComputeStats_EmptyLibrary(t *testing.T) {
 		t.Errorf("activity days = %d, want 371", len(got.Activity))
 	}
 }
+
+// TV's combined genres count as the film genres they're made of, so a
+// library of both doesn't list "Sci-Fi & Fantasy" beside "Science Fiction".
+func TestComputeStats_SplitsTVGenres(t *testing.T) {
+	now := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
+	done := "completed"
+	rows := []users.StatsRow{
+		{MediaType: "movie", Status: &done, Genres: []string{"Science Fiction", "Action"}},
+		{MediaType: "season", Status: &done, Genres: []string{"Sci-Fi & Fantasy", "Action & Adventure", "Drama"}},
+	}
+	got := users.ComputeStats(rows, nil, now)
+
+	counts := map[string]int{}
+	for _, g := range got.Genres {
+		counts[g.Name] = g.Count
+	}
+	want := map[string]int{"Science Fiction": 2, "Action": 2, "Fantasy": 1, "Adventure": 1, "Drama": 1}
+	for name, n := range want {
+		if counts[name] != n {
+			t.Errorf("%s = %d, want %d (all: %v)", name, counts[name], n, counts)
+		}
+	}
+	if _, ok := counts["Sci-Fi & Fantasy"]; ok {
+		t.Errorf("Sci-Fi & Fantasy is still listed: %v", counts)
+	}
+	if _, ok := counts["Action & Adventure"]; ok {
+		t.Errorf("Action & Adventure is still listed: %v", counts)
+	}
+}
