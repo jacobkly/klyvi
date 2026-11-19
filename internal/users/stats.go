@@ -59,10 +59,12 @@ type YearBucket struct {
 }
 
 type GenreBucket struct {
-	Name      string  `json:"name"`
-	Count     int     `json:"count"`
-	MeanScore float64 `json:"mean_score"`
-	Hours     float64 `json:"hours"`
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+	// MeanScore is nil when none of the genre's titles is scored, so the
+	// client shows a dash rather than a mean of 0.
+	MeanScore *float64 `json:"mean_score"`
+	Hours     float64  `json:"hours"`
 }
 
 type PctBucket struct {
@@ -240,7 +242,10 @@ func ComputeStats(rows []StatsRow, events []StatsEvent, now time.Time) *Stats {
 	}
 
 	for name, b := range genreAgg {
-		b.MeanScore, _ = meanStddev(genreScores[name])
+		if vals := genreScores[name]; len(vals) > 0 {
+			mean, _ := meanStddev(vals)
+			b.MeanScore = &mean
+		}
 		s.Genres = append(s.Genres, *b)
 	}
 	sort.Slice(s.Genres, func(i, j int) bool {

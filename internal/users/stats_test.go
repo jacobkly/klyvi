@@ -85,8 +85,15 @@ func TestComputeStats_Distributions(t *testing.T) {
 		t.Fatalf("top genre = %+v, want Drama×3", got.Genres)
 	}
 	// Drama's mean score: 90, 70, 80 → 80.
-	if diff := got.Genres[0].MeanScore - 80.0; diff > 0.001 || diff < -0.001 {
-		t.Errorf("Drama mean = %f, want 80", got.Genres[0].MeanScore)
+	if m := got.Genres[0].MeanScore; m == nil || *m-80.0 > 0.001 || *m-80.0 < -0.001 {
+		t.Errorf("Drama mean = %v, want 80", m)
+	}
+	// Comedy's only title is unscored, so it has no mean rather than a 0
+	// that would read as a real score.
+	for _, g := range got.Genres {
+		if g.Name == "Comedy" && g.MeanScore != nil {
+			t.Errorf("Comedy mean = %v, want nil (nothing scored)", *g.MeanScore)
+		}
 	}
 
 	// Formats: 3 movies, 2 seasons → 60/40.
