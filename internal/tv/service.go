@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"klyvi-api/internal/platform/tmdb"
+	"klyvi-api/internal/toprated"
 )
 
 // TMDBClient is the only external dependency the TV service currently has.
@@ -354,7 +355,9 @@ func listEndpoint(listType string, page int) (string, error) {
 	case "popular":
 		base = "/tv/popular"
 	case "top_rated":
-		base = "/tv/top_rated"
+		// Top rated follows the shared rule, not TMDB's own list, where a
+		// 9.0 with 40 votes outranks The Godfather.
+		return toprated.TVPath(page), nil
 	default:
 		return "", ErrInvalidListType
 	}

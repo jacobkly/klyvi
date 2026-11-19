@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
+
+	"klyvi-api/internal/toprated"
 )
 
 // TMDBClient is the external boundary: fetch a list page. Mirrors the small
@@ -23,8 +25,9 @@ type MediaIDResolver interface {
 	ResolveMovieMediaIDs(ctx context.Context, tmdbIDs []int) (map[int]int, error)
 }
 
-// pagesToFetch is how many TMDB top_rated pages make the pool (20/page → 100).
-const pagesToFetch = 5
+// pagesToFetch is how many pages of TMDB's discover list, best score first,
+// make the pool (20 a page, so 200 titles) that is re-ranked and cut to 100.
+const pagesToFetch = 10
 
 // cacheTTL keeps a computed top list for a day. Rankings move slowly and the
 // pool is public, so a per-request TMDB fan-out would be wasteful.
@@ -103,20 +106,18 @@ func (s *Service) compute(ctx context.Context, kind mediaKind) ([]Ranking, error
 		}
 	}
 
-	rankings := normalizeRankings(results, kind, resolved)
+	rankings := normalizeRankings(weigh(results, kind), kind, resolved)
 	s.store(kind, rankings)
 	return rankings, nil
 }
 
 func (s *Service) fetchPages(ctx context.Context, kind mediaKind) ([]map[string]any, error) {
-	path := "/movie/top_rated"
-	if kind == mediaTV {
-		path = "/tv/top_rated"
-	}
-
 	var all []map[string]any
 	for page := 1; page <= pagesToFetch; page++ {
-		endpoint := fmt.Sprintf("%s?language=en-US&page=%d", path, page)
+		endpoint := toprated.MoviePath(page)
+		if kind == mediaTV {
+			endpoint = toprated.TVPath(page)
+		}
 		resp, err := s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 		if err != nil {
 			return nil, fmt.Errorf("fetch %s: %w", endpoint, err)

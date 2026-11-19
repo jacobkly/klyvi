@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"klyvi-api/internal/platform/tmdb"
+	"klyvi-api/internal/toprated"
 )
 
 // TMDBClient is the external data boundary for the movies service.
@@ -265,7 +266,7 @@ func (s *Service) GetPopularMovies(ctx context.Context) (interface{}, error) {
 }
 
 func (s *Service) GetTopRatedMovies(ctx context.Context) (interface{}, error) {
-	endpoint := "/movie/top_rated?language=en-US&page=1"
+	endpoint := toprated.MoviePath(1)
 	upcoming, err := s.client.TMDBRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -306,7 +307,9 @@ func listEndpoint(listType string, page int) (string, error) {
 	case "popular":
 		base = "/movie/popular"
 	case "top_rated":
-		base = "/movie/top_rated"
+		// Top rated follows the shared rule, not TMDB's own list, where a
+		// 9.0 with 40 votes outranks The Godfather.
+		return toprated.MoviePath(page), nil
 	default:
 		return "", ErrInvalidListType
 	}

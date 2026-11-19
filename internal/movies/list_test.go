@@ -1,6 +1,10 @@
 package movies
 
-import "testing"
+import (
+	"testing"
+
+	"klyvi-api/internal/toprated"
+)
 
 // The list endpoint is what the frontend's browse pagination rides on:
 // page must pass through to TMDB, clamped to TMDB's real bounds (1..500).
@@ -15,7 +19,7 @@ func TestListEndpoint(t *testing.T) {
 		{"popular page 1", "popular", 1, "/movie/popular?language=en-US&page=1", false},
 		{"popular page 7", "popular", 7, "/movie/popular?language=en-US&page=7", false},
 		{"upcoming page 2", "upcoming", 2, "/movie/upcoming?language=en-US&page=2", false},
-		{"top_rated page 3", "top_rated", 3, "/movie/top_rated?language=en-US&page=3", false},
+		{"top_rated page 3", "top_rated", 3, toprated.MoviePath(3), false},
 		{"trending page 2", "trending", 2, "/trending/movie/week?language=en-US&page=2", false},
 
 		// Out-of-range pages clamp rather than 400: the client dedupes by id
